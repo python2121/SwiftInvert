@@ -21,7 +21,9 @@ public enum RenderError: Error, CustomStringConvertible {
 /// The 3-pass render chain (normalize → print curve → encode) + histogram,
 /// mirroring NegPy's GPU pipeline for the C-41 path. Shaders are compiled at
 /// runtime from the bundled source (no build-time metal compiler under CLT).
-public final class RenderPipeline {
+/// Thread-safety: Metal objects are internally synchronized; NegSwift serializes
+/// renders through one session actor anyway.
+public final class RenderPipeline: @unchecked Sendable {
     public let device: MTLDevice
     let queue: MTLCommandQueue
     let normalizePSO: MTLComputePipelineState
