@@ -36,17 +36,20 @@ final class AppModel {
     private var isRestoringSettings = false
 
     init() {
+        // The pipeline must exist before the folder restore: scanFolder sets the
+        // selection, whose didSet immediately kicks the first render.
+        do {
+            pipeline = try RenderPipeline()
+        } catch {
+            statusMessage = "Metal unavailable: \(error)"
+            NSLog("NegSwift: RenderPipeline init failed: \(error)")
+        }
         if let path = UserDefaults.standard.string(forKey: "libraryFolder") {
             let url = URL(fileURLWithPath: path)
             if FileManager.default.fileExists(atPath: url.path) {
                 folderURL = url
                 scanFolder()
             }
-        }
-        do {
-            pipeline = try RenderPipeline()
-        } catch {
-            statusMessage = "Metal unavailable: \(error)"
         }
     }
 
@@ -75,7 +78,11 @@ final class AppModel {
         renderTask?.cancel()
         displayImage = nil
         histogram = nil
-        guard let url = selection, let pipeline else { return }
+        guard let url = selection else { return }
+        guard let pipeline else {
+            statusMessage = "Cannot render: Metal pipeline unavailable."
+            return
+        }
         session = ImageSession(url: url, pipeline: pipeline)
         // Loading the sidecar mutates settings, which triggers the first render.
         let restored = SidecarStore.load(for: url) ?? ExposureSettings()
@@ -113,8 +120,12 @@ final class AppModel {
                     self.displayImage = output.image
                     self.histogram = output.histogram
                     self.statusMessage = nil
+                    NSLog("NegSwift: rendered \(self.selection?.lastPathComponent ?? "?") (\(output.image.width)x\(output.image.height))")
                 } catch {
-                    if !Task.isCancelled { self.statusMessage = "Render failed: \(error)" }
+                    if !Task.isCancelled {
+                        self.statusMessage = "Render failed: \(error)"
+                        NSLog("NegSwift: render failed for \(self.selection?.lastPathComponent ?? "?"): \(error)")
+                    }
                     break
                 }
             } while self.renderPending && !Task.isCancelled

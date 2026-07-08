@@ -48,6 +48,14 @@ struct DetailView: View {
                     .resizable()
                     .aspectRatio(contentMode: .fit)
                     .padding(12)
+            } else if let status = model.statusMessage, model.selection != nil {
+                ContentUnavailableView {
+                    Label("Couldn't develop this image", systemImage: "exclamationmark.triangle")
+                } description: {
+                    Text(status)
+                } actions: {
+                    Button("Choose Folder Again…") { model.chooseFolder() }
+                }
             } else if model.selection != nil {
                 ProgressView("Developing…")
             } else {
