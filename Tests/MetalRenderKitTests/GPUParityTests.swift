@@ -83,10 +83,10 @@ enum Fixtures2 {
         let params = ExposureKernel.deriveRenderParams(Self.settings(j), analysis)
 
         let source = try pipeline.upload(input)
-        let result = try pipeline.render(source: source, params: params)
+        let result = try pipeline.render(source: source, params: params, wantLinear: true)
 
-        let linear = pipeline.readback(result.linear)
-        let encoded = pipeline.readback(result.encoded)
+        let linear = try #require(result.linear)
+        let encoded = result.encoded
 
         let expLinear = try Fixtures2.floats("synthetic64/\(name)/curve_linear.bin")
         let expEncoded = try Fixtures2.floats("synthetic64/\(name)/output.bin")
@@ -117,7 +117,7 @@ enum Fixtures2 {
             ReferenceCurve.applyPrintCurve(
                 ReferenceCurve.normalize(input, bounds: params.finalBounds), params: params))
         let source = try pipeline.upload(input)
-        let gpu = pipeline.readback(try pipeline.render(source: source, params: params).encoded)
+        let gpu = try pipeline.render(source: source, params: params).encoded
 
         let (mean, maxV) = Self.diffStats(gpu.pixels, cpu.pixels)
         #expect(mean < 0.01 && maxV < 0.04, "tone controls GPU/CPU: mean \(mean), max \(maxV)")
@@ -131,10 +131,10 @@ enum Fixtures2 {
         let params = ExposureKernel.deriveRenderParams(ExposureSettings(), analysis)
 
         let source = try pipeline.upload(input)
-        let result = try pipeline.render(source: source, params: params)
+        let result = try pipeline.render(source: source, params: params, wantLinear: true)
 
         // CPU histogram over the GPU's own linear output → binning must agree.
-        let linear = pipeline.readback(result.linear)
+        let linear = try #require(result.linear)
         var cpuBins = [UInt32](repeating: 0, count: 1024)
         let n = linear.width * linear.height
         for i in 0..<n {

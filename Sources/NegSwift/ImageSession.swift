@@ -82,8 +82,7 @@ actor ImageSession {
         let params = ExposureKernel.deriveRenderParams(settings, analysis)
         let source = try sourceTexture(image: image, settings: settings, uncropped: uncropped)
         let result = try pipeline.render(source: source, params: params)
-        let encoded = pipeline.readback(result.encoded)
-        guard let cg = ImageConversion.cgImage(fromEncoded: encoded) else {
+        guard let cg = ImageConversion.cgImage(fromEncoded: result.encoded) else {
             throw RenderError.resource("CGImage conversion")
         }
         return RenderOutput(image: cg, histogram: result.histogram)

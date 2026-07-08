@@ -41,6 +41,10 @@ public final class RenderPipeline: @unchecked Sendable {
     private var intermediates: [SizeKey: (normalized: MTLTexture, linear: MTLTexture, encoded: MTLTexture)] = [:]
     private var histBuffer: MTLBuffer?
     private let maxCachedPixels = 4_000_000
+    /// Serializes render(): the cached intermediates and histogram buffer are
+    /// shared mutable state (the app renders from one actor, but tests run
+    /// concurrently against one pipeline).
+    private let renderLock = NSLock()
 
     public init() throws {
         guard let device = MTLCreateSystemDefaultDevice() else { throw RenderError.noDevice }
@@ -135,11 +139,11 @@ public final class RenderPipeline: @unchecked Sendable {
         encoder.dispatchThreadgroups(grid, threadsPerThreadgroup: tg)
     }
 
-    /// Result textures of one render: the linear print (histogram input) and the
-    /// encoded output (display/export), plus the 4×256 histogram buffer.
-    public struct Result {
-        public let linear: MTLTexture
-        public let encoded: MTLTexture
+    /// One render's read-back results: the encoded output (display/export), the
+    /// linear print when requested (parity tests), and the 4×256 histogram.
+    public struct Result: Sendable {
+        public let encoded: RGBImage
+        public let linear: RGBImage?
         public let histogram: [UInt32]  // R,G,B,Luma × 256
     }
 
@@ -161,9 +165,14 @@ public final class RenderPipeline: @unchecked Sendable {
     }
 
     /// Full chain on one command buffer: normalize → curve → [histogram] → encode.
+    /// Serialized by `renderLock` and returns read-back buffers: the reused
+    /// intermediate textures must never escape to a caller (a subsequent render
+    /// would overwrite them — concurrent test runs segfaulted on exactly that).
     public func render(
-        source: MTLTexture, params: RenderParams, computeHistogram: Bool = true
+        source: MTLTexture, params: RenderParams, computeHistogram: Bool = true, wantLinear: Bool = false
     ) throws -> Result {
+        renderLock.lock()
+        defer { renderLock.unlock() }
         let w = source.width, h = source.height
         let (normalized, linear, encoded) = try intermediatesFor(width: w, height: h)
 
@@ -209,13 +218,16 @@ public final class RenderPipeline: @unchecked Sendable {
         let histogram = histBuffer.contents().withMemoryRebound(to: UInt32.self, capacity: 1024) {
             Array(UnsafeBufferPointer(start: $0, count: 1024))
         }
-        return Result(linear: linear, encoded: encoded, histogram: histogram)
+        return Result(
+            encoded: readback(encoded),
+            linear: wantLinear ? readback(linear) : nil,
+            histogram: histogram)
     }
 
     /// Convenience: full CPU-image → CPU-image render.
     public func render(image: RGBImage, params: RenderParams) throws -> (encoded: RGBImage, histogram: [UInt32]) {
         let source = try upload(image)
         let result = try render(source: source, params: params)
-        return (readback(result.encoded), result.histogram)
+        return (result.encoded, result.histogram)
     }
 }
