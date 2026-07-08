@@ -40,6 +40,12 @@ public struct ExposureSettings: Codable, Equatable, Sendable {
     public var highlights: Double = 0
     public var highlightContrast: Double = 0
 
+    // Pre-process rects (NegPy analysis_rect / manual_crop_rect semantics):
+    // analysisRect scopes ONLY the metering (buffer disabled inside it);
+    // cropRect crops the output AND scopes the metering (buffer applied inside).
+    public var analysisRect: NormalizedRect?
+    public var cropRect: NormalizedRect?
+
     public init() {}
 
     // Sidecars written before these controls existed omit the keys; default to 0.
@@ -68,6 +74,8 @@ public struct ExposureSettings: Codable, Equatable, Sendable {
         shadowContrast = d(.shadowContrast, 0)
         highlights = d(.highlights, 0)
         highlightContrast = d(.highlightContrast, 0)
+        analysisRect = try? c.decode(NormalizedRect.self, forKey: .analysisRect)
+        cropRect = try? c.decode(NormalizedRect.self, forKey: .cropRect)
     }
 }
 
@@ -110,15 +118,29 @@ public struct RenderParams: Equatable, Sendable {
 public enum ExposureKernel {
     /// Full per-image analysis: prefilter + bounds + all meters. The neutral axis
     /// is measured against offset bounds; NegSwift re-runs analysis when the
-    /// white/black-point offsets change (cheap at grid size, and offsets are a
-    /// rarely-touched control).
+    /// white/black-point offsets or pre-process rects change (cheap at grid size).
+    ///
+    /// Region priority mirrors NegPy's resolve_analysis_region: a freehand
+    /// analysisRect wins and disables the centered buffer inset; otherwise the
+    /// output cropRect scopes the meters (so borders outside the crop can't
+    /// throw off the inversion) with the buffer applied inside it.
     public static func analyze(
         linearImage: RGBImage,
+        cropRect: NormalizedRect? = nil,
+        analysisRect: NormalizedRect? = nil,
         analysisBuffer: Double = 0.05,
         whitePointOffset: Double = 0,
         blackPointOffset: Double = 0
     ) -> ExposureAnalysis {
-        let grid = Prefilter.prefilterLogGrid(linearImage, analysisBuffer: analysisBuffer)
+        var metered = linearImage
+        var buffer = analysisBuffer
+        if let rect = analysisRect, rect.pixelROI(width: linearImage.width, height: linearImage.height) != nil {
+            metered = linearImage.cropped(to: rect)
+            buffer = 0.0
+        } else if let rect = cropRect, rect.pixelROI(width: linearImage.width, height: linearImage.height) != nil {
+            metered = linearImage.cropped(to: rect)
+        }
+        let grid = Prefilter.prefilterLogGrid(metered, analysisBuffer: buffer)
         let base = BoundsAnalysis.analyze(grid: grid)
         let final = base.applyingOffsets(whitePoint: whitePointOffset, blackPoint: blackPointOffset)
         let neutral = Meters.neutralAxis(grid: grid, bounds: final)

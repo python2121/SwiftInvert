@@ -27,42 +27,14 @@ struct ContentView: View {
             LibraryView(model: model)
                 .navigationSplitViewColumnWidth(min: 200, ideal: 340)
         } detail: {
-            HSplitView {
+            HStack(spacing: 0) {
                 DetailView(model: model)
                     .frame(minWidth: 400, maxWidth: .infinity, maxHeight: .infinity)
+                Divider()
                 ControlsSidebar(model: model)
             }
         }
-        .frame(minWidth: 1100, minHeight: 700)
-    }
-}
-
-struct DetailView: View {
-    @Bindable var model: AppModel
-
-    var body: some View {
-        ZStack {
-            Color(nsColor: .underPageBackgroundColor)
-            if let image = model.displayImage {
-                Image(decorative: image, scale: 1.0)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .padding(12)
-            } else if let status = model.statusMessage, model.selection != nil {
-                ContentUnavailableView {
-                    Label("Couldn't develop this image", systemImage: "exclamationmark.triangle")
-                } description: {
-                    Text(status)
-                } actions: {
-                    Button("Choose Folder Again…") { model.chooseFolder() }
-                }
-            } else if model.selection != nil {
-                ProgressView("Developing…")
-            } else {
-                ContentUnavailableView(
-                    "No image selected", systemImage: "film",
-                    description: Text("Select a negative from the library."))
-            }
-        }
+        .onExitCommand { model.toolMode = .none }
+        .frame(minWidth: 1000, minHeight: 700)
     }
 }

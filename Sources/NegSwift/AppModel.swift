@@ -25,6 +25,22 @@ final class AppModel {
     var statusMessage: String?
     var isExporting = false
 
+    /// Active pre-process selection tool. While a tool is on, the detail view
+    /// shows the uncropped frame and drag draws the selection rect.
+    enum ToolMode { case none, analysisRegion, crop }
+    var toolMode: ToolMode = .none {
+        didSet { if oldValue != toolMode { scheduleRender() } }
+    }
+
+    func commitSelection(_ rect: NormalizedRect) {
+        switch toolMode {
+        case .analysisRegion: settings.analysisRect = rect
+        case .crop: settings.cropRect = rect
+        case .none: break
+        }
+        toolMode = .none  // settings didSet already re-renders (and re-analyzes)
+    }
+
     let thumbnails = ThumbnailStore()
     private var pipeline: RenderPipeline?
     private var session: ImageSession?
@@ -76,6 +92,7 @@ final class AppModel {
 
     private func openSelection() {
         renderTask?.cancel()
+        toolMode = .none
         displayImage = nil
         histogram = nil
         guard let url = selection else { return }
@@ -113,9 +130,10 @@ final class AppModel {
             repeat {
                 self.renderPending = false
                 let snapshot = self.settings
+                let uncropped = self.toolMode != .none
                 guard let session = self.session else { break }
                 do {
-                    let output = try await session.render(settings: snapshot)
+                    let output = try await session.render(settings: snapshot, uncropped: uncropped)
                     if Task.isCancelled { break }
                     self.displayImage = output.image
                     self.histogram = output.histogram

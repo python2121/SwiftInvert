@@ -9,6 +9,25 @@ struct ControlsSidebar: View {
             VStack(alignment: .leading, spacing: 16) {
                 HistogramView(bins: model.histogram)
 
+                GroupBox("Pre-process") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        toolRow(
+                            "Crop for Analysis", mode: .analysisRegion,
+                            isSet: model.settings.analysisRect != nil,
+                            clear: { model.settings.analysisRect = nil })
+                        toolRow(
+                            "Crop", mode: .crop,
+                            isSet: model.settings.cropRect != nil,
+                            clear: { model.settings.cropRect = nil })
+                        if model.toolMode != .none {
+                            Text("Drag on the image to select the area.")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(6)
+                }
+
                 GroupBox("Print") {
                     VStack(alignment: .leading, spacing: 10) {
                         Toggle("Auto exposure", isOn: $model.settings.autoExposure)
@@ -100,7 +119,33 @@ struct ControlsSidebar: View {
             }
             .padding(12)
         }
-        .frame(minWidth: 260, idealWidth: 300)
+        .frame(width: 195)
+    }
+
+    /// One pre-process tool row: activate-tool button + clear button when set.
+    @ViewBuilder
+    private func toolRow(
+        _ label: String, mode: AppModel.ToolMode, isSet: Bool, clear: @escaping () -> Void
+    ) -> some View {
+        HStack(spacing: 6) {
+            Button {
+                model.toolMode = model.toolMode == mode ? .none : mode
+            } label: {
+                Label(label, systemImage: mode == .crop ? "crop" : "viewfinder.rectangular")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .tint(model.toolMode == mode ? Color.accentColor : nil)
+            if isSet {
+                Button {
+                    clear()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                }
+                .buttonStyle(.borderless)
+                .help("Clear \(label.lowercased())")
+            }
+        }
     }
 }
 
