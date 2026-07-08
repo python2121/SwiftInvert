@@ -1,5 +1,5 @@
 import Foundation
-import XCTest
+import Testing
 
 /// Locates Tests/Fixtures (dumped from NegPy by scripts/dump_fixtures.py).
 enum Fixtures {
@@ -10,7 +10,7 @@ enum Fixtures {
 
     static func json(_ relativePath: String) throws -> [String: Any] {
         let data = try Data(contentsOf: root.appendingPathComponent(relativePath))
-        return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        return try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
 
     /// Little-endian float32 blob dumped by numpy `tofile`.
@@ -20,11 +20,22 @@ enum Fixtures {
     }
 }
 
-final class FixtureSmokeTests: XCTestCase {
-    func testFixturesPresent() throws {
+/// #expect with tolerance, XCTAssertEqual(_:accuracy:)-style.
+func expectClose(
+    _ got: Double, _ expected: Double, accuracy: Double, _ label: @autoclosure () -> String = "",
+    sourceLocation: SourceLocation = #_sourceLocation
+) {
+    #expect(
+        abs(got - expected) <= accuracy,
+        "\(label()) got \(got), expected \(expected) ± \(accuracy)",
+        sourceLocation: sourceLocation)
+}
+
+@Suite struct FixtureSmoke {
+    @Test func fixturesPresent() throws {
         let manifest = try Fixtures.json("synthetic64/manifest.json")
-        XCTAssertNotNil(manifest["input"])
+        #expect(manifest["input"] != nil)
         let input = try Fixtures.floats("synthetic64/input.bin")
-        XCTAssertEqual(input.count, 64 * 64 * 3)
+        #expect(input.count == 64 * 64 * 3)
     }
 }

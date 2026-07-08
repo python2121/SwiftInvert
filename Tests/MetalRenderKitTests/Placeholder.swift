@@ -1,5 +1,7 @@
-import XCTest
+import Testing
 
-final class MetalRenderKitPlaceholderTests: XCTestCase {
-    func testPlaceholder() { XCTAssertTrue(true) }  // GPU parity tests land in Phase 3
+@Suite struct MetalRenderKitPlaceholder {
+    @Test func placeholder() {
+        #expect(Bool(true))  // GPU parity tests land in Phase 3
+    }
 }
