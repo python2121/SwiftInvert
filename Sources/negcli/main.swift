@@ -1,5 +1,6 @@
 import Foundation
 import ImageIO
+import MetalRenderKit
 import NegativeKit
 import RawDecodeKit
 import UniformTypeIdentifiers
@@ -14,6 +15,9 @@ func usage() -> Never {
               Linear sensor decode (16-bit TIFF dump, no conversion).
           negcli thumb <raw-file> -o <out.jpg>
               Extract the embedded camera JPEG thumbnail.
+          negcli render <raw-file> -o <out.tiff> [--full] [--density D] [--grade G]
+                        [--cyan C] [--magenta M] [--yellow Y]
+              Full C-41 conversion (analysis + Metal render), 16-bit ROMM TIFF.
         """
     )
     exit(2)
@@ -41,15 +45,16 @@ func parseFlags(_ args: [String]) -> (positional: [String], options: [String: St
     return (positional, options, flags)
 }
 
-/// Write an RGBImage as a 16-bit TIFF (debug dump; tagged linear sRGB so viewers
-/// don't gamma-lift the linear data).
-func writeTIFF16(_ img: RGBImage, to url: URL) throws {
+/// Write an RGBImage as a 16-bit TIFF. `romm: true` tags ROMM RGB (ProPhoto,
+/// gamma 1.8 — exactly the pipeline's encoded output space); false tags linear
+/// sRGB (debug dumps of linear sensor data).
+func writeTIFF16(_ img: RGBImage, to url: URL, romm: Bool = false) throws {
     let count = img.width * img.height * 3
     var u16 = [UInt16](repeating: 0, count: count)
     for i in 0..<count { u16[i] = UInt16(max(0, min(65535, img.pixels[i] * 65535 + 0.5))) }
     let data = u16.withUnsafeBufferPointer { Data(buffer: $0) }
     guard let provider = CGDataProvider(data: data as CFData),
-        let cs = CGColorSpace(name: CGColorSpace.linearSRGB),
+        let cs = CGColorSpace(name: romm ? CGColorSpace.rommrgb : CGColorSpace.linearSRGB),
         let cg = CGImage(
             width: img.width, height: img.height, bitsPerComponent: 16, bitsPerPixel: 48,
             bytesPerRow: img.width * 6, space: cs,
@@ -96,6 +101,36 @@ do {
         let data = try RawDecoder().embeddedThumbnail(url: URL(fileURLWithPath: input))
         try data.write(to: URL(fileURLWithPath: output))
         print("wrote \(data.count) bytes")
+    case "render":
+        guard let input = positional.first, let output = options["-o"] else { usage() }
+        let full = flags.contains("--full")
+        var settings = ExposureSettings()
+        if let v = options["--density"].flatMap(Double.init) { settings.density = v }
+        if let v = options["--grade"].flatMap(Double.init) { settings.grade = v }
+        if let v = options["--cyan"].flatMap(Double.init) { settings.wbCyan = v }
+        if let v = options["--magenta"].flatMap(Double.init) { settings.wbMagenta = v }
+        if let v = options["--yellow"].flatMap(Double.init) { settings.wbYellow = v }
+
+        let start = Date()
+        let img = try RawDecoder().decode(
+            url: URL(fileURLWithPath: input), quality: full ? .full : .preview,
+            maxLongEdge: full ? nil : 1536)
+        let tDecode = -start.timeIntervalSinceNow
+        // Analysis on a working-size copy (NegPy meters at preview resolution).
+        let analysisImage = full ? img.downsampled(maxLongEdge: 1536) : img
+        let analysis = ExposureKernel.analyze(linearImage: analysisImage)
+        let params = ExposureKernel.deriveRenderParams(settings, analysis)
+        let tAnalyze = -start.timeIntervalSinceNow - tDecode
+        let pipeline = try RenderPipeline()
+        let (encoded, _) = try pipeline.render(image: img, params: params)
+        let tRender = -start.timeIntervalSinceNow - tDecode - tAnalyze
+        try writeTIFF16(encoded, to: URL(fileURLWithPath: output), romm: true)
+        print(
+            "rendered \(encoded.width)x\(encoded.height)  decode \(String(format: "%.2f", tDecode))s"
+                + "  analyze \(String(format: "%.2f", tAnalyze))s  render \(String(format: "%.2f", tRender))s")
+        print(
+            "bounds floors \(params.finalBounds.floors)  anchor \(String(format: "%.3f", analysis.anchor))"
+                + "  cast confidence \(analysis.neutralConfidence.map { String(format: "%.2f", $0) } ?? "n/a")")
     default:
         usage()
     }
