@@ -1,0 +1,5 @@
+module CLibRaw {
+    header "shim.h"
+    link "raw_r"
+    export *
+}

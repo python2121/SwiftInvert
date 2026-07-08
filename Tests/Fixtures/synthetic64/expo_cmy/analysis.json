@@ -1,0 +1,125 @@
+{
+ "exposure_config": {
+  "density": 1.0,
+  "grade": 115.0,
+  "wb_cyan": 0.3,
+  "wb_magenta": -0.2,
+  "wb_yellow": 0.5,
+  "auto_exposure": true,
+  "auto_normalize_contrast": true,
+  "cast_removal_strength": 0.5,
+  "auto_cast_removal": true,
+  "toe": 0.0,
+  "toe_width": 2.5,
+  "shoulder": 0.0,
+  "shoulder_width": 2.5,
+  "paper_dmin": true
+ },
+ "bounds": {
+  "base_floors": [
+   -1.0677508064230283,
+   -1.063369958015283,
+   -1.0748616774996123
+  ],
+  "base_ceils": [
+   -0.03959027645972879,
+   -0.03939848812160404,
+   -0.040462057570492344
+  ],
+  "final_floors": [
+   -1.0677508064230283,
+   -1.063369958015283,
+   -1.0748616774996123
+  ],
+  "final_ceils": [
+   -0.03959027645972879,
+   -0.03939848812160404,
+   -0.040462057570492344
+  ]
+ },
+ "meters": {
+  "norm_density_range": 1.025614976497039,
+  "metered_anchor": 0.5139543466567993,
+  "textural_range": 0.6137740552425384,
+  "shadow_log_refs": [
+   -0.043735142797231674,
+   -0.043864015489816666,
+   -0.04504287242889404
+  ],
+  "neutral_axis_refs": [
+   [
+    -0.5012425780296326,
+    -0.49765825271606445,
+    -0.5055082440376282
+   ],
+   [
+    -0.212172731757164,
+    -0.21210025250911713,
+    -0.21452449262142181
+   ],
+   null,
+   0.983586243220738
+  ],
+  "scan_clip_fractions": [
+   0.0,
+   0.0,
+   0.0
+  ]
+ },
+ "curve_params": {
+  "slopes": [
+   2.346375533916717,
+   2.35580748788344,
+   2.3457391493854876
+  ],
+  "pivots": [
+   0.21724317025809858,
+   0.21930840406129987,
+   0.2168707333781471
+  ],
+  "curvatures": [
+   0.0,
+   0.0,
+   0.0
+  ],
+  "cmy_offsets": [
+   0.05835664592390228,
+   -0.0390635883675092,
+   0.09667443613992463
+  ],
+  "toe_eff": 0.006671390397814497,
+  "shoulder_eff": 0.005337112318251598,
+  "cast_strength": 0.491793121610369,
+  "d_min": 0.06,
+  "v_star": 0.6941291178409517
+ },
+ "arrays": {
+  "normalized": {
+   "path": "synthetic64/expo_cmy/normalized.bin",
+   "dtype": "float32",
+   "shape": [
+    64,
+    64,
+    3
+   ]
+  },
+  "curve_linear": {
+   "path": "synthetic64/expo_cmy/curve_linear.bin",
+   "dtype": "float32",
+   "shape": [
+    64,
+    64,
+    3
+   ]
+  },
+  "output": {
+   "path": "synthetic64/expo_cmy/output.bin",
+   "dtype": "float32",
+   "shape": [
+    64,
+    64,
+    3
+   ]
+  }
+ }
+}

@@ -1,0 +1,21 @@
+{
+ "input": {
+  "path": "synthetic64/input.bin",
+  "dtype": "float32",
+  "shape": [
+   64,
+   64,
+   3
+  ]
+ },
+ "prefiltered": {
+  "path": "synthetic64/prefiltered.bin",
+  "dtype": "float32",
+  "shape": [
+   58,
+   58,
+   3
+  ]
+ },
+ "analysis_buffer": 0.05
+}
