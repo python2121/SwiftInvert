@@ -163,8 +163,13 @@ final class AppModel {
         }
     }
 
+    /// Reset every slider/toggle to defaults; the pre-process rects are
+    /// geometry, not adjustments, and survive the reset.
     func resetSettings() {
-        settings = ExposureSettings()
+        var fresh = ExposureSettings()
+        fresh.analysisRect = settings.analysisRect
+        fresh.cropRect = settings.cropRect
+        settings = fresh
     }
 
     // MARK: - Export

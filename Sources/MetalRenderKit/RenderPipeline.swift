@@ -31,6 +31,17 @@ public final class RenderPipeline: @unchecked Sendable {
     let encodePSO: MTLComputePipelineState
     let histogramPSO: MTLComputePipelineState
 
+    /// Intermediate textures reused across renders of the same size (slider
+    /// drags re-render constantly; allocation was the dominant per-frame cost).
+    /// Export-size textures (>4 MP ≈ 3×64 MB+) are not retained.
+    private struct SizeKey: Hashable {
+        let w: Int
+        let h: Int
+    }
+    private var intermediates: [SizeKey: (normalized: MTLTexture, linear: MTLTexture, encoded: MTLTexture)] = [:]
+    private var histBuffer: MTLBuffer?
+    private let maxCachedPixels = 4_000_000
+
     public init() throws {
         guard let device = MTLCreateSystemDefaultDevice() else { throw RenderError.noDevice }
         self.device = device
@@ -132,18 +143,35 @@ public final class RenderPipeline: @unchecked Sendable {
         public let histogram: [UInt32]  // R,G,B,Luma × 256
     }
 
+    private func intermediatesFor(width w: Int, height h: Int) throws
+        -> (normalized: MTLTexture, linear: MTLTexture, encoded: MTLTexture)
+    {
+        let key = SizeKey(w: w, h: h)
+        if let cached = intermediates[key] { return cached }
+        let set = (
+            normalized: try makeTexture(width: w, height: h),
+            linear: try makeTexture(width: w, height: h),
+            encoded: try makeTexture(width: w, height: h)
+        )
+        if w * h <= maxCachedPixels {
+            if intermediates.count >= 4 { intermediates.removeAll() }  // crop-size churn cap
+            intermediates[key] = set
+        }
+        return set
+    }
+
     /// Full chain on one command buffer: normalize → curve → [histogram] → encode.
     public func render(
         source: MTLTexture, params: RenderParams, computeHistogram: Bool = true
     ) throws -> Result {
         let w = source.width, h = source.height
-        let normalized = try makeTexture(width: w, height: h)
-        let linear = try makeTexture(width: w, height: h)
-        let encoded = try makeTexture(width: w, height: h)
+        let (normalized, linear, encoded) = try intermediatesFor(width: w, height: h)
 
         var normU = UniformsBuilder.normUniforms(params)
         var curveU = UniformsBuilder.curveUniforms(params)
-        let histBuffer = device.makeBuffer(length: 1024 * 4, options: .storageModeShared)
+        if histBuffer == nil {
+            histBuffer = device.makeBuffer(length: 1024 * 4, options: .storageModeShared)
+        }
         guard let histBuffer else { throw RenderError.resource("histogram buffer") }
         memset(histBuffer.contents(), 0, 1024 * 4)
 

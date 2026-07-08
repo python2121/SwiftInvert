@@ -20,6 +20,8 @@ func usage() -> Never {
                         [--shadows S] [--shadow-contrast S] [--highlights H]
                         [--highlight-contrast H]
               Full C-41 conversion (analysis + Metal render), 16-bit ROMM TIFF.
+          negcli bench <raw-file> [--frames N]
+              Slider-latency benchmark: decode+analyze once, re-render N times.
         """
     )
     exit(2)
@@ -141,6 +143,29 @@ do {
         print(
             "bounds floors \(params.finalBounds.floors)  anchor \(String(format: "%.3f", analysis.anchor))"
                 + "  cast confidence \(analysis.neutralConfidence.map { String(format: "%.2f", $0) } ?? "n/a")")
+    case "bench":
+        guard let input = positional.first else { usage() }
+        let frames = options["--frames"].flatMap(Int.init) ?? 30
+        let img = try RawDecoder().decode(url: URL(fileURLWithPath: input), quality: .preview, maxLongEdge: 1536)
+        let analysis = ExposureKernel.analyze(linearImage: img)
+        let pipeline = try RenderPipeline()
+        let source = try pipeline.upload(img)
+        var settings = ExposureSettings()
+        _ = try pipeline.render(source: source, params: ExposureKernel.deriveRenderParams(settings, analysis))  // warm-up
+        let reupload = flags.contains("--reupload")  // simulate pre-cache behavior
+        let start = Date()
+        for i in 0..<frames {
+            settings.density = 1.0 + Double(i % 10) * 0.05  // vary like a slider drag
+            let params = ExposureKernel.deriveRenderParams(settings, analysis)
+            let src = reupload ? try pipeline.upload(img) : source
+            let result = try pipeline.render(source: src, params: params)
+            _ = pipeline.readback(result.encoded)
+        }
+        let total = -start.timeIntervalSinceNow
+        print(String(
+            format: "%d frames at %dx%d%@: %.1f ms/frame (%.1f fps), derive+render+readback",
+            frames, img.width, img.height, reupload ? " (re-upload/frame)" : "",
+            total / Double(frames) * 1000, Double(frames) / total))
     default:
         usage()
     }

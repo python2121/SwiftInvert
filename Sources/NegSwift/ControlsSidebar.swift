@@ -7,6 +7,14 @@ struct ControlsSidebar: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
+                HStack {
+                    Text("Adjustments").font(.headline)
+                    Spacer()
+                    Button("Reset All") { model.resetSettings() }
+                        .controlSize(.small)
+                        .help("Reset every slider and toggle to its default (keeps crops)")
+                }
+
                 HistogramView(bins: model.histogram)
 
                 GroupBox("Pre-process") {
@@ -101,17 +109,12 @@ struct ControlsSidebar: View {
                     .padding(6)
                 }
 
-                HStack {
-                    Button("Reset") { model.resetSettings() }
-                    Spacer()
-                    Menu("Export") {
-                        ForEach(ExportFormat.allCases) { format in
-                            Button(format.label) { model.export(format: format) }
-                        }
+                Menu("Export") {
+                    ForEach(ExportFormat.allCases) { format in
+                        Button(format.label) { model.export(format: format) }
                     }
-                    .disabled(model.isExporting || model.selection == nil)
-                    .fixedSize()
                 }
+                .disabled(model.isExporting || model.selection == nil)
 
                 if let status = model.statusMessage {
                     Text(status).font(.caption).foregroundStyle(.secondary)
@@ -156,14 +159,27 @@ struct LabeledSlider: View {
     let format: String
     let defaultValue: Double
 
+    private var isChanged: Bool { abs(value - defaultValue) > 1e-9 }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            HStack {
+            HStack(spacing: 4) {
                 Text(label).font(.caption)
+                if isChanged {
+                    Button {
+                        value = defaultValue
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Reset \(label.lowercased()) to default")
+                }
                 Spacer()
                 Text(String(format: format, value))
                     .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(isChanged ? .primary : .secondary)
             }
             Slider(value: $value, in: range)
                 .controlSize(.small)

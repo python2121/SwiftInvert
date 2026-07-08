@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import Metal
 import MetalRenderKit
 import NegativeKit
 import RawDecodeKit
@@ -22,6 +23,12 @@ actor ImageSession {
         var blackPoint: Double
     }
     private var analysisKey: AnalysisKey?
+
+    /// GPU source textures, uploaded once per (image, crop) — slider changes
+    /// only re-run the compute passes on the cached texture.
+    private var fullTexture: MTLTexture?
+    private var croppedTexture: MTLTexture?
+    private var croppedTextureRect: NormalizedRect?
 
     struct RenderOutput: Sendable {
         let image: CGImage
@@ -54,20 +61,32 @@ actor ImageSession {
         return (preview!, analysis!)
     }
 
+    /// The cached GPU texture for this frame's current crop state.
+    private func sourceTexture(image: RGBImage, settings: ExposureSettings, uncropped: Bool) throws -> MTLTexture {
+        if uncropped || settings.cropRect == nil {
+            if fullTexture == nil { fullTexture = try pipeline.upload(image) }
+            return fullTexture!
+        }
+        let crop = settings.cropRect!
+        if croppedTexture == nil || croppedTextureRect != crop {
+            croppedTexture = try pipeline.upload(image.cropped(to: crop))
+            croppedTextureRect = crop
+        }
+        return croppedTexture!
+    }
+
     /// `uncropped` shows the full frame (used while a selection tool is active
     /// so the user can drag on the whole image, like NegPy's crop_preview_full).
     func render(settings: ExposureSettings, uncropped: Bool = false) throws -> RenderOutput {
         let (image, analysis) = try prepare(settings: settings)
         let params = ExposureKernel.deriveRenderParams(settings, analysis)
-        var renderImage = image
-        if !uncropped, let crop = settings.cropRect {
-            renderImage = image.cropped(to: crop)
-        }
-        let (encoded, histogram) = try pipeline.render(image: renderImage, params: params)
+        let source = try sourceTexture(image: image, settings: settings, uncropped: uncropped)
+        let result = try pipeline.render(source: source, params: params)
+        let encoded = pipeline.readback(result.encoded)
         guard let cg = ImageConversion.cgImage(fromEncoded: encoded) else {
             throw RenderError.resource("CGImage conversion")
         }
-        return RenderOutput(image: cg, histogram: histogram)
+        return RenderOutput(image: cg, histogram: result.histogram)
     }
 
     /// Full-resolution export render (fresh decode, same analysis, crop applied).
