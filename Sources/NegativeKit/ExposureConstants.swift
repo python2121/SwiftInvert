@@ -70,6 +70,29 @@ public enum K {
     public static let paperMidtoneGamma = 0.15
     public static let paperGammaWidth = 0.6
 
+    // ── Regional tone controls (NegSwift addition, no NegPy equivalent) ──────
+    // Shadow/highlight lift and per-region contrast operate on print density v
+    // (after the curve core + midtone gamma, before regional CMY and the
+    // toe/shoulder bounds) with smooth sigmoid region masks:
+    //   w_shadow    = σ(sharpness · (v − shadowToneAnchor))
+    //   w_highlight = σ(sharpness · (highlightToneAnchor − v))
+    // Amplitudes are bounded so each control alone keeps the transfer monotone
+    // (sharpness · maxAmount / 4 < 1). Mirrored in NegPipeline.metal — keep in sync.
+    public static let toneRegionSharpness = 3.5
+    // Density anchor of the "medium darks" (shadow region centre).
+    public static let shadowToneAnchor = 1.40
+    // Density anchor of the highlight region centre.
+    public static let highlightToneAnchor = 0.30
+    // Density swing of the Shadows slider at ±1 (positive slider = lift).
+    public static let shadowsMaxLift = 0.5
+    // Density swing of the Highlights slider at ±1 (negative slider = recover).
+    public static let highlightsMaxShift = 0.4
+    // Max extra slope within each region at contrast slider ±1.
+    public static let shadowContrastMax = 0.5
+    public static let highlightContrastMax = 0.5
+    // One photographic stop in log10 density.
+    public static let log10Two = 0.3010299956639812
+
     // Rec.709 luma weights (negpy/domain/types.py).
     public static let lumaR = 0.2126
     public static let lumaG = 0.7152

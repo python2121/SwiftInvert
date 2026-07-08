@@ -9,7 +9,7 @@ struct ControlsSidebar: View {
             VStack(alignment: .leading, spacing: 16) {
                 HistogramView(bins: model.histogram)
 
-                GroupBox("Exposure") {
+                GroupBox("Print") {
                     VStack(alignment: .leading, spacing: 10) {
                         Toggle("Auto exposure", isOn: $model.settings.autoExposure)
                         LabeledSlider(
@@ -19,6 +19,27 @@ struct ControlsSidebar: View {
                         LabeledSlider(
                             label: "Grade (ISO R)", value: $model.settings.grade, range: 50...180,
                             format: "%.0f", defaultValue: 115)
+                    }
+                    .padding(6)
+                }
+
+                GroupBox("Exposure") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        LabeledSlider(
+                            label: "Exposure (stops)", value: $model.settings.exposureStops,
+                            range: -2...2, format: "%+.2f", defaultValue: 0)
+                        LabeledSlider(
+                            label: "Shadows", value: $model.settings.shadows, range: -1...1,
+                            format: "%.2f", defaultValue: 0)
+                        LabeledSlider(
+                            label: "Shadow contrast", value: $model.settings.shadowContrast,
+                            range: -1...1, format: "%.2f", defaultValue: 0)
+                        LabeledSlider(
+                            label: "Highlights", value: $model.settings.highlights, range: -1...1,
+                            format: "%.2f", defaultValue: 0)
+                        LabeledSlider(
+                            label: "Highlight contrast", value: $model.settings.highlightContrast,
+                            range: -1...1, format: "%.2f", defaultValue: 0)
                     }
                     .padding(6)
                 }

@@ -16,7 +16,9 @@ func usage() -> Never {
           negcli thumb <raw-file> -o <out.jpg>
               Extract the embedded camera JPEG thumbnail.
           negcli render <raw-file> -o <out.tiff> [--full] [--density D] [--grade G]
-                        [--cyan C] [--magenta M] [--yellow Y]
+                        [--cyan C] [--magenta M] [--yellow Y] [--exposure STOPS]
+                        [--shadows S] [--shadow-contrast S] [--highlights H]
+                        [--highlight-contrast H]
               Full C-41 conversion (analysis + Metal render), 16-bit ROMM TIFF.
         """
     )
@@ -27,11 +29,14 @@ func parseFlags(_ args: [String]) -> (positional: [String], options: [String: St
     var positional: [String] = []
     var options: [String: String] = [:]
     var flags: Set<String> = []
+    let booleanFlags: Set<String> = ["--preview", "--full"]
     var i = 0
     while i < args.count {
         let a = args[i]
-        if a == "-o" || a.hasPrefix("--"), i + 1 < args.count, !args[i + 1].hasPrefix("-") {
-            if a == "--preview" { flags.insert(a); i += 1; continue }
+        // A token is a value if it doesn't look like a flag — negative numbers
+        // ("-1", "-0.5") count as values.
+        func isValue(_ s: String) -> Bool { !s.hasPrefix("-") || Double(s) != nil }
+        if a == "-o" || a.hasPrefix("--"), !booleanFlags.contains(a), i + 1 < args.count, isValue(args[i + 1]) {
             options[a] = args[i + 1]
             i += 2
         } else if a.hasPrefix("-") {
@@ -110,6 +115,11 @@ do {
         if let v = options["--cyan"].flatMap(Double.init) { settings.wbCyan = v }
         if let v = options["--magenta"].flatMap(Double.init) { settings.wbMagenta = v }
         if let v = options["--yellow"].flatMap(Double.init) { settings.wbYellow = v }
+        if let v = options["--exposure"].flatMap(Double.init) { settings.exposureStops = v }
+        if let v = options["--shadows"].flatMap(Double.init) { settings.shadows = v }
+        if let v = options["--shadow-contrast"].flatMap(Double.init) { settings.shadowContrast = v }
+        if let v = options["--highlights"].flatMap(Double.init) { settings.highlights = v }
+        if let v = options["--highlight-contrast"].flatMap(Double.init) { settings.highlightContrast = v }
 
         let start = Date()
         let img = try RawDecoder().decode(

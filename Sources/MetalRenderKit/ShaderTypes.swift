@@ -36,6 +36,10 @@ public struct CurveUniforms {
     public var vStar: Float
     public var midtoneGamma: Float
     public var gammaWidth: Float
+    public var shadowsLift: Float
+    public var shadowContrast: Float
+    public var highlightsShift: Float
+    public var highlightContrast: Float
 }
 
 /// RenderParams (NegativeKit's per-slider derivation) → GPU uniform packing.
@@ -79,7 +83,11 @@ public enum UniformsBuilder {
             surroundGamma: 1.0,
             vStar: Float(params.vStar),
             midtoneGamma: Float(K.paperMidtoneGamma),
-            gammaWidth: Float(K.paperGammaWidth)
+            gammaWidth: Float(K.paperGammaWidth),
+            shadowsLift: Float(params.shadows * K.shadowsMaxLift),
+            shadowContrast: Float(params.shadowContrast * K.shadowContrastMax),
+            highlightsShift: Float(params.highlights * K.highlightsMaxShift),
+            highlightContrast: Float(params.highlightContrast * K.highlightContrastMax)
         )
     }
 }

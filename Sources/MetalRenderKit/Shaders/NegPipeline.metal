@@ -40,7 +40,18 @@ struct CurveUniforms {
     float vStar;
     float midtoneGamma;
     float gammaWidth;
+    // Regional tone controls, pre-scaled by their K.*Max amplitudes.
+    float shadowsLift;
+    float shadowContrast;
+    float highlightsShift;
+    float highlightContrast;
 };
+
+// Region-mask constants — must match K.toneRegionSharpness / K.*ToneAnchor
+// in ExposureConstants.swift (GPU/CPU parity tests catch drift).
+constant float TONE_SHARPNESS = 3.5f;
+constant float SHADOW_ANCHOR = 1.40f;
+constant float HIGHLIGHT_ANCHOR = 0.30f;
 
 inline float fast_sigmoid(float x) {
     if (x >= 0.0f) { return 1.0f / (1.0f + exp(-x)); }
@@ -113,6 +124,16 @@ kernel void printCurve(
 
         if (p.midtoneGamma != 0.0f) {
             v = v + p.midtoneGamma * p.gammaWidth * tanh((v - p.vStar) / p.gammaWidth);
+        }
+
+        // Regional tone: sigmoid-masked density shifts + anchor-pivoted contrast,
+        // parallel form (both masks on the incoming v) — mirrors ReferenceCurve.
+        if (p.shadowsLift != 0.0f || p.shadowContrast != 0.0f
+            || p.highlightsShift != 0.0f || p.highlightContrast != 0.0f) {
+            float wS = fast_sigmoid(TONE_SHARPNESS * (v - SHADOW_ANCHOR));
+            float wH = fast_sigmoid(TONE_SHARPNESS * (HIGHLIGHT_ANCHOR - v));
+            v = v + (-p.shadowsLift + p.shadowContrast * (v - SHADOW_ANCHOR)) * wS
+                  + (-p.highlightsShift + p.highlightContrast * (v - HIGHLIGHT_ANCHOR)) * wH;
         }
 
         float w_sh = fast_sigmoid(3.0f * (v - p.zoneCenter));

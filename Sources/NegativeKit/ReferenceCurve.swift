@@ -72,6 +72,14 @@ public enum ReferenceCurve {
         let midtoneGamma = K.paperMidtoneGamma
         let gammaWidth = K.paperGammaWidth
 
+        // Regional tone controls, all-zero → identity (fixture parity preserved).
+        let hasTone = params.shadows != 0 || params.shadowContrast != 0
+            || params.highlights != 0 || params.highlightContrast != 0
+        let shLift = params.shadows * K.shadowsMaxLift
+        let shContrast = params.shadowContrast * K.shadowContrastMax
+        let hiShift = params.highlights * K.highlightsMaxShift
+        let hiContrast = params.highlightContrast * K.highlightContrastMax
+
         var out = img
         out.pixels.withUnsafeMutableBufferPointer { buf in
             var i = 0
@@ -82,6 +90,16 @@ public enum ReferenceCurve {
                     if midtoneGamma != 0 {
                         v += midtoneGamma * gammaWidth * tanh((v - params.vStar) / gammaWidth)
                     }
+
+                    // Regional tone: sigmoid-masked density shifts + anchor-pivoted
+                    // contrast, parallel form (both masks on the incoming v).
+                    if hasTone {
+                        let wS = CurveLogic.sigmoid(K.toneRegionSharpness * (v - K.shadowToneAnchor))
+                        let wH = CurveLogic.sigmoid(K.toneRegionSharpness * (K.highlightToneAnchor - v))
+                        v += (-shLift + shContrast * (v - K.shadowToneAnchor)) * wS
+                        v += (-hiShift + hiContrast * (v - K.highlightToneAnchor)) * wH
+                    }
+
                     let wSh = CurveLogic.sigmoid(3.0 * (v - zoneCenter))
                     v += shadowCMY[ch] * wSh + highlightCMY[ch] * (1.0 - wSh)
 

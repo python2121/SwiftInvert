@@ -33,9 +33,11 @@ enum Fixtures2 {
     @Test func uniformStrides() {
         // Must match the MSL structs in NegPipeline.metal.
         #expect(MemoryLayout<NormUniforms>.stride == 48)
-        #expect(MemoryLayout<CurveUniforms>.stride == 176)
+        #expect(MemoryLayout<CurveUniforms>.stride == 192)
         #expect(MemoryLayout<CurveUniforms>.offset(of: \.toe) == 112)
         #expect(MemoryLayout<CurveUniforms>.offset(of: \.gammaWidth) == 172)
+        #expect(MemoryLayout<CurveUniforms>.offset(of: \.shadowsLift) == 176)
+        #expect(MemoryLayout<CurveUniforms>.offset(of: \.highlightContrast) == 188)
     }
 }
 
@@ -93,6 +95,32 @@ enum Fixtures2 {
         #expect(meanL < 0.01 && maxL < 0.04, "\(name) linear: mean \(meanL), max \(maxL)")
         let (meanE, maxE) = Self.diffStats(encoded.pixels, expEncoded)
         #expect(meanE < 0.01 && maxE < 0.04, "\(name) encoded: mean \(meanE), max \(maxE)")
+    }
+
+    @Test func toneControlsParityWithCPU() throws {
+        // The regional tone controls have no NegPy fixture; the GPU must match
+        // the Swift CPU reference at the standard parity tolerances.
+        let pipeline = try #require(GPU.pipeline, "Metal unavailable")
+        let pixels = try Fixtures2.floats("synthetic64/input.bin")
+        let input = RGBImage(pixels: pixels, width: 64, height: 64)
+        let analysis = ExposureKernel.analyze(linearImage: input, analysisBuffer: 0.05)
+
+        var settings = ExposureSettings()
+        settings.exposureStops = 0.7
+        settings.shadows = 0.8
+        settings.shadowContrast = -0.5
+        settings.highlights = -0.9
+        settings.highlightContrast = 0.6
+        let params = ExposureKernel.deriveRenderParams(settings, analysis)
+
+        let cpu = ReferenceCurve.encodeOutput(
+            ReferenceCurve.applyPrintCurve(
+                ReferenceCurve.normalize(input, bounds: params.finalBounds), params: params))
+        let source = try pipeline.upload(input)
+        let gpu = pipeline.readback(try pipeline.render(source: source, params: params).encoded)
+
+        let (mean, maxV) = Self.diffStats(gpu.pixels, cpu.pixels)
+        #expect(mean < 0.01 && maxV < 0.04, "tone controls GPU/CPU: mean \(mean), max \(maxV)")
     }
 
     @Test func histogramMatchesCPU() throws {

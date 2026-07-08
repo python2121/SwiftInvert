@@ -30,7 +30,45 @@ public struct ExposureSettings: Codable, Equatable, Sendable {
     /// Paper white floor on (NegPy paper_dmin, d_min = 0.06).
     public var paperDmin: Bool = true
 
+    // Regional tone controls (see K.toneRegionSharpness block). Lightroom sign
+    // conventions: shadows +1 lifts shadows; highlights −1 brings highlights
+    // down; contrast sliders expand separation within their region; exposure
+    // is global print exposure in stops (+ = brighter, histogram right).
+    public var exposureStops: Double = 0
+    public var shadows: Double = 0
+    public var shadowContrast: Double = 0
+    public var highlights: Double = 0
+    public var highlightContrast: Double = 0
+
     public init() {}
+
+    // Sidecars written before these controls existed omit the keys; default to 0.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        func d(_ k: CodingKeys, _ def: Double) -> Double { (try? c.decode(Double.self, forKey: k)) ?? def }
+        func b(_ k: CodingKeys, _ def: Bool) -> Bool { (try? c.decode(Bool.self, forKey: k)) ?? def }
+        density = d(.density, 1.0)
+        grade = d(.grade, 115.0)
+        wbCyan = d(.wbCyan, 0)
+        wbMagenta = d(.wbMagenta, 0)
+        wbYellow = d(.wbYellow, 0)
+        autoExposure = b(.autoExposure, true)
+        autoNormalizeContrast = b(.autoNormalizeContrast, true)
+        castRemovalStrength = d(.castRemovalStrength, 0.5)
+        autoCastRemoval = b(.autoCastRemoval, true)
+        whitePointOffset = d(.whitePointOffset, 0)
+        blackPointOffset = d(.blackPointOffset, 0)
+        toe = d(.toe, 0)
+        toeWidth = d(.toeWidth, 2.5)
+        shoulder = d(.shoulder, 0)
+        shoulderWidth = d(.shoulderWidth, 2.5)
+        paperDmin = b(.paperDmin, true)
+        exposureStops = d(.exposureStops, 0)
+        shadows = d(.shadows, 0)
+        shadowContrast = d(.shadowContrast, 0)
+        highlights = d(.highlights, 0)
+        highlightContrast = d(.highlightContrast, 0)
+    }
 }
 
 /// Per-image analysis result — computed once per image (per decode), reused
@@ -62,6 +100,11 @@ public struct RenderParams: Equatable, Sendable {
     public var shoulderWidth: Double
     public var dMin: Double
     public var vStar: Double
+    // Regional tone controls (exposureStops is folded into cmyOffsets upstream).
+    public var shadows: Double = 0
+    public var shadowContrast: Double = 0
+    public var highlights: Double = 0
+    public var highlightContrast: Double = 0
 }
 
 public enum ExposureKernel {
@@ -124,8 +167,17 @@ public enum ExposureKernel {
             neutralAxisNorm: neutralAxisNorm
         )
 
-        let cmyOffsets = CurveLogic.filtrationOffsets(
+        var cmyOffsets = CurveLogic.filtrationOffsets(
             wbCMY: SIMD3(settings.wbCyan, settings.wbMagenta, settings.wbYellow), bounds: finalBounds)
+        // Global exposure: a uniform pre-curve print-exposure offset, one stop =
+        // −log10(2) over each channel's stretch range (the local_ev_scale domain,
+        // like dodging the whole print). Negative scale ⇒ positive stops brighten.
+        if settings.exposureStops != 0 {
+            for ch in 0..<3 {
+                let range = max(abs(finalBounds.ceils[ch] - finalBounds.floors[ch]), 1e-6)
+                cmyOffsets[ch] += settings.exposureStops * (-K.log10Two / range)
+            }
+        }
         let knees = CurveLogic.gradeCoupledShape(slopeG: slopes.y, toe: settings.toe, shoulder: settings.shoulder)
 
         return RenderParams(
@@ -139,7 +191,11 @@ public enum ExposureKernel {
             toeWidth: settings.toeWidth,
             shoulderWidth: settings.shoulderWidth,
             dMin: dMin,
-            vStar: CurveLogic.referenceLinearValue(dMin: dMin)
+            vStar: CurveLogic.referenceLinearValue(dMin: dMin),
+            shadows: settings.shadows,
+            shadowContrast: settings.shadowContrast,
+            highlights: settings.highlights,
+            highlightContrast: settings.highlightContrast
         )
     }
 }
