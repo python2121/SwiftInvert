@@ -155,6 +155,7 @@ final class AppModel {
     private func openSelection() {
         renderTask?.cancel()
         toolMode = .none
+        showingBaseline = false
         displayImage = nil
         histogram = nil
         if let url = selection, !multiSelection.contains(url) { multiSelection = [url] }
@@ -192,7 +193,7 @@ final class AppModel {
             guard let self else { return }
             repeat {
                 self.renderPending = false
-                let snapshot = self.settings
+                let snapshot = self.showingBaseline ? self.baselineSettings() : self.settings
                 let uncropped = self.toolMode != .none
                 guard let session = self.session else { break }
                 do {
@@ -238,6 +239,28 @@ final class AppModel {
         fresh.analysisRect = settings.analysisRect
         fresh.cropRect = settings.cropRect
         settings = fresh
+    }
+
+    // MARK: - Baseline (press-and-hold "before") preview
+
+    /// True while the long-press comparison shows the stock conversion.
+    var showingBaseline = false
+
+    /// The "where you came from" settings: stock adjustments with the current
+    /// geometry (crop/analysis region/orientation) so the comparison aligns.
+    private func baselineSettings() -> ExposureSettings {
+        var base = ExposureSettings()
+        base.analysisRect = settings.analysisRect
+        base.cropRect = settings.cropRect
+        base.rotation = settings.rotation
+        base.flipHorizontal = settings.flipHorizontal
+        return base
+    }
+
+    func setBaselinePreview(_ on: Bool) {
+        guard on != showingBaseline else { return }
+        showingBaseline = on
+        scheduleRender()
     }
 
     // MARK: - Export
