@@ -93,6 +93,10 @@ public enum K {
     // the monotone bound lives).
     public static let shadowContrastMax = 0.5
     public static let highlightContrastMax = 0.5
+    // Overall contrast at slider ±1: the print curve rotates around the
+    // reference tone, v → v + k·(v − v*), folded into slopes/pivots/curvatures
+    // (no shader involvement). Slider range −1…+2 → k ∈ [−0.5, +1].
+    public static let overallContrastMax = 0.5
     // One photographic stop in log10 density.
     public static let log10Two = 0.3010299956639812
 

@@ -39,6 +39,9 @@ public struct ExposureSettings: Codable, Equatable, Sendable {
     public var shadowContrast: Double = 0
     public var highlights: Double = 0
     public var highlightContrast: Double = 0
+    /// Overall contrast: rotates the whole curve around the reference tone
+    /// (anchor brightness preserved). + steepens, − flattens.
+    public var overallContrast: Double = 0
 
     // Pre-process rects (NegPy analysis_rect / manual_crop_rect semantics):
     // analysisRect scopes ONLY the metering (buffer disabled inside it);
@@ -74,6 +77,7 @@ public struct ExposureSettings: Codable, Equatable, Sendable {
         shadowContrast = d(.shadowContrast, 0)
         highlights = d(.highlights, 0)
         highlightContrast = d(.highlightContrast, 0)
+        overallContrast = d(.overallContrast, 0)
         analysisRect = try? c.decode(NormalizedRect.self, forKey: .analysisRect)
         cropRect = try? c.decode(NormalizedRect.self, forKey: .cropRect)
     }
@@ -179,7 +183,7 @@ public enum ExposureKernel {
             )
         }
 
-        let (slopes, pivots, curvatures) = CurveLogic.perChannelCurveParams(
+        var (slopes, pivots, curvatures) = CurveLogic.perChannelCurveParams(
             grade: settings.grade,
             density: settings.density,
             autoNormalizeContrast: settings.autoNormalizeContrast,
@@ -192,6 +196,21 @@ public enum ExposureKernel {
             anchor: anchor,
             neutralAxisNorm: neutralAxisNorm
         )
+
+        // Overall contrast: v → v + k·(v − v*) folded exactly into the core:
+        // slopes and curvatures scale by (1+k); the pivot shifts by k·v*/s'
+        // so the reference tone's print density is unchanged (and the midtone
+        // paper S stays centered, since it's anchored at v* too).
+        if settings.overallContrast != 0 {
+            let k = settings.overallContrast * K.overallContrastMax
+            let vStar = CurveLogic.referenceLinearValue(dMin: dMin)
+            for ch in 0..<3 {
+                let scaled = slopes[ch] * (1 + k)
+                curvatures[ch] *= (1 + k)
+                pivots[ch] += k * vStar / scaled
+                slopes[ch] = scaled
+            }
+        }
 
         var cmyOffsets = CurveLogic.filtrationOffsets(
             wbCMY: SIMD3(settings.wbCyan, settings.wbMagenta, settings.wbYellow), bounds: finalBounds)

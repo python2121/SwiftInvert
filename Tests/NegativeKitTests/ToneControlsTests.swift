@@ -129,6 +129,49 @@ import Testing
         #expect(meanBright > meanBase + 0.05, "exposure +1: mean \(meanBase) → \(meanBright)")
     }
 
+    @Test func overallContrastRotatesAroundAnchor() throws {
+        var contrasty = ExposureSettings()
+        contrasty.overallContrast = 1.5
+        var flat = ExposureSettings()
+        flat.overallContrast = -1.0
+        let base = ExposureKernel.deriveRenderParams(ExposureSettings(), Synthetic64.analysis)
+        let up = ExposureKernel.deriveRenderParams(contrasty, Synthetic64.analysis)
+        let down = ExposureKernel.deriveRenderParams(flat, Synthetic64.analysis)
+
+        // Slopes scale by (1+k); k = slider × overallContrastMax.
+        for ch in 0..<3 {
+            expectClose(up.slopes[ch], base.slopes[ch] * 1.75, accuracy: 1e-9, "slope up ch\(ch)")
+            expectClose(down.slopes[ch], base.slopes[ch] * 0.5, accuracy: 1e-9, "slope down ch\(ch)")
+        }
+
+        // The input that hits v* on the base curve still hits v* (green, curv 0):
+        // the reference tone's print density is invariant under contrast.
+        let vStar = base.vStar
+        let uStar = base.pivots.y + vStar / base.slopes.y
+        let vUp = up.slopes.y * (uStar - up.pivots.y) + up.curvatures.y * uStar * uStar
+        expectClose(vUp, vStar, accuracy: 1e-9, "anchor invariance")
+
+        // End-to-end: rendered spread grows, anchor output stays put, monotone.
+        let baseOut = Self.rampEncoded(Self.params())
+        var p = Self.params()
+        let k = 1.5 * K.overallContrastMax
+        for ch in 0..<3 {
+            let scaled = p.slopes[ch] * (1 + k)
+            p.curvatures[ch] *= (1 + k)
+            p.pivots[ch] += k * p.vStar / scaled
+            p.slopes[ch] = scaled
+        }
+        let contrastOut = Self.rampEncoded(p)
+        let anchorIdx = Int((0.46 * 256.0).rounded())  // assumed_anchor input
+        expectClose(
+            Double(contrastOut[anchorIdx]), Double(baseOut[anchorIdx]), accuracy: 0.01, "anchor output")
+        let a = Self.idx(atDensity: 0.3), b = Self.idx(atDensity: 1.3)
+        #expect(contrastOut[a] - contrastOut[b] > baseOut[a] - baseOut[b] + 0.02, "spread grows")
+        for i in 1..<contrastOut.count {
+            #expect(contrastOut[i] <= contrastOut[i - 1] + 1e-4, "monotone at \(i)")
+        }
+    }
+
     @Test func zeroSettingsAreIdentity() {
         // Belt-and-braces on top of the fixture tests: explicit zero tone fields
         // produce byte-identical output to a params struct without them.

@@ -58,6 +58,9 @@ struct ControlsSidebar: View {
                             label: "Exposure (stops)", value: $model.settings.exposureStops,
                             range: -2...2, format: "%+.2f", defaultValue: 0)
                         LabeledSlider(
+                            label: "Contrast", value: $model.settings.overallContrast,
+                            range: -1...2, format: "%.2f", defaultValue: 0)
+                        LabeledSlider(
                             label: "Shadows", value: $model.settings.shadows, range: -1...1,
                             format: "%.2f", defaultValue: 0)
                         LabeledSlider(
