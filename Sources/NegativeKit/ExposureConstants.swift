@@ -84,6 +84,7 @@ public enum K {
     // Density anchor of the highlight region centre.
     public static let highlightToneAnchor = 0.30
     // Density swing of the Shadows slider at ±1 (positive slider = lift).
+    // Slider ranges ±2: still monotone alone (2 · 0.5 · sharpness/4 = 0.875 < 1).
     public static let shadowsMaxLift = 0.5
     // Density swing of the Highlights slider at ±1 (negative slider = recover).
     public static let highlightsMaxShift = 0.4

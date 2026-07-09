@@ -92,8 +92,9 @@ import Testing
 
     @Test(arguments: [
         [1.0, 0.0, 0.0, 0.0], [-1.0, 0.0, 0.0, 0.0],
+        [2.0, 0.0, 0.0, 0.0], [-2.0, 0.0, 0.0, 0.0],  // extended shadows range
         [0.0, 1.0, 0.0, 0.0], [0.0, -1.0, 0.0, 0.0],
-        [0.0, 3.0, 0.0, 0.0], [0.0, -3.0, 0.0, 0.0],  // extended shadow-contrast range (kernel floor guards −3)
+        [0.0, 6.0, 0.0, 0.0], [0.0, -3.0, 0.0, 0.0],  // extended shadow-contrast range (kernel floor guards −3)
         [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, -1.0, 0.0],
         [0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0, -1.0],
     ])
