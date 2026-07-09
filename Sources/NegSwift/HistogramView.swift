@@ -174,8 +174,11 @@ struct HistogramView: View {
                 .foregroundStyle(.white.opacity(0.8))
                 .offset(y: size.height / 2 - 6)
         }
-        .position(x: x, y: size.height / 2)
-        .contentShape(Rectangle().inset(by: -6))
+        // Bound the hit area BEFORE positioning: .position() expands the frame
+        // to the whole chart, so a later contentShape made the topmost handle
+        // swallow every drag (the black-point handle was unreachable).
+        .frame(width: 16, height: size.height)
+        .contentShape(Rectangle())
         .gesture(
             DragGesture(minimumDistance: 1)
                 .onChanged { g in
@@ -221,8 +224,19 @@ struct HistogramView: View {
     }
 
     private var footer: some View {
-        HStack {
+        HStack(spacing: 3) {
             Text("Shadows").font(.system(size: 8)).foregroundStyle(.tertiary)
+            if model.settings.blackPointOffset != 0 {
+                Button {
+                    model.settings.blackPointOffset = 0
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 8))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.borderless)
+                .help("Reset black point")
+            }
             Spacer()
             Button(logScale ? "log" : "lin") { logScale.toggle() }
                 .buttonStyle(.plain)
@@ -230,6 +244,17 @@ struct HistogramView: View {
                 .foregroundStyle(.secondary)
                 .help("Toggle count scale")
             Spacer()
+            if model.settings.whitePointOffset != 0 {
+                Button {
+                    model.settings.whitePointOffset = 0
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 8))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.borderless)
+                .help("Reset white point")
+            }
             Text("Highlights").font(.system(size: 8)).foregroundStyle(.tertiary)
         }
     }

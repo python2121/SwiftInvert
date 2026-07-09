@@ -194,7 +194,8 @@ struct DetailView: View {
     private var zoomAndPanGestures: some Gesture {
         MagnifyGesture()
             .onChanged { value in
-                zoom = min(max(baseZoom * value.magnification, 1), 8)
+                // 0.5 lets you pull back well past fit; 8x for pixel peeping.
+                zoom = min(max(baseZoom * value.magnification, 0.5), 8)
             }
             .onEnded { _ in
                 baseZoom = zoom
