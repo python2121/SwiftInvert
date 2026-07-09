@@ -5,18 +5,29 @@ struct ControlsSidebar: View {
     @Bindable var model: AppModel
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Adjustments").font(.headline)
+                Spacer()
+                Button("Reset All") { model.resetSettings() }
+                    .controlSize(.small)
+                    .help("Reset every slider and toggle to its default (keeps crops)")
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 12)
+
+            // Pinned: the histogram stays visible while the controls scroll.
+            HistogramView(model: model)
+                .padding(.horizontal, 12)
+
+            scrollingControls
+        }
+        .frame(width: 215)
+    }
+
+    private var scrollingControls: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                HStack {
-                    Text("Adjustments").font(.headline)
-                    Spacer()
-                    Button("Reset All") { model.resetSettings() }
-                        .controlSize(.small)
-                        .help("Reset every slider and toggle to its default (keeps crops)")
-                }
-
-                HistogramView(bins: model.histogram)
-
                 GroupBox("Pre-process") {
                     VStack(alignment: .leading, spacing: 8) {
                         toolRow(
@@ -78,16 +89,8 @@ struct ControlsSidebar: View {
 
                 GroupBox("Color") {
                     VStack(alignment: .leading, spacing: 10) {
-                        LabeledSlider(
-                            label: "Cyan", value: $model.settings.wbCyan, range: -1...1,
-                            format: "%.2f", defaultValue: 0)
-                        LabeledSlider(
-                            label: "Magenta", value: $model.settings.wbMagenta, range: -1...1,
-                            format: "%.2f", defaultValue: 0)
-                        LabeledSlider(
-                            label: "Yellow", value: $model.settings.wbYellow, range: -1...1,
-                            format: "%.2f", defaultValue: 0)
-                        Divider()
+                        // C/M/Y trim sliders hidden for now (fields remain in
+                        // settings/sidecars; Temp/Tint below are the WB controls).
                         Toggle("Auto cast removal", isOn: $model.settings.autoCastRemoval)
                         LabeledSlider(
                             label: "Cast strength", value: $model.settings.castRemovalStrength,
@@ -123,12 +126,8 @@ struct ControlsSidebar: View {
                     .padding(6)
                 }
 
-                Menu("Export") {
-                    ForEach(ExportFormat.allCases) { format in
-                        Button(format.label) { model.export(format: format) }
-                    }
-                }
-                .disabled(model.isExporting || model.selection == nil)
+                Button("Export…") { model.requestExportCurrent() }
+                    .disabled(model.isExporting || model.selection == nil)
 
                 if let status = model.statusMessage {
                     Text(status).font(.caption).foregroundStyle(.secondary)
@@ -136,7 +135,6 @@ struct ControlsSidebar: View {
             }
             .padding(12)
         }
-        .frame(width: 195)
     }
 
     /// Brightness ↔ density inversion so dragging right brightens the print.

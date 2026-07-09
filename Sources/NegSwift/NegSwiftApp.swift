@@ -35,6 +35,9 @@ struct ContentView: View {
             }
         }
         .onExitCommand { model.toolMode = .none }
+        .sheet(item: $model.exportRequest) { request in
+            ExportSheet(request: request, model: model)
+        }
         .frame(minWidth: 1000, minHeight: 700)
     }
 }

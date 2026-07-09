@@ -23,11 +23,7 @@ struct LibraryView: View {
                 ScrollView {
                     LazyVGrid(columns: columns, spacing: 8) {
                         ForEach(model.files, id: \.self) { url in
-                            ThumbnailCell(
-                                url: url, store: model.thumbnails,
-                                isSelected: model.selection == url
-                            )
-                            .onTapGesture { model.selection = url }
+                            gridCell(url)
                         }
                     }
                     .padding(8)
@@ -43,10 +39,42 @@ struct LibraryView: View {
     }
 }
 
+extension LibraryView {
+    @ViewBuilder
+    fileprivate func gridCell(_ url: URL) -> some View {
+        ThumbnailCell(
+            url: url, store: model.thumbnails,
+            isSelected: model.multiSelection.contains(url),
+            isCurrent: model.selection == url
+        )
+        .onTapGesture {
+            model.select(url, additive: NSEvent.modifierFlags.contains(.command))
+        }
+        .contextMenu { exportMenu(for: url) }
+    }
+
+    @ViewBuilder
+    fileprivate func exportMenu(for url: URL) -> some View {
+        let urls: [URL] =
+            model.multiSelection.contains(url)
+            ? model.files.filter { model.multiSelection.contains($0) }
+            : [url]
+        let title = urls.count == 1 ? "Export Image…" : "Export \(urls.count) Images…"
+        Button(title) {
+            if !model.multiSelection.contains(url) {
+                model.select(url, additive: false)
+            }
+            model.exportRequest = AppModel.ExportRequest(urls: urls)
+        }
+        .disabled(model.isExporting)
+    }
+}
+
 struct ThumbnailCell: View {
     let url: URL
     let store: ThumbnailStore
     let isSelected: Bool
+    let isCurrent: Bool
     @State private var image: CGImage?
 
     var body: some View {
@@ -66,7 +94,9 @@ struct ThumbnailCell: View {
             .aspectRatio(3.0 / 2.0, contentMode: .fit)
             .overlay {
                 RoundedRectangle(cornerRadius: 6)
-                    .strokeBorder(isSelected ? Color.accentColor : .clear, lineWidth: 3)
+                    .strokeBorder(
+                        isSelected ? Color.accentColor.opacity(isCurrent ? 1.0 : 0.6) : .clear,
+                        lineWidth: isCurrent ? 3 : 2)
             }
             Text(url.lastPathComponent)
                 .font(.caption2)

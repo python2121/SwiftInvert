@@ -17,6 +17,23 @@ final class AppModel {
     var selection: URL? {
         didSet { if oldValue != selection { openSelection() } }
     }
+    /// Library multi-selection (⌘-click). Always contains `selection` when set.
+    var multiSelection: Set<URL> = []
+
+    func select(_ url: URL, additive: Bool) {
+        if additive {
+            if multiSelection.contains(url) && multiSelection.count > 1 {
+                multiSelection.remove(url)
+                if selection == url { selection = multiSelection.first }
+            } else {
+                multiSelection.insert(url)
+                selection = url
+            }
+        } else {
+            multiSelection = [url]
+            selection = url
+        }
+    }
 
     var settings = ExposureSettings() {
         didSet { if oldValue != settings { settingsChanged() } }
@@ -129,6 +146,7 @@ final class AppModel {
         toolMode = .none
         displayImage = nil
         histogram = nil
+        if let url = selection, !multiSelection.contains(url) { multiSelection = [url] }
         guard let url = selection else { return }
         guard let pipeline else {
             statusMessage = "Cannot render: Metal pipeline unavailable."
@@ -213,20 +231,61 @@ final class AppModel {
 
     // MARK: - Export
 
-    func export(format: ExportFormat) {
-        guard let session, let url = selection else { return }
-        let snapshot = settings
+    /// A pending export request drives the quality modal.
+    struct ExportRequest: Identifiable {
+        let id = UUID()
+        let urls: [URL]
+    }
+    var exportRequest: ExportRequest?
+    var exportOptions = ExportOptions.loadSticky()
+
+    /// Open the quality modal for the current image (sidebar button).
+    func requestExportCurrent() {
+        guard let selection else { return }
+        exportRequest = ExportRequest(urls: [selection])
+    }
+
+    /// Open the quality modal for the library multi-selection (context menu).
+    func requestExportSelected() {
+        let urls = files.filter { multiSelection.contains($0) }
+        guard !urls.isEmpty else { return }
+        exportRequest = ExportRequest(urls: urls)
+    }
+
+    /// Sequential batch export with the chosen options. Uses live settings for
+    /// the open image and each file's sidecar (or defaults) otherwise.
+    func performExport(urls: [URL], options: ExportOptions) {
+        guard let pipeline, !isExporting else { return }
+        exportOptions = options
+        options.saveSticky()
+        exportRequest = nil
+        // Flush the debounced sidecar so the open image exports what's on screen.
+        if let selection { SidecarStore.save(settings, for: selection) }
+
         isExporting = true
-        statusMessage = "Exporting…"
+        let liveURL = selection
+        let liveSettings = settings
+        let liveSession = session
         Task {
-            do {
-                let encoded = try await session.exportRender(settings: snapshot)
-                let dest = url.deletingPathExtension().appendingPathExtension(format.fileExtension)
-                try Exporter.write(encoded, to: dest, format: format)
-                statusMessage = "Exported \(dest.lastPathComponent)"
-            } catch {
-                statusMessage = "Export failed: \(error)"
+            var failures = 0
+            for (index, url) in urls.enumerated() {
+                statusMessage = "Exporting \(index + 1) of \(urls.count): \(url.lastPathComponent)"
+                let fileSettings = url == liveURL ? liveSettings : (SidecarStore.load(for: url) ?? ExposureSettings())
+                let session = url == liveURL && liveSession != nil
+                    ? liveSession! : ImageSession(url: url, pipeline: pipeline)
+                do {
+                    let encoded = try await session.exportRender(settings: fileSettings)
+                    let dest = url.deletingPathExtension()
+                        .appendingPathExtension(options.format.fileExtension)
+                    try Exporter.write(encoded, to: dest, options: options)
+                } catch {
+                    failures += 1
+                    NSLog("NegSwift: export failed for \(url.lastPathComponent): \(error)")
+                }
             }
+            statusMessage = failures == 0
+                ? "Exported \(urls.count) image\(urls.count == 1 ? "" : "s")"
+                : "Exported \(urls.count - failures) of \(urls.count) (\(failures) failed)"
             isExporting = false
         }
     }
