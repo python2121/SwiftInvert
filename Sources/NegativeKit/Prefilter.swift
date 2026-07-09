@@ -1,22 +1,23 @@
+import Accelerate
 import Foundation
 
 /// Log-density prefilter chain shared by all meters
 /// (negpy/features/exposure/normalization.py: prefilter_log_grid,
 /// get_analysis_crop, _block_median_grid).
 public enum Prefilter {
-    /// log10 of the clipped linear image: log10(clip(nan_to_num(x), 1e-6, 1.0)).
-    /// Since values are in (0, 1], this holds negative density (−D).
+    /// log10 of the clipped linear image: log10(clip(x, 1e-6, 1.0)) via vForce.
+    /// Since values are in (0, 1], this holds negative density (−D). Decoded
+    /// buffers are u16/65535 by construction, so no NaN/Inf handling is needed
+    /// (vDSP_vclip maps them unpredictably — don't feed it synthetic garbage).
     public static func logImage(_ image: RGBImage) -> RGBImage {
         var out = image
-        let eps: Float = 1e-6
+        var lo: Float = 1e-6, hi: Float = 1.0
+        var n = Int32(out.pixels.count)
         out.pixels.withUnsafeMutableBufferPointer { buf in
-            for i in 0..<buf.count {
-                var v = buf[i]
-                if v.isNaN { v = eps }
-                if v.isInfinite { v = v > 0 ? 1.0 : eps }
-                v = min(max(v, eps), 1.0)
-                buf[i] = log10(v)
+            image.pixels.withUnsafeBufferPointer { src in
+                vDSP_vclip(src.baseAddress!, 1, &lo, &hi, buf.baseAddress!, 1, vDSP_Length(src.count))
             }
+            vvlog10f(buf.baseAddress!, buf.baseAddress!, &n)
         }
         return out
     }
@@ -53,6 +54,30 @@ public enum Prefilter {
         let hb = (h / b) * b, wb = (w / b) * b
         let rows = hb / b, cols = wb / b
         var out = RGBImage(width: cols, height: rows)
+
+        if b == 2 {
+            // The preview path always lands here (1536px / 1024 grid → b = 2):
+            // median of 4 = (sum − min − max) / 2, no sort, no scratch.
+            out.pixels.withUnsafeMutableBufferPointer { dst in
+                img.pixels.withUnsafeBufferPointer { src in
+                    for gy in 0..<rows {
+                        let r0 = (gy * 2) * w * 3, r1 = (gy * 2 + 1) * w * 3
+                        for gx in 0..<cols {
+                            let base = gx * 6
+                            for c in 0..<3 {
+                                let a = src[r0 + base + c], b2 = src[r0 + base + 3 + c]
+                                let c2 = src[r1 + base + c], d = src[r1 + base + 3 + c]
+                                let mn = min(min(a, b2), min(c2, d))
+                                let mx = max(max(a, b2), max(c2, d))
+                                dst[(gy * cols + gx) * 3 + c] = (a + b2 + c2 + d - mn - mx) / 2
+                            }
+                        }
+                    }
+                }
+            }
+            return out
+        }
+
         var scratch = [Float](repeating: 0, count: b * b)
         img.pixels.withUnsafeBufferPointer { src in
             for gy in 0..<rows {

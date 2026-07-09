@@ -91,10 +91,12 @@ enum SyntheticGrid {
         let params = ExposureKernel.deriveRenderParams(ExposureSettings(), analysis)
         let slopes = cp["slopes"] as! [Double]
         let pivots = cp["pivots"] as! [Double]
+        // 2.5e-4: Accelerate log10/sort differ from numpy/libm by ~1 ulp, which
+        // the percentile → grade-range → slope chain amplifies slightly.
         for ch in 0..<3 {
-            expectClose(params.slopes[ch], slopes[ch], accuracy: 1e-4, "slope \(ch)")
-            expectClose(params.pivots[ch], pivots[ch], accuracy: 1e-4, "pivot \(ch)")
-            expectClose(params.curvatures[ch], curvatures[ch], accuracy: 1e-4, "curv \(ch)")
+            expectClose(params.slopes[ch], slopes[ch], accuracy: 2.5e-4, "slope \(ch)")
+            expectClose(params.pivots[ch], pivots[ch], accuracy: 2.5e-4, "pivot \(ch)")
+            expectClose(params.curvatures[ch], curvatures[ch], accuracy: 2.5e-4, "curv \(ch)")
         }
     }
 }

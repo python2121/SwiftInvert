@@ -132,14 +132,24 @@ public enum ExposureKernel {
     /// (NegSwift default; NegPy ships 5%).
     public static let defaultAnalysisBuffer = 0.10
 
-    public static func analyze(
+    /// The expensive, offset-independent half of the analysis: the prefiltered
+    /// grid plus every meter that doesn't read the final (offset) bounds.
+    /// Cache this per (image, cropRect, analysisRect); white/black-point drags
+    /// only need `finalize`, which re-measures the neutral axis on the grid.
+    public struct Prepared: Sendable {
+        public let grid: RGBImage
+        public let baseBounds: LogNegativeBounds
+        public let anchor: Double
+        public let texturalRange: Double
+        public let shadowRefs: SIMD3<Double>
+    }
+
+    public static func prepare(
         linearImage: RGBImage,
         cropRect: NormalizedRect? = nil,
         analysisRect: NormalizedRect? = nil,
-        analysisBuffer: Double = defaultAnalysisBuffer,
-        whitePointOffset: Double = 0,
-        blackPointOffset: Double = 0
-    ) -> ExposureAnalysis {
+        analysisBuffer: Double = defaultAnalysisBuffer
+    ) -> Prepared {
         var metered = linearImage
         var buffer = analysisBuffer
         if let rect = analysisRect, rect.pixelROI(width: linearImage.width, height: linearImage.height) != nil {
@@ -150,19 +160,49 @@ public enum ExposureKernel {
         }
         let grid = Prefilter.prefilterLogGrid(metered, analysisBuffer: buffer)
         let base = BoundsAnalysis.analyze(grid: grid)
-        let final = base.applyingOffsets(whitePoint: whitePointOffset, blackPoint: blackPointOffset)
-        let neutral = Meters.neutralAxis(grid: grid, bounds: final)
-        return ExposureAnalysis(
+        return Prepared(
+            grid: grid,
             baseBounds: base,
             // Anchor reads against the per-frame base (luma_source_bounds).
             anchor: Meters.anchor(grid: grid, bounds: base),
             texturalRange: Meters.texturalRange(grid: grid),
-            shadowRefs: Meters.shadowRefs(grid: grid),
+            shadowRefs: Meters.shadowRefs(grid: grid)
+        )
+    }
+
+    /// The cheap, offset-dependent tail: only the neutral axis reads the final
+    /// bounds (its luma-band membership shifts with the offsets, as in NegPy).
+    public static func finalize(
+        _ prepared: Prepared, whitePointOffset: Double = 0, blackPointOffset: Double = 0
+    ) -> ExposureAnalysis {
+        let final = prepared.baseBounds.applyingOffsets(
+            whitePoint: whitePointOffset, blackPoint: blackPointOffset)
+        let neutral = Meters.neutralAxis(grid: prepared.grid, bounds: final)
+        return ExposureAnalysis(
+            baseBounds: prepared.baseBounds,
+            anchor: prepared.anchor,
+            texturalRange: prepared.texturalRange,
+            shadowRefs: prepared.shadowRefs,
             neutralMid: neutral?.mid,
             neutralShadow: neutral?.shadow,
             neutralHighlight: neutral?.highlight,
             neutralConfidence: neutral?.confidence
         )
+    }
+
+    public static func analyze(
+        linearImage: RGBImage,
+        cropRect: NormalizedRect? = nil,
+        analysisRect: NormalizedRect? = nil,
+        analysisBuffer: Double = defaultAnalysisBuffer,
+        whitePointOffset: Double = 0,
+        blackPointOffset: Double = 0
+    ) -> ExposureAnalysis {
+        finalize(
+            prepare(
+                linearImage: linearImage, cropRect: cropRect, analysisRect: analysisRect,
+                analysisBuffer: analysisBuffer),
+            whitePointOffset: whitePointOffset, blackPointOffset: blackPointOffset)
     }
 
     /// PhotometricProcessor's parameter derivation (the cheap per-slider path).

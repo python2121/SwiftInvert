@@ -76,11 +76,13 @@ public enum Meters {
 
     /// measure_neutral_axis_from_log. `bounds` must be the FINAL bounds (with
     /// white/black-point offsets applied), matching NormalizationProcessor.
+    /// Runs on every white/black-point tick, so it's single-pass and
+    /// allocation-lean.
     public static func neutralAxis(grid: RGBImage, bounds: LogNegativeBounds) -> NeutralAxisRefs? {
         let n = grid.width * grid.height
-        let luma = normalizedLuma(grid: grid, bounds: bounds)
 
-        // Normalized chroma = max − min across normalized channels.
+        // One pass: normalized luma + chroma (max − min of normalized channels).
+        var luma = [Float](repeating: 0, count: n)
         var chroma = [Float](repeating: 0, count: n)
         let eps = 1e-6
         var f = [Double](repeating: 0, count: 3), invD = [Double](repeating: 0, count: 3)
@@ -91,30 +93,45 @@ public enum Meters {
             invD[ch] = 1.0 / denom
         }
         grid.pixels.withUnsafeBufferPointer { src in
-            for i in 0..<n {
-                let r = (Double(src[i * 3]) - f[0]) * invD[0]
-                let g = (Double(src[i * 3 + 1]) - f[1]) * invD[1]
-                let b = (Double(src[i * 3 + 2]) - f[2]) * invD[2]
-                chroma[i] = Float(max(r, max(g, b)) - min(r, min(g, b)))
+            luma.withUnsafeMutableBufferPointer { lum in
+                chroma.withUnsafeMutableBufferPointer { chr in
+                    for i in 0..<n {
+                        let r = (Double(src[i * 3]) - f[0]) * invD[0]
+                        let g = (Double(src[i * 3 + 1]) - f[1]) * invD[1]
+                        let b = (Double(src[i * 3 + 2]) - f[2]) * invD[2]
+                        lum[i] = Float(K.lumaR * r + K.lumaG * g + K.lumaB * b)
+                        chr[i] = Float(max(r, max(g, b)) - min(r, min(g, b)))
+                    }
+                }
             }
         }
 
         let cap = K.neutralAxisChromaCap
         func bandRefs(_ lo: Double, _ hi: Double) -> (refs: SIMD3<Double>, medianChroma: Double)? {
+            let loF = Float(lo), hiF = Float(hi)
             var indices: [Int] = []
-            for i in 0..<n where Double(luma[i]) >= lo && Double(luma[i]) <= hi { indices.append(i) }
+            indices.reserveCapacity(n / 4)
+            for i in 0..<n where luma[i] >= loF && luma[i] <= hiF { indices.append(i) }
             guard indices.count >= K.neutralAxisMinPixels else { return nil }
-            let bandChroma = indices.map { chroma[$0] }
-            let thr = Stats.quantile(bandChroma, K.neutralAxisChromaQuantile)
-            // Order-preserving subset (matches np.nonzero(band)[0][band_chroma <= thr]).
-            var idx: [Int] = []
-            for (k, i) in indices.enumerated() where Double(bandChroma[k]) <= thr { idx.append(i) }
-            let nearNeutralChroma = idx.isEmpty ? cap : Stats.median(idx.map { chroma[$0] })
-            if idx.count < K.neutralAxisMinPixels || nearNeutralChroma > cap { return nil }
-            var refs = SIMD3<Double>()
-            for c in 0..<3 {
-                refs[c] = Stats.median(idx.map { grid.pixels[$0 * 3 + c] })
+            var bandChroma = [Float](repeating: 0, count: indices.count)
+            for (k, i) in indices.enumerated() { bandChroma[k] = chroma[i] }
+            let thr = Float(Stats.quantile(bandChroma, K.neutralAxisChromaQuantile))
+            // Order-preserving subset (matches np.nonzero(band)[0][band_chroma <= thr]);
+            // gather the kept chroma and channel values in the same pass.
+            var keptChroma: [Float] = []
+            var kept: [[Float]] = [[], [], []]
+            keptChroma.reserveCapacity(indices.count / 2)
+            for c in 0..<3 { kept[c].reserveCapacity(indices.count / 2) }
+            for (k, i) in indices.enumerated() where bandChroma[k] <= thr {
+                keptChroma.append(chroma[i])
+                kept[0].append(grid.pixels[i * 3])
+                kept[1].append(grid.pixels[i * 3 + 1])
+                kept[2].append(grid.pixels[i * 3 + 2])
             }
+            let nearNeutralChroma = keptChroma.isEmpty ? cap : Stats.median(keptChroma)
+            if keptChroma.count < K.neutralAxisMinPixels || nearNeutralChroma > cap { return nil }
+            let refs = SIMD3<Double>(
+                Stats.median(kept[0]), Stats.median(kept[1]), Stats.median(kept[2]))
             return (refs, nearNeutralChroma)
         }
 

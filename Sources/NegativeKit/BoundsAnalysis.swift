@@ -62,23 +62,37 @@ public enum BoundsAnalysis {
         return (floors, ceils)
     }
 
-    /// Two-axis recombination: luma clip drives the mean centre+span, colour clip
-    /// the per-channel cast (offset from the median channel).
-    public static func analyze(
-        grid: RGBImage, lumaRangeClip: Double = 0.0, colorRangeClip: Double = K.baseColorClip
-    ) -> LogNegativeBounds {
-        // One sort per channel, reused by both clip axes.
+    /// One ascending sort per channel — the expensive half of the bounds
+    /// analysis, cacheable across white/black-point changes.
+    public static func sortedChannels(grid: RGBImage) -> [[Float]] {
         let n = grid.width * grid.height
         var channels: [[Float]] = [[], [], []]
         for c in 0..<3 {
             var v = [Float](repeating: 0, count: n)
             grid.pixels.withUnsafeBufferPointer { src in
-                for i in 0..<n { v[i] = src[i * 3 + c] }
+                v.withUnsafeMutableBufferPointer { dst in
+                    for i in 0..<n { dst[i] = src[i * 3 + c] }
+                }
             }
-            v.sort()
-            channels[c] = v
+            channels[c] = Stats.sortedAscending(v)
         }
+        return channels
+    }
 
+    /// Two-axis recombination: luma clip drives the mean centre+span, colour clip
+    /// the per-channel cast (offset from the median channel).
+    public static func analyze(
+        grid: RGBImage, lumaRangeClip: Double = 0.0, colorRangeClip: Double = K.baseColorClip
+    ) -> LogNegativeBounds {
+        analyze(
+            channelsSorted: sortedChannels(grid: grid),
+            lumaRangeClip: lumaRangeClip, colorRangeClip: colorRangeClip)
+    }
+
+    /// Bounds from pre-sorted channels (fast path for offset re-derives).
+    public static func analyze(
+        channelsSorted channels: [[Float]], lumaRangeClip: Double = 0.0, colorRangeClip: Double = K.baseColorClip
+    ) -> LogNegativeBounds {
         let (floors, ceils) = sampleLogBounds(channelsSorted: channels, percentileClip: lumaRangeClip, base: K.baseLumaClip)
         let (cFloors, cCeils) = sampleLogBounds(channelsSorted: channels, percentileClip: colorRangeClip, base: 0.0)
 

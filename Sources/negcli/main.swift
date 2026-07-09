@@ -147,7 +147,15 @@ do {
         guard let input = positional.first else { usage() }
         let frames = options["--frames"].flatMap(Int.init) ?? 30
         let img = try RawDecoder().decode(url: URL(fileURLWithPath: input), quality: .preview, maxLongEdge: 1536)
-        let analysis = ExposureKernel.analyze(linearImage: img)
+        let tPrep = Date()
+        let prep = ExposureKernel.prepare(linearImage: img)
+        let prepMS = -tPrep.timeIntervalSinceNow * 1000
+        let tFin = Date()
+        for i in 0..<20 { _ = ExposureKernel.finalize(prep, blackPointOffset: Double(i) * 0.001) }
+        print(String(
+            format: "analysis: prepare %.1f ms, finalize (wp/bp tick) %.1f ms",
+            prepMS, -tFin.timeIntervalSinceNow * 1000 / 20))
+        let analysis = ExposureKernel.finalize(prep)
         let pipeline = try RenderPipeline()
         let source = try pipeline.upload(img)
         var settings = ExposureSettings()

@@ -1,15 +1,24 @@
+import Accelerate
 import Foundation
 
 /// numpy-compatible order statistics (linear-interpolation percentile, even/odd
 /// median). NegPy's bounds analysis is built on np.percentile/np.median, so these
 /// must match exactly.
 public enum Stats {
+    /// vDSP ascending sort — same ordering as Array.sorted() for the NaN-free
+    /// float data the meters see, several times faster on large arrays.
+    public static func sortedAscending(_ data: [Float]) -> [Float] {
+        var out = data
+        vDSP_vsort(&out, vDSP_Length(out.count), 1)
+        return out
+    }
+
     /// np.percentile(data, q) with the default "linear" interpolation:
     /// pos = q/100 * (n-1); result = lower + frac * (upper - lower).
     /// Sorts a copy; q in [0, 100].
     public static func percentile(_ data: [Float], _ q: Double) -> Double {
         precondition(!data.isEmpty)
-        return percentileOfSorted(data.sorted(), q)
+        return percentileOfSorted(sortedAscending(data), q)
     }
 
     /// Percentile over already-sorted data (for multiple qs on one sort).
@@ -32,7 +41,7 @@ public enum Stats {
     /// np.median — middle value, or the mean of the two middle values.
     public static func median(_ data: [Float]) -> Double {
         precondition(!data.isEmpty)
-        let sorted = data.sorted()
+        let sorted = sortedAscending(data)
         let n = sorted.count
         if n % 2 == 1 { return Double(sorted[n / 2]) }
         return (Double(sorted[n / 2 - 1]) + Double(sorted[n / 2])) / 2.0

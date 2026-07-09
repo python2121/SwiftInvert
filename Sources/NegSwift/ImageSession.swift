@@ -12,16 +12,22 @@ actor ImageSession {
     let url: URL
     private let pipeline: RenderPipeline
     private var preview: RGBImage?
-    private var analysis: ExposureAnalysis?
 
-    /// Everything the analysis depends on besides the pixels; a change here
-    /// re-runs it (the "automatically re-run the base analysis" contract).
-    private struct AnalysisKey: Equatable {
+    /// Two-tier analysis cache: the expensive prepared stage depends only on
+    /// the pre-process rects; the cheap finalize (neutral axis) also depends on
+    /// the white/black-point offsets — so wp/bp drags never re-run the grid.
+    private struct PreparedKey: Equatable {
         var analysisRect: NormalizedRect?
         var cropRect: NormalizedRect?
+    }
+    private struct AnalysisKey: Equatable {
+        var prepared: PreparedKey
         var whitePoint: Double
         var blackPoint: Double
     }
+    private var prepared: ExposureKernel.Prepared?
+    private var preparedKey: PreparedKey?
+    private var analysis: ExposureAnalysis?
     private var analysisKey: AnalysisKey?
 
     /// GPU source textures, uploaded once per (image, crop) — slider changes
@@ -40,23 +46,31 @@ actor ImageSession {
         self.pipeline = pipeline
     }
 
-    /// Decode + analyze once; re-analyze when the wp/bp offsets or the
-    /// pre-process rects change (the meters are scoped by both, matching NegPy).
+    /// Decode + prepare once per rect state; finalize (neutral axis only) when
+    /// the wp/bp offsets change — matching NegPy's meter scoping at a fraction
+    /// of the cost.
     private func prepare(settings: ExposureSettings) throws -> (RGBImage, ExposureAnalysis) {
         if preview == nil {
             preview = try RawDecoder().decode(url: url, quality: .preview, maxLongEdge: 1536)
         }
-        let key = AnalysisKey(
-            analysisRect: settings.analysisRect, cropRect: settings.cropRect,
-            whitePoint: settings.whitePointOffset, blackPoint: settings.blackPointOffset)
-        if analysis == nil || key != analysisKey {
-            analysis = ExposureKernel.analyze(
+        let pKey = PreparedKey(analysisRect: settings.analysisRect, cropRect: settings.cropRect)
+        if prepared == nil || pKey != preparedKey {
+            prepared = ExposureKernel.prepare(
                 linearImage: preview!,
                 cropRect: settings.cropRect,
-                analysisRect: settings.analysisRect,
+                analysisRect: settings.analysisRect)
+            preparedKey = pKey
+            analysis = nil
+        }
+        let aKey = AnalysisKey(
+            prepared: pKey,
+            whitePoint: settings.whitePointOffset, blackPoint: settings.blackPointOffset)
+        if analysis == nil || aKey != analysisKey {
+            analysis = ExposureKernel.finalize(
+                prepared!,
                 whitePointOffset: settings.whitePointOffset,
                 blackPointOffset: settings.blackPointOffset)
-            analysisKey = key
+            analysisKey = aKey
         }
         return (preview!, analysis!)
     }
@@ -75,14 +89,12 @@ actor ImageSession {
         return croppedTexture!
     }
 
-    /// True when the next render must decode or re-meter (drives the
-    /// "Analyzing…" indicator; plain slider renders skip both).
+    /// True when the next render must decode or run the heavy prepared stage
+    /// (drives the "Analyzing…" indicator; offset-only finalizes are fast and
+    /// don't flash it).
     func needsPreparation(settings: ExposureSettings) -> Bool {
-        guard preview != nil, analysis != nil else { return true }
-        let key = AnalysisKey(
-            analysisRect: settings.analysisRect, cropRect: settings.cropRect,
-            whitePoint: settings.whitePointOffset, blackPoint: settings.blackPointOffset)
-        return key != analysisKey
+        guard preview != nil, prepared != nil else { return true }
+        return PreparedKey(analysisRect: settings.analysisRect, cropRect: settings.cropRect) != preparedKey
     }
 
     /// `uncropped` shows the full frame (used while a selection tool is active
