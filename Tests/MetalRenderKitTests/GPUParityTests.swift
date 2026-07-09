@@ -33,11 +33,14 @@ enum Fixtures2 {
     @Test func uniformStrides() {
         // Must match the MSL structs in NegPipeline.metal.
         #expect(MemoryLayout<NormUniforms>.stride == 48)
-        #expect(MemoryLayout<CurveUniforms>.stride == 192)
-        #expect(MemoryLayout<CurveUniforms>.offset(of: \.toe) == 112)
-        #expect(MemoryLayout<CurveUniforms>.offset(of: \.gammaWidth) == 172)
-        #expect(MemoryLayout<CurveUniforms>.offset(of: \.shadowsLift) == 176)
-        #expect(MemoryLayout<CurveUniforms>.offset(of: \.highlightContrast) == 188)
+        #expect(MemoryLayout<CurveUniforms>.stride == 224)
+        #expect(MemoryLayout<CurveUniforms>.offset(of: \.midCMY) == 80)
+        #expect(MemoryLayout<CurveUniforms>.offset(of: \.toe) == 128)
+        #expect(MemoryLayout<CurveUniforms>.offset(of: \.gammaWidth) == 188)
+        #expect(MemoryLayout<CurveUniforms>.offset(of: \.shadowsLift) == 192)
+        #expect(MemoryLayout<CurveUniforms>.offset(of: \.highlightContrast) == 204)
+        #expect(MemoryLayout<CurveUniforms>.offset(of: \.vibrance) == 208)
+        #expect(MemoryLayout<CurveUniforms>.offset(of: \.saturation) == 212)
     }
 }
 
@@ -111,6 +114,13 @@ enum Fixtures2 {
         settings.shadowContrast = -0.5
         settings.highlights = -0.9
         settings.highlightContrast = 0.6
+        settings.vibrance = 1.5
+        settings.saturation = 1.3
+        settings.temp = 0.4
+        settings.tint = -0.3
+        settings.colorShadows = SIMD3(0.5, -0.3, 0.2)
+        settings.colorMids = SIMD3(-0.2, 0.4, -0.5)
+        settings.colorHighs = SIMD3(0.3, 0.1, 0.6)
         let params = ExposureKernel.deriveRenderParams(settings, analysis)
 
         let cpu = ReferenceCurve.encodeOutput(

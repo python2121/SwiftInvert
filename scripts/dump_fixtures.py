@@ -361,10 +361,47 @@ def dump_ramp() -> None:
     print("ramp257.json dumped")
 
 
+def dump_lab_color() -> None:
+    """Saturation/vibrance parity: NegPy's CIELAB chroma ops (lab/logic.py)
+    applied to a deterministic color-patch grid (vibrance first, then
+    saturation — LabProcessor order)."""
+    from negpy.features.lab.logic import apply_saturation, apply_vibrance
+
+    n = 16
+    img = np.zeros((n, n, 3), dtype=np.float32)
+    for i in range(n):
+        for j in range(n):
+            img[i, j] = [i / (n - 1), j / (n - 1), ((i + j) / 2.0) / (n - 1)]
+    img[0, :] = np.linspace(0.0, 1.0, n, dtype=np.float32)[:, None]  # neutral ramp row
+    img[1, :, 0] = np.linspace(0.0, 1.0, n)  # saturated red ramp row
+    img[1, :, 1] = 0.05
+    img[1, :, 2] = 0.05
+
+    root = OUT / "lab_color"
+    root.mkdir(parents=True, exist_ok=True)
+    manifest = {"input": dump_bin(root / "input.bin", img), "cases": {}}
+    for name, (vib, sat) in {
+        "vib_140": (1.4, 1.0),
+        "sat_130": (1.0, 1.3),
+        "combo": (1.5, 0.8),
+        "extreme": (2.0, 1.6),
+        "desat": (1.0, 0.3),
+    }.items():
+        res = apply_vibrance(img, vib)
+        res = apply_saturation(res, sat)
+        manifest["cases"][name] = {
+            "vibrance": vib, "saturation": sat,
+            "output": dump_bin(root / f"{name}.bin", np.asarray(res)),
+        }
+    (root / "manifest.json").write_text(json.dumps(manifest, indent=1))
+    print("lab_color dumped")
+
+
 if __name__ == "__main__":
     OUT.mkdir(parents=True, exist_ok=True)
     dump_closed_form()
     dump_ramp()
     dump_synthetic64()
     dump_synthetic_grid()
+    dump_lab_color()
     print(f"All fixtures written to {OUT}", file=sys.stderr)

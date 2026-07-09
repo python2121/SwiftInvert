@@ -33,12 +33,11 @@ public enum ReferenceCurve {
     }
 
     /// _apply_print_curve_kernel (C-41 path: no B&W collapse, no dye mix, no EV
-    /// map). Input normalized log; output linear reflectance in [0, 1].
+    /// map; NegPy's 2-band regional CMY generalized to the 3-band tone-mask
+    /// color balance). Input normalized log; output linear reflectance in [0, 1].
     public static func applyPrintCurve(
         _ img: RGBImage,
         params: RenderParams,
-        shadowCMY: SIMD3<Double> = .zero,
-        highlightCMY: SIMD3<Double> = .zero,
         flare: Double = 0,
         surroundGamma: Double = 1.0
     ) -> RGBImage {
@@ -68,13 +67,14 @@ public enum ReferenceCurve {
             flareWhite[ch] = pow(10.0, -dMinRGB[ch])
         }
 
-        let zoneCenter = K.anchorTargetDensity
         let midtoneGamma = K.paperMidtoneGamma
         let gammaWidth = K.paperGammaWidth
 
         // Regional tone controls, all-zero → identity (fixture parity preserved).
         let hasTone = params.shadows != 0 || params.shadowContrast != 0
             || params.highlights != 0 || params.highlightContrast != 0
+        let hasBandCMY = params.shadowCMY != .zero || params.midCMY != .zero
+            || params.highlightCMY != .zero
         let shLift = params.shadows * K.shadowsMaxLift
         let shContrast = params.shadowContrast * K.shadowContrastMax
         let hiShift = params.highlights * K.highlightsMaxShift
@@ -100,8 +100,15 @@ public enum ReferenceCurve {
                         v += (-hiShift + hiContrast * (v - K.highlightToneAnchor)) * wH
                     }
 
-                    let wSh = CurveLogic.sigmoid(3.0 * (v - zoneCenter))
-                    v += shadowCMY[ch] * wSh + highlightCMY[ch] * (1.0 - wSh)
+                    // 3-band color balance on the same tone-region masks
+                    // (mids = whatever the shadow/highlight bands don't claim).
+                    if hasBandCMY {
+                        let wS = CurveLogic.sigmoid(K.toneRegionSharpness * (v - K.shadowToneAnchor))
+                        let wH = CurveLogic.sigmoid(K.toneRegionSharpness * (K.highlightToneAnchor - v))
+                        let wM = max(1.0 - wS - wH, 0.0)
+                        v += params.shadowCMY[ch] * wS + params.midCMY[ch] * wM
+                            + params.highlightCMY[ch] * wH
+                    }
 
                     let v1 = dMinEff[ch] + CurveLogic.softplus(aHl * (v - dMinEff[ch])) / aHl
                     var density = dMaxEff[ch] - CurveLogic.softplus(aSh * (dMaxEff[ch] - v1)) / aSh
@@ -114,6 +121,16 @@ public enum ReferenceCurve {
                         t = (t + flare * flareWhite[ch]) / (1.0 + flare)
                     }
                     buf[i + ch] = Float(min(max(t, 0.0), 1.0))
+                }
+                // Color pop on the linear print (NegPy lab stage: vibrance,
+                // then saturation), identity at 1.0.
+                if params.vibrance != 1.0 || params.saturation != 1.0 {
+                    let rgb = SIMD3(Double(buf[i]), Double(buf[i + 1]), Double(buf[i + 2]))
+                    let res = LabColor.applyVibranceSaturation(
+                        rgb, vibrance: params.vibrance, saturation: params.saturation)
+                    buf[i] = Float(res.x)
+                    buf[i + 1] = Float(res.y)
+                    buf[i + 2] = Float(res.z)
                 }
                 i += 3
             }

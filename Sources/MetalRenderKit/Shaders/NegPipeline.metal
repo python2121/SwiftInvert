@@ -22,6 +22,7 @@ struct CurveUniforms {
     float4 curvatures;
     float4 cmyOffsets;
     float4 shadowCMY;
+    float4 midCMY;
     float4 highlightCMY;
     float4 dMinRGB;
     float toe;            // pre-scaled by toe_shoulder_strength
@@ -45,6 +46,10 @@ struct CurveUniforms {
     float shadowContrast;
     float highlightsShift;
     float highlightContrast;
+    // CIELAB chroma ops (1.0 = off) + padding to a 16-byte multiple.
+    float vibrance;
+    float saturation;
+    float2 _pad;
 };
 
 // Region-mask constants — must match K.toneRegionSharpness / K.*ToneAnchor
@@ -68,6 +73,34 @@ inline float softplus(float x) {
 inline float oetf_encode(float t) {
     float x = clamp(t, 0.0f, 1.0f);
     return x < 0.001953125f ? x * 16.0f : pow(x, 0.55555556f);
+}
+
+// ── CIELAB in the working space (linear ProPhoto / ROMM, D50) — mirrors
+//    LabColor.swift; constants must stay in sync. ─────────────────────────
+constant float3x3 PROPHOTO_TO_XYZ = float3x3(
+    float3(0.7976749f, 0.2880402f, 0.0f),       // columns (MSL is column-major)
+    float3(0.1351917f, 0.7118741f, 0.0f),
+    float3(0.0313534f, 0.0000857f, 0.8252100f));
+constant float3x3 XYZ_TO_PROPHOTO = float3x3(
+    float3(1.3459433f, -0.5445989f, 0.0f),
+    float3(-0.2556075f, 1.5081673f, 0.0f),
+    float3(-0.0511118f, 0.0205351f, 1.2118128f));
+constant float3 D50_WHITE = float3(0.96422f, 1.0f, 0.82521f);
+constant float LAB_EPS = 0.008856f;
+constant float LAB_KAPPA = 7.787f;
+
+inline float3 rgb_to_lab(float3 rgb) {
+    float3 xyz = (PROPHOTO_TO_XYZ * max(rgb, float3(0.0f))) / D50_WHITE;
+    float3 f = select(LAB_KAPPA * xyz + 16.0f / 116.0f, pow(xyz, float3(1.0f / 3.0f)), xyz > LAB_EPS);
+    return float3(116.0f * f.y - 16.0f, 500.0f * (f.x - f.y), 200.0f * (f.y - f.z));
+}
+
+inline float3 lab_to_rgb(float3 lab) {
+    float fy = (lab.x + 16.0f) / 116.0f;
+    float3 f = float3(lab.y / 500.0f + fy, fy, fy - lab.z / 200.0f);
+    float3 f3 = f * f * f;
+    float3 xyz = select((f - 16.0f / 116.0f) / LAB_KAPPA, f3, f3 > LAB_EPS) * D50_WHITE;
+    return max(XYZ_TO_PROPHOTO * xyz, float3(0.0f));
 }
 
 // ── Pass 1: log10 + per-channel stretch (normalization.wgsl) ──────────────
@@ -116,6 +149,8 @@ kernel void printCurve(
     float d_max_base = p.toe >= 0.0f ? p.dMax - p.toe * p.toeHeight : p.dMax;
     float3 d_max_eff = max(float3(d_max_base), d_min_eff + float3(0.1f));
     float3 flare_white = pow(float3(10.0f), -d_min_rgb);
+    bool hasBandCMY = any(p.shadowCMY.xyz != 0.0f) || any(p.midCMY.xyz != 0.0f)
+        || any(p.highlightCMY.xyz != 0.0f);
 
     float3 dens;
     for (int ch = 0; ch < 3; ch++) {
@@ -136,8 +171,14 @@ kernel void printCurve(
                   + (-p.highlightsShift + p.highlightContrast * (v - HIGHLIGHT_ANCHOR)) * wH;
         }
 
-        float w_sh = fast_sigmoid(3.0f * (v - p.zoneCenter));
-        v = v + p.shadowCMY[ch] * w_sh + p.highlightCMY[ch] * (1.0f - w_sh);
+        // 3-band color balance on the tone-region masks (mids = remainder) —
+        // mirrors ReferenceCurve.applyPrintCurve. Uniform branch: free when off.
+        if (hasBandCMY) {
+            float wS = fast_sigmoid(TONE_SHARPNESS * (v - SHADOW_ANCHOR));
+            float wH = fast_sigmoid(TONE_SHARPNESS * (HIGHLIGHT_ANCHOR - v));
+            float wM = max(1.0f - wS - wH, 0.0f);
+            v = v + p.shadowCMY[ch] * wS + p.midCMY[ch] * wM + p.highlightCMY[ch] * wH;
+        }
 
         float v1 = d_min_eff[ch] + softplus(a_hl * (v - d_min_eff[ch])) / a_hl;
         dens[ch] = d_max_eff[ch] - softplus(a_sh * (d_max_eff[ch] - v1)) / a_sh;
@@ -152,6 +193,36 @@ kernel void printCurve(
         transmittance = (transmittance + p.flare * flare_white) / (1.0f + p.flare);
     }
     output.write(float4(clamp(transmittance, float3(0.0f), float3(1.0f)), 1.0f), gid);
+}
+
+// ── Color pop: vibrance then saturation in CIELAB on the linear print
+//    (NegPy lab stage; mirrors LabColor.applyVibranceSaturation). A separate
+//    pass dispatched only when active — keeping the Lab code out of printCurve
+//    preserves that kernel's occupancy. ────────────────────────────────────
+kernel void colorPop(
+    texture2d<float, access::read> input [[texture(0)]],
+    texture2d<float, access::write> output [[texture(1)]],
+    constant CurveUniforms &p [[buffer(0)]],
+    uint2 gid [[thread_position_in_grid]]
+) {
+    if (gid.x >= input.get_width() || gid.y >= input.get_height()) { return; }
+    float3 result = input.read(gid).rgb;
+
+    if (p.vibrance != 1.0f) {
+        float3 lab = rgb_to_lab(result);
+        float chroma = length(lab.yz);
+        float muted = clamp(1.0f - chroma / 60.0f, 0.0f, 1.0f);
+        float boost = 1.0f + (p.vibrance - 1.0f) * muted;
+        lab.yz *= boost;
+        result = clamp(lab_to_rgb(lab), float3(0.0f), float3(1.0f));
+    }
+    if (p.saturation != 1.0f) {
+        float3 lab = rgb_to_lab(result);
+        lab.yz *= p.saturation;
+        result = clamp(lab_to_rgb(lab), float3(0.0f), float3(1.0f));
+    }
+
+    output.write(float4(result, 1.0f), gid);
 }
 
 // ── Pass 3: working-space OETF encode (output_encode.wgsl) ────────────────

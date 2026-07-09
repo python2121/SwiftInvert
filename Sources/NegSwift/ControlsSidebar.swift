@@ -92,9 +92,18 @@ struct ControlsSidebar: View {
                         LabeledSlider(
                             label: "Cast strength", value: $model.settings.castRemovalStrength,
                             range: 0...1, format: "%.2f", defaultValue: 0.5)
+                        Divider()
+                        LabeledSlider(
+                            label: "Vibrance", value: $model.settings.vibrance,
+                            range: 0...2, format: "%.2f", defaultValue: 1.0)
+                        LabeledSlider(
+                            label: "Saturation", value: $model.settings.saturation,
+                            range: 0...2, format: "%.2f", defaultValue: 1.0)
                     }
                     .padding(6)
                 }
+
+                ColorGradingSection(model: model)
 
                 GroupBox("Tone") {
                     VStack(alignment: .leading, spacing: 10) {

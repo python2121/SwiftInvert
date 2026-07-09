@@ -28,6 +28,7 @@ public final class RenderPipeline: @unchecked Sendable {
     let queue: MTLCommandQueue
     let normalizePSO: MTLComputePipelineState
     let curvePSO: MTLComputePipelineState
+    let colorPopPSO: MTLComputePipelineState
     let encodePSO: MTLComputePipelineState
     let histogramPSO: MTLComputePipelineState
 
@@ -73,6 +74,7 @@ public final class RenderPipeline: @unchecked Sendable {
         }
         normalizePSO = try pso("normalizeLog")
         curvePSO = try pso("printCurve")
+        colorPopPSO = try pso("colorPop")
         encodePSO = try pso("outputEncode")
         histogramPSO = try pso("histogram256")
     }
@@ -200,8 +202,19 @@ public final class RenderPipeline: @unchecked Sendable {
         enc.setBytes(&curveU, length: MemoryLayout<CurveUniforms>.stride, index: 0)
         dispatch(enc, curvePSO, width: w, height: h)
 
-        if computeHistogram {
+        // Color pop is a separate pass, dispatched only when active; it writes
+        // into `normalized` (already consumed) which then becomes the content.
+        var content = linear
+        if params.vibrance != 1.0 || params.saturation != 1.0 {
             enc.setTexture(linear, index: 0)
+            enc.setTexture(normalized, index: 1)
+            enc.setBytes(&curveU, length: MemoryLayout<CurveUniforms>.stride, index: 0)
+            dispatch(enc, colorPopPSO, width: w, height: h)
+            content = normalized
+        }
+
+        if computeHistogram {
+            enc.setTexture(content, index: 0)
             enc.setBuffer(histBuffer, offset: 0, index: 0)
             enc.setComputePipelineState(histogramPSO)
             let tg = MTLSizeMake(16, 16, 1)
@@ -209,7 +222,7 @@ public final class RenderPipeline: @unchecked Sendable {
             enc.dispatchThreadgroups(grid, threadsPerThreadgroup: tg)
         }
 
-        enc.setTexture(linear, index: 0)
+        enc.setTexture(content, index: 0)
         enc.setTexture(encoded, index: 1)
         dispatch(enc, encodePSO, width: w, height: h)
         enc.endEncoding()
@@ -223,7 +236,7 @@ public final class RenderPipeline: @unchecked Sendable {
         }
         return Result(
             encoded: readback(encoded),
-            linear: wantLinear ? readback(linear) : nil,
+            linear: wantLinear ? readback(content) : nil,
             histogram: histogram)
     }
 
@@ -296,8 +309,17 @@ public final class RenderPipeline: @unchecked Sendable {
         enc.setBytes(&curveU, length: MemoryLayout<CurveUniforms>.stride, index: 0)
         dispatch(enc, curvePSO, width: w, height: h)
 
-        if computeHistogram {
+        var content = linear
+        if params.vibrance != 1.0 || params.saturation != 1.0 {
             enc.setTexture(linear, index: 0)
+            enc.setTexture(normalized, index: 1)
+            enc.setBytes(&curveU, length: MemoryLayout<CurveUniforms>.stride, index: 0)
+            dispatch(enc, colorPopPSO, width: w, height: h)
+            content = normalized
+        }
+
+        if computeHistogram {
+            enc.setTexture(content, index: 0)
             enc.setBuffer(histBuffer, offset: 0, index: 0)
             enc.setComputePipelineState(histogramPSO)
             let tg = MTLSizeMake(16, 16, 1)
@@ -305,7 +327,7 @@ public final class RenderPipeline: @unchecked Sendable {
             enc.dispatchThreadgroups(grid, threadsPerThreadgroup: tg)
         }
 
-        enc.setTexture(linear, index: 0)
+        enc.setTexture(content, index: 0)
         enc.setTexture(encoded8, index: 1)
         dispatch(enc, encodePSO, width: w, height: h)
         enc.endEncoding()

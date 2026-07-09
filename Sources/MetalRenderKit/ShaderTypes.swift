@@ -18,6 +18,7 @@ public struct CurveUniforms {
     public var curvatures: SIMD4<Float>
     public var cmyOffsets: SIMD4<Float>
     public var shadowCMY: SIMD4<Float>
+    public var midCMY: SIMD4<Float>
     public var highlightCMY: SIMD4<Float>
     public var dMinRGB: SIMD4<Float>
     public var toe: Float
@@ -40,6 +41,9 @@ public struct CurveUniforms {
     public var shadowContrast: Float
     public var highlightsShift: Float
     public var highlightContrast: Float
+    public var vibrance: Float
+    public var saturation: Float
+    public var _pad: SIMD2<Float> = .zero
 }
 
 /// RenderParams (NegativeKit's per-slider derivation) → GPU uniform packing.
@@ -65,8 +69,9 @@ public enum UniformsBuilder {
             slopes: f4(params.slopes),
             curvatures: f4(params.curvatures),
             cmyOffsets: f4(params.cmyOffsets),
-            shadowCMY: .zero,
-            highlightCMY: .zero,
+            shadowCMY: f4(params.shadowCMY),
+            midCMY: f4(params.midCMY),
+            highlightCMY: f4(params.highlightCMY),
             dMinRGB: SIMD4(Float(max(params.dMin, 0)), Float(max(params.dMin, 0)), Float(max(params.dMin, 0)), 0),
             toe: Float(params.toeEff * K.toeShoulderStrength),
             shoulder: Float(params.shoulderEff * K.toeShoulderStrength),
@@ -87,7 +92,9 @@ public enum UniformsBuilder {
             shadowsLift: Float(params.shadows * K.shadowsMaxLift),
             shadowContrast: Float(params.shadowContrast * K.shadowContrastMax),
             highlightsShift: Float(params.highlights * K.highlightsMaxShift),
-            highlightContrast: Float(params.highlightContrast * K.highlightContrastMax)
+            highlightContrast: Float(params.highlightContrast * K.highlightContrastMax),
+            vibrance: Float(params.vibrance),
+            saturation: Float(params.saturation)
         )
     }
 }

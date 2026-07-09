@@ -43,6 +43,24 @@ public struct ExposureSettings: Codable, Equatable, Sendable {
     /// (anchor brightness preserved). + steepens, − flattens.
     public var overallContrast: Double = 0
 
+    // Color pop (NegPy lab-stage scale: 1.0 = neutral). Vibrance boosts muted
+    // colors toward the strength; saturation scales all chroma in CIELAB.
+    public var vibrance: Double = 1.0
+    public var saturation: Double = 1.0
+
+    // Overall white balance as Temp (blue↔yellow along the Planckian direction,
+    // + = warmer) and Tint (green↔magenta, + = magenta); composes additively
+    // with the CMY trim sliders in filtration_offsets space.
+    public var temp: Double = 0
+    public var tint: Double = 0
+
+    // Per-band color balance (Negative Lab Pro-style): x = R↔C, y = G↔M,
+    // z = B↔Y; positive = toward C/M/Y (adds print density in that channel).
+    // Bands use the tone-region masks (shadow/highlight anchors + mids).
+    public var colorShadows: SIMD3<Double> = .zero
+    public var colorMids: SIMD3<Double> = .zero
+    public var colorHighs: SIMD3<Double> = .zero
+
     // Pre-process rects (NegPy analysis_rect / manual_crop_rect semantics):
     // analysisRect scopes ONLY the metering (buffer disabled inside it);
     // cropRect crops the output AND scopes the metering (buffer applied inside).
@@ -78,6 +96,13 @@ public struct ExposureSettings: Codable, Equatable, Sendable {
         highlights = d(.highlights, 0)
         highlightContrast = d(.highlightContrast, 0)
         overallContrast = d(.overallContrast, 0)
+        vibrance = d(.vibrance, 1.0)
+        saturation = d(.saturation, 1.0)
+        temp = d(.temp, 0)
+        tint = d(.tint, 0)
+        colorShadows = (try? c.decode(SIMD3<Double>.self, forKey: .colorShadows)) ?? .zero
+        colorMids = (try? c.decode(SIMD3<Double>.self, forKey: .colorMids)) ?? .zero
+        colorHighs = (try? c.decode(SIMD3<Double>.self, forKey: .colorHighs)) ?? .zero
         analysisRect = try? c.decode(NormalizedRect.self, forKey: .analysisRect)
         cropRect = try? c.decode(NormalizedRect.self, forKey: .cropRect)
     }
@@ -117,6 +142,44 @@ public struct RenderParams: Equatable, Sendable {
     public var shadowContrast: Double = 0
     public var highlights: Double = 0
     public var highlightContrast: Double = 0
+    // CIELAB chroma ops on the linear print (1.0 = off).
+    public var vibrance: Double = 1.0
+    public var saturation: Double = 1.0
+    // Per-band CMY density offsets (already scaled to density units).
+    public var shadowCMY: SIMD3<Double> = .zero
+    public var midCMY: SIMD3<Double> = .zero
+    public var highlightCMY: SIMD3<Double> = .zero
+
+    public init(
+        finalBounds: LogNegativeBounds, slopes: SIMD3<Double>, pivots: SIMD3<Double>,
+        curvatures: SIMD3<Double>, cmyOffsets: SIMD3<Double>, toeEff: Double, shoulderEff: Double,
+        toeWidth: Double, shoulderWidth: Double, dMin: Double, vStar: Double,
+        shadows: Double = 0, shadowContrast: Double = 0, highlights: Double = 0,
+        highlightContrast: Double = 0, vibrance: Double = 1.0, saturation: Double = 1.0,
+        shadowCMY: SIMD3<Double> = .zero, midCMY: SIMD3<Double> = .zero,
+        highlightCMY: SIMD3<Double> = .zero
+    ) {
+        self.finalBounds = finalBounds
+        self.slopes = slopes
+        self.pivots = pivots
+        self.curvatures = curvatures
+        self.cmyOffsets = cmyOffsets
+        self.toeEff = toeEff
+        self.shoulderEff = shoulderEff
+        self.toeWidth = toeWidth
+        self.shoulderWidth = shoulderWidth
+        self.dMin = dMin
+        self.vStar = vStar
+        self.shadows = shadows
+        self.shadowContrast = shadowContrast
+        self.highlights = highlights
+        self.highlightContrast = highlightContrast
+        self.vibrance = vibrance
+        self.saturation = saturation
+        self.shadowCMY = shadowCMY
+        self.midCMY = midCMY
+        self.highlightCMY = highlightCMY
+    }
 }
 
 public enum ExposureKernel {
@@ -252,8 +315,16 @@ public enum ExposureKernel {
             }
         }
 
+        // Temp rides the Planckian direction (yellow + coupled magenta, NegPy's
+        // mired slopes km/ky), Tint the green↔magenta axis; both compose with
+        // the CMY trim sliders.
+        let planckianRatio = 0.0029 / 0.0057
         var cmyOffsets = CurveLogic.filtrationOffsets(
-            wbCMY: SIMD3(settings.wbCyan, settings.wbMagenta, settings.wbYellow), bounds: finalBounds)
+            wbCMY: SIMD3(
+                settings.wbCyan,
+                settings.wbMagenta + settings.tint + settings.temp * planckianRatio,
+                settings.wbYellow + settings.temp),
+            bounds: finalBounds)
         // Global exposure: a uniform pre-curve print-exposure offset, one stop =
         // −log10(2) over each channel's stretch range (the local_ev_scale domain,
         // like dodging the whole print). Negative scale ⇒ positive stops brighten.
@@ -280,7 +351,14 @@ public enum ExposureKernel {
             shadows: settings.shadows,
             shadowContrast: settings.shadowContrast,
             highlights: settings.highlights,
-            highlightContrast: settings.highlightContrast
+            highlightContrast: settings.highlightContrast,
+            vibrance: settings.vibrance,
+            saturation: settings.saturation,
+            // Band sliders ±1 → ±cmy_max_density print-density offsets
+            // (NegPy's shadow/highlight CMY scale, plus a mids band).
+            shadowCMY: settings.colorShadows * K.cmyMaxDensity,
+            midCMY: settings.colorMids * K.cmyMaxDensity,
+            highlightCMY: settings.colorHighs * K.cmyMaxDensity
         )
     }
 }
