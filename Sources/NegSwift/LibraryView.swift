@@ -42,11 +42,7 @@ struct LibraryView: View {
 extension LibraryView {
     @ViewBuilder
     fileprivate func gridCell(_ url: URL) -> some View {
-        ThumbnailCell(
-            url: url, store: model.thumbnails,
-            isSelected: model.multiSelection.contains(url),
-            isCurrent: model.selection == url
-        )
+        ThumbnailCell(url: url, store: model.thumbnails, model: model)
         .gesture(
             ExclusiveGesture(
                 TapGesture().modifiers(.shift).onEnded { model.selectRange(to: url) },
@@ -79,9 +75,14 @@ extension LibraryView {
 struct ThumbnailCell: View {
     let url: URL
     let store: ThumbnailStore
-    let isSelected: Bool
-    let isCurrent: Bool
+    // The cell reads selection state from the model inside its own body so
+    // Observation invalidates every affected cell — passing precomputed Bools
+    // through the lazy grid left stale halos on previously-materialized cells.
+    var model: AppModel
     @State private var image: CGImage?
+
+    private var isSelected: Bool { model.multiSelection.contains(url) }
+    private var isCurrent: Bool { model.selection == url }
 
     var body: some View {
         VStack(spacing: 4) {
@@ -99,9 +100,11 @@ struct ThumbnailCell: View {
             }
             .aspectRatio(3.0 / 2.0, contentMode: .fit)
             .overlay {
+                // Full-strength ring on every selected cell; the current image
+                // gets the thicker ring.
                 RoundedRectangle(cornerRadius: 6)
                     .strokeBorder(
-                        isSelected ? Color.accentColor.opacity(isCurrent ? 1.0 : 0.6) : .clear,
+                        isSelected ? Color.accentColor : .clear,
                         lineWidth: isCurrent ? 3 : 2)
             }
             Text(url.lastPathComponent)
