@@ -369,7 +369,11 @@ public enum ExposureKernel {
             dMin: dMin,
             vStar: CurveLogic.referenceLinearValue(dMin: dMin),
             shadows: settings.shadows,
-            shadowContrast: settings.shadowContrast,
+            // Negative side remapped so slider −3 reaches exactly the monotone
+            // floor (positive side passes through, scaled in the kernel).
+            shadowContrast: settings.shadowContrast >= 0
+                ? settings.shadowContrast
+                : settings.shadowContrast * (abs(K.shadowContrastNegFloor) / (3.0 * K.shadowContrastMax)),
             highlights: settings.highlights,
             highlightContrast: settings.highlightContrast,
             vibrance: settings.vibrance,

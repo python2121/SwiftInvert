@@ -52,7 +52,32 @@ struct ExportSheet: View {
                 }
             }
 
-            Text("Files are written next to the source with the format's extension; the chosen profile is embedded.")
+            Divider()
+
+            HStack {
+                Text("Destination")
+                Spacer()
+                Picker("", selection: $options.useCustomDestination) {
+                    Text("Next to originals").tag(false)
+                    Text("Folder…").tag(true)
+                }
+                .labelsHidden()
+                .fixedSize()
+            }
+            if options.useCustomDestination {
+                HStack {
+                    Text(options.customDestinationPath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "No folder chosen")
+                        .font(.caption)
+                        .foregroundStyle(options.customDestinationPath == nil ? .red : .secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .help(options.customDestinationPath ?? "")
+                    Spacer()
+                    Button("Choose…") { chooseDestination() }
+                }
+            }
+
+            Text("Existing exports of the same image are overwritten; the chosen profile is embedded.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -63,9 +88,21 @@ struct ExportSheet: View {
                 Button("Export") { model.performExport(urls: request.urls, options: options) }
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.borderedProminent)
+                    .disabled(options.useCustomDestination && options.customDestinationPath == nil)
             }
         }
         .padding(20)
         .frame(width: 380)
+    }
+
+    private func chooseDestination() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.message = "Choose the export destination folder"
+        if panel.runModal() == .OK, let url = panel.url {
+            options.customDestinationPath = url.path
+        }
     }
 }

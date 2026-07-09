@@ -76,7 +76,7 @@ public enum ReferenceCurve {
         let hasBandCMY = params.shadowCMY != .zero || params.midCMY != .zero
             || params.highlightCMY != .zero
         let shLift = params.shadows * K.shadowsMaxLift
-        let shContrast = params.shadowContrast * K.shadowContrastMax
+        let shContrast = max(params.shadowContrast * K.shadowContrastMax, K.shadowContrastNegFloor)
         let hiShift = params.highlights * K.highlightsMaxShift
         let hiContrast = params.highlightContrast * K.highlightContrastMax
 

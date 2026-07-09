@@ -35,6 +35,17 @@ final class AppModel {
         }
     }
 
+    /// Shift-click: select the contiguous range from the current image to the
+    /// clicked one (replacing the multi-selection, Finder-style).
+    func selectRange(to url: URL) {
+        guard let anchor = selection,
+            let a = files.firstIndex(of: anchor),
+            let b = files.firstIndex(of: url)
+        else { return select(url, additive: false) }
+        multiSelection = Set(files[min(a, b)...max(a, b)])
+        selection = url
+    }
+
     var settings = ExposureSettings() {
         didSet { if oldValue != settings { settingsChanged() } }
     }
@@ -275,9 +286,7 @@ final class AppModel {
                     ? liveSession! : ImageSession(url: url, pipeline: pipeline)
                 do {
                     let encoded = try await session.exportRender(settings: fileSettings)
-                    let dest = url.deletingPathExtension()
-                        .appendingPathExtension(options.format.fileExtension)
-                    try Exporter.write(encoded, to: dest, options: options)
+                    try Exporter.write(encoded, to: options.destinationURL(for: url), options: options)
                 } catch {
                     failures += 1
                     NSLog("NegSwift: export failed for \(url.lastPathComponent): \(error)")

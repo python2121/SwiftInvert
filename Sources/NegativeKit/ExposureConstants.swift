@@ -88,11 +88,15 @@ public enum K {
     // Density swing of the Highlights slider at ±1 (negative slider = recover).
     public static let highlightsMaxShift = 0.4
     // Max extra slope within each region at contrast slider ±1. The shadow
-    // contrast slider ranges −1…+2 (positive values only steepen the curve, so
-    // extra positive headroom cannot break monotonicity; the −1 floor is where
-    // the monotone bound lives).
+    // contrast slider ranges −3…+3: positive values only steepen the curve, so
+    // headroom there cannot break monotonicity; the negative side is remapped
+    // in deriveRenderParams so slider −3 lands exactly on the monotone floor,
+    // and the kernels clamp at that floor as a hard invariant.
     public static let shadowContrastMax = 0.5
     public static let highlightContrastMax = 0.5
+    // Most negative effective shadow-contrast gain that keeps the transfer
+    // monotone (1 − 0.8·max|d/dv[(v−c)·w]| > 0 at sharpness 3.5).
+    public static let shadowContrastNegFloor = -0.8
     // Overall contrast at slider ±1: the print curve rotates around the
     // reference tone, v → v + k·(v − v*), folded into slopes/pivots/curvatures
     // (no shader involvement). Slider range −1…+2 → k ∈ [−0.5, +1].

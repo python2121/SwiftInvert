@@ -47,9 +47,15 @@ extension LibraryView {
             isSelected: model.multiSelection.contains(url),
             isCurrent: model.selection == url
         )
-        .onTapGesture {
-            model.select(url, additive: NSEvent.modifierFlags.contains(.command))
-        }
+        .gesture(
+            ExclusiveGesture(
+                TapGesture().modifiers(.shift).onEnded { model.selectRange(to: url) },
+                ExclusiveGesture(
+                    TapGesture().modifiers(.command).onEnded { model.select(url, additive: true) },
+                    TapGesture().onEnded { model.select(url, additive: false) }
+                )
+            )
+        )
         .contextMenu { exportMenu(for: url) }
     }
 

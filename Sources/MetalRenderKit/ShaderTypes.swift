@@ -91,7 +91,7 @@ public enum UniformsBuilder {
             midtoneGamma: Float(K.paperMidtoneGamma),
             gammaWidth: Float(K.paperGammaWidth),
             shadowsLift: Float(params.shadows * K.shadowsMaxLift),
-            shadowContrast: Float(params.shadowContrast * K.shadowContrastMax),
+            shadowContrast: Float(max(params.shadowContrast * K.shadowContrastMax, K.shadowContrastNegFloor)),
             highlightsShift: Float(params.highlights * K.highlightsMaxShift),
             highlightContrast: Float(params.highlightContrast * K.highlightContrastMax),
             vibrance: Float(params.vibrance),

@@ -49,6 +49,22 @@ struct ExportOptions: Codable, Equatable {
     /// sRGB default (NegPy's default): correct everywhere, including viewers
     /// that mishandle wide-gamut profiles.
     var colorSpace: ExportColorSpace = .sRGB
+    /// Destination: next to each source (default) or a chosen folder.
+    var useCustomDestination: Bool = false
+    var customDestinationPath: String?
+
+    /// Output URL for one source file (extension per format; overwrites a
+    /// previous export of the same image, matching next-to-source behavior).
+    func destinationURL(for source: URL) -> URL {
+        let name = source.deletingPathExtension().lastPathComponent
+        let dir: URL
+        if useCustomDestination, let path = customDestinationPath {
+            dir = URL(fileURLWithPath: path, isDirectory: true)
+        } else {
+            dir = source.deletingLastPathComponent()
+        }
+        return dir.appendingPathComponent(name).appendingPathExtension(format.fileExtension)
+    }
 
     static func loadSticky() -> ExportOptions {
         guard let data = UserDefaults.standard.data(forKey: "exportOptions"),
