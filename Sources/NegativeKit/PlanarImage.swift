@@ -59,6 +59,31 @@ public struct RGBImage: @unchecked Sendable {
         }
     }
 
+    /// Mirror left↔right.
+    public func flippedHorizontally() -> RGBImage {
+        var out = RGBImage(width: width, height: height)
+        for y in 0..<height {
+            for x in 0..<width {
+                for c in 0..<3 { out[y, x, c] = self[y, width - 1 - x, c] }
+            }
+        }
+        return out
+    }
+
+    /// User orientation: rotation in clockwise 90° steps, then an optional
+    /// horizontal flip (applied in display space, after the rotation).
+    public func oriented(rotationCW: Int, flipHorizontal: Bool) -> RGBImage {
+        var img = self
+        switch ((rotationCW % 360) + 360) % 360 {
+        case 90: img = img.applyingFlip(6)
+        case 180: img = img.applyingFlip(3)
+        case 270: img = img.applyingFlip(5)
+        default: break
+        }
+        if flipHorizontal { img = img.flippedHorizontally() }
+        return img
+    }
+
     /// Area-average downsample so the long edge is at most `maxLongEdge`
     /// (stand-in for NegPy's cv2 INTER_AREA preview resize).
     public func downsampled(maxLongEdge: Int) -> RGBImage {

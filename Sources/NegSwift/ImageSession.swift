@@ -11,7 +11,13 @@ import RawDecodeKit
 actor ImageSession {
     let url: URL
     private let pipeline: RenderPipeline
-    private var preview: RGBImage?
+    private var basePreview: RGBImage?  // as decoded (EXIF baked, no user orientation)
+    private var preview: RGBImage?  // user-oriented
+    private struct OrientKey: Equatable {
+        var rotation: Int
+        var flipHorizontal: Bool
+    }
+    private var orientKey: OrientKey?
 
     /// Two-tier analysis cache: the expensive prepared stage depends only on
     /// the pre-process rects; the cheap finalize (neutral axis) also depends on
@@ -50,8 +56,21 @@ actor ImageSession {
     /// the wp/bp offsets change — matching NegPy's meter scoping at a fraction
     /// of the cost.
     private func prepare(settings: ExposureSettings) throws -> (RGBImage, ExposureAnalysis) {
-        if preview == nil {
-            preview = try RawDecoder().decode(url: url, quality: .preview, maxLongEdge: 1536)
+        if basePreview == nil {
+            basePreview = try RawDecoder().decode(url: url, quality: .preview, maxLongEdge: 1536)
+        }
+        let oKey = OrientKey(rotation: settings.rotation, flipHorizontal: settings.flipHorizontal)
+        if preview == nil || oKey != orientKey {
+            preview = basePreview!.oriented(
+                rotationCW: settings.rotation, flipHorizontal: settings.flipHorizontal)
+            orientKey = oKey
+            // Everything downstream is in oriented space.
+            fullTexture = nil
+            croppedTexture = nil
+            croppedTextureRect = nil
+            prepared = nil
+            preparedKey = nil
+            analysis = nil
         }
         let pKey = PreparedKey(analysisRect: settings.analysisRect, cropRect: settings.cropRect)
         if prepared == nil || pKey != preparedKey {
@@ -94,6 +113,9 @@ actor ImageSession {
     /// don't flash it).
     func needsPreparation(settings: ExposureSettings) -> Bool {
         guard preview != nil, prepared != nil else { return true }
+        if OrientKey(rotation: settings.rotation, flipHorizontal: settings.flipHorizontal) != orientKey {
+            return true
+        }
         return PreparedKey(analysisRect: settings.analysisRect, cropRect: settings.cropRect) != preparedKey
     }
 
@@ -113,6 +135,7 @@ actor ImageSession {
     func exportRender(settings: ExposureSettings) throws -> RGBImage {
         let (_, analysis) = try prepare(settings: settings)
         var full = try RawDecoder().decode(url: url, quality: .full)
+            .oriented(rotationCW: settings.rotation, flipHorizontal: settings.flipHorizontal)
         if let crop = settings.cropRect { full = full.cropped(to: crop) }
         let params = ExposureKernel.deriveRenderParams(settings, analysis)
         let (encoded, _) = try pipeline.render(image: full, params: params)

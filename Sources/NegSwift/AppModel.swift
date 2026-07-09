@@ -4,6 +4,7 @@ import MetalRenderKit
 import NegativeKit
 import Observation
 import RawDecodeKit
+import SwiftUI
 import UniformTypeIdentifiers
 
 @MainActor
@@ -33,6 +34,36 @@ final class AppModel {
     enum ToolMode { case none, analysisRegion, crop }
     var toolMode: ToolMode = .none {
         didSet { if oldValue != toolMode { scheduleRender() } }
+    }
+
+    // MARK: - Orientation & canvas
+
+    func rotateClockwise() { settings.rotation = ((settings.rotation + 90) % 360 + 360) % 360 }
+    func rotateCounterclockwise() { settings.rotation = ((settings.rotation - 90) % 360 + 360) % 360 }
+    func flipHorizontal() { settings.flipHorizontal.toggle() }
+
+    enum CanvasColor: String, CaseIterable, Identifiable {
+        case gray, veryDarkGray, black
+        var id: String { rawValue }
+        var color: Color {
+            switch self {
+            case .gray: return Color(white: 0.5)
+            case .veryDarkGray: return Color(white: 0.12)
+            case .black: return .black
+            }
+        }
+        var label: String {
+            switch self {
+            case .gray: return "Gray"
+            case .veryDarkGray: return "Very dark gray"
+            case .black: return "Black"
+            }
+        }
+    }
+    var canvasColor: CanvasColor = CanvasColor(
+        rawValue: UserDefaults.standard.string(forKey: "canvasColor") ?? "") ?? .veryDarkGray
+    {
+        didSet { UserDefaults.standard.set(canvasColor.rawValue, forKey: "canvasColor") }
     }
 
     func commitSelection(_ rect: NormalizedRect) {

@@ -10,8 +10,16 @@ struct DetailView: View {
     @State private var basePan: CGSize = .zero
 
     var body: some View {
+        VStack(spacing: 0) {
+            canvas
+            Divider()
+            controlBar
+        }
+    }
+
+    private var canvas: some View {
         ZStack {
-            Color(nsColor: .underPageBackgroundColor)
+            model.canvasColor.color
             if let image = model.displayImage {
                 imageCanvas(image)
             } else if let status = model.statusMessage, model.selection != nil {
@@ -46,6 +54,57 @@ struct DetailView: View {
             if mode != .none { resetZoom() }
         }
         .onChange(of: model.selection) { _, _ in resetZoom() }
+    }
+
+    /// Rotate/flip + canvas color, under the image.
+    private var controlBar: some View {
+        HStack(spacing: 14) {
+            Group {
+                Button {
+                    model.rotateCounterclockwise()
+                } label: {
+                    Image(systemName: "rotate.left")
+                }
+                .help("Rotate counterclockwise")
+                Button {
+                    model.rotateClockwise()
+                } label: {
+                    Image(systemName: "rotate.right")
+                }
+                .help("Rotate clockwise")
+                Button {
+                    model.flipHorizontal()
+                } label: {
+                    Image(systemName: "arrow.left.and.right.righttriangle.left.righttriangle.right")
+                }
+                .help("Flip horizontally")
+            }
+            .disabled(model.selection == nil)
+
+            Spacer()
+
+            Text("Canvas").font(.caption).foregroundStyle(.secondary)
+            ForEach(AppModel.CanvasColor.allCases) { option in
+                Button {
+                    model.canvasColor = option
+                } label: {
+                    Circle()
+                        .fill(option.color)
+                        .frame(width: 16, height: 16)
+                        .overlay {
+                            Circle().strokeBorder(
+                                model.canvasColor == option ? Color.accentColor : Color.secondary.opacity(0.4),
+                                lineWidth: model.canvasColor == option ? 2 : 1)
+                        }
+                }
+                .buttonStyle(.plain)
+                .help(option.label)
+            }
+        }
+        .buttonStyle(.borderless)
+        .imageScale(.medium)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
     }
 
     private func resetZoom() {
