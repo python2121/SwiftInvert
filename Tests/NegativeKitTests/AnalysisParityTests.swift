@@ -16,6 +16,9 @@ enum Synthetic64 {
 func settingsFrom(_ config: [String: Any]) -> ExposureSettings {
     let e = config["exposure_config"] as! [String: Any]
     var s = ExposureSettings()
+    // NegPy fixtures predate pre-saturation (a NegSwift-only default of 1.15);
+    // parity requires the neutral value.
+    s.preSaturation = 1.0
     s.density = e["density"] as! Double
     s.grade = e["grade"] as! Double
     s.wbCyan = e["wb_cyan"] as! Double

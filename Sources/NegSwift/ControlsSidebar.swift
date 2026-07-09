@@ -93,7 +93,7 @@ struct ControlsSidebar: View {
                         // settings/sidecars; Temp/Tint below are the WB controls).
                         LabeledSlider(
                             label: "Pre-saturation", value: $model.settings.preSaturation,
-                            range: 0.5...2.0, format: "%.2f", defaultValue: 1.0)
+                            range: 0.5...2.0, format: "%.2f", defaultValue: 1.15)
                         Toggle("Auto cast removal", isOn: $model.settings.autoCastRemoval)
                         LabeledSlider(
                             label: "Cast strength", value: $model.settings.castRemovalStrength,

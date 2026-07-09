@@ -49,6 +49,8 @@ enum Fixtures2 {
     static func settings(_ config: [String: Any]) -> ExposureSettings {
         let e = config["exposure_config"] as! [String: Any]
         var s = ExposureSettings()
+        // NegPy fixtures predate pre-saturation; pin the neutral value.
+        s.preSaturation = 1.0
         s.density = e["density"] as! Double
         s.grade = e["grade"] as! Double
         s.wbCyan = e["wb_cyan"] as! Double

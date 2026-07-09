@@ -52,7 +52,9 @@ public struct ExposureSettings: Codable, Equatable, Sendable {
     // deviations from neutral in normalized log space BEFORE the print curve,
     // restoring the inter-channel separation the per-channel normalization
     // equalizes away. 1.0 = off; acts on hue separation, not just chroma.
-    public var preSaturation: Double = 1.0
+    // Default 1.15 (A/B-chosen): counters the muted default look. NegPy has
+    // no equivalent — parity fixtures must pin this to 1.0.
+    public var preSaturation: Double = 1.15
 
     // Overall white balance as Temp (blue↔yellow along the Planckian direction,
     // + = warmer) and Tint (green↔magenta, + = magenta); composes additively
@@ -109,7 +111,7 @@ public struct ExposureSettings: Codable, Equatable, Sendable {
         overallContrast = d(.overallContrast, 0)
         vibrance = d(.vibrance, 1.0)
         saturation = d(.saturation, 1.0)
-        preSaturation = d(.preSaturation, 1.0)
+        preSaturation = d(.preSaturation, 1.15)
         temp = d(.temp, 0)
         tint = d(.tint, 0)
         colorShadows = (try? c.decode(SIMD3<Double>.self, forKey: .colorShadows)) ?? .zero

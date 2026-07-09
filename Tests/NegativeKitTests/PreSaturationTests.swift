@@ -30,6 +30,7 @@ import Testing
         // On the synthetic64 image (colored corners), pre-saturation > 1 must
         // raise the mean CIELAB chroma of the rendered positive.
         var base = ExposureSettings()
+        base.preSaturation = 1.0
         var boosted = ExposureSettings()
         boosted.preSaturation = 1.3
         let outBase = ReferenceCurve.render(
@@ -62,7 +63,8 @@ import Testing
         s.preSaturation = 1.35
         let back = try JSONDecoder().decode(ExposureSettings.self, from: JSONEncoder().encode(s))
         #expect(back == s)
+        // Sidecars without the key adopt the new 1.15 default look.
         let legacy = try JSONDecoder().decode(ExposureSettings.self, from: Data("{}".utf8))
-        #expect(legacy.preSaturation == 1.0)
+        #expect(legacy.preSaturation == 1.15)
     }
 }
