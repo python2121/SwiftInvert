@@ -39,15 +39,40 @@ struct DetailView: View {
             }
         }
         .overlay(alignment: .bottomLeading) {
-            if model.isAnalyzing {
-                HStack(spacing: 6) {
-                    ProgressView().controlSize(.small)
-                    Text("Analyzing…").font(.caption)
+            VStack(alignment: .leading, spacing: 6) {
+                if let progress = model.exportProgress {
+                    HStack(spacing: 8) {
+                        ProgressView(value: Double(progress.done), total: Double(max(progress.total, 1)))
+                            .frame(width: 130)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("Exporting \(progress.done + 1) of \(progress.total)")
+                                .font(.caption)
+                            Text(progress.currentName)
+                                .font(.system(size: 9))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                        Button {
+                            model.cancelExport()
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Cancel export")
+                    }
+                    .padding(8)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
                 }
-                .padding(8)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
-                .padding(10)
+                if model.isAnalyzing {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("Analyzing…").font(.caption)
+                    }
+                    .padding(8)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
+                }
             }
+            .padding(10)
         }
         .onChange(of: model.toolMode) { _, mode in
             // Selection drags are mapped on the fitted frame; reset zoom first.

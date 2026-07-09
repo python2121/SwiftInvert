@@ -250,6 +250,18 @@ final class AppModel {
     var exportRequest: ExportRequest?
     var exportOptions = ExportOptions.loadSticky()
 
+    struct ExportProgress {
+        var done: Int
+        var total: Int
+        var currentName: String
+    }
+    var exportProgress: ExportProgress?
+    private var exportTask: Task<Void, Never>?
+
+    func cancelExport() {
+        exportTask?.cancel()
+    }
+
     /// Open the quality modal for the current image (sidebar button).
     func requestExportCurrent() {
         guard let selection else { return }
@@ -277,25 +289,36 @@ final class AppModel {
         let liveURL = selection
         let liveSettings = settings
         let liveSession = session
-        Task {
+        exportTask = Task {
             var failures = 0
+            var completed = 0
             for (index, url) in urls.enumerated() {
-                statusMessage = "Exporting \(index + 1) of \(urls.count): \(url.lastPathComponent)"
+                if Task.isCancelled { break }
+                exportProgress = ExportProgress(
+                    done: index, total: urls.count, currentName: url.lastPathComponent)
                 let fileSettings = url == liveURL ? liveSettings : (SidecarStore.load(for: url) ?? ExposureSettings())
                 let session = url == liveURL && liveSession != nil
                     ? liveSession! : ImageSession(url: url, pipeline: pipeline)
                 do {
                     let encoded = try await session.exportRender(settings: fileSettings)
+                    if Task.isCancelled { break }
                     try Exporter.write(encoded, to: options.destinationURL(for: url), options: options)
+                    completed += 1
                 } catch {
                     failures += 1
                     NSLog("NegSwift: export failed for \(url.lastPathComponent): \(error)")
                 }
             }
-            statusMessage = failures == 0
-                ? "Exported \(urls.count) image\(urls.count == 1 ? "" : "s")"
-                : "Exported \(urls.count - failures) of \(urls.count) (\(failures) failed)"
+            if Task.isCancelled {
+                statusMessage = "Export cancelled (\(completed) of \(urls.count) done)"
+            } else {
+                statusMessage = failures == 0
+                    ? "Exported \(urls.count) image\(urls.count == 1 ? "" : "s")"
+                    : "Exported \(urls.count - failures) of \(urls.count) (\(failures) failed)"
+            }
+            exportProgress = nil
             isExporting = false
+            exportTask = nil
         }
     }
 }
