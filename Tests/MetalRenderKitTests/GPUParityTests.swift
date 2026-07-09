@@ -123,6 +123,35 @@ enum Fixtures2 {
         #expect(mean < 0.01 && maxV < 0.04, "tone controls GPU/CPU: mean \(mean), max \(maxV)")
     }
 
+    @Test func displayPathMatchesFloatPath() throws {
+        // The rgba8 display fast path must equal the float path within GPU
+        // 8-bit quantization (±1/255 plus the usual float slop).
+        let pipeline = try #require(GPU.pipeline, "Metal unavailable")
+        let pixels = try Fixtures2.floats("synthetic64/input.bin")
+        let input = RGBImage(pixels: pixels, width: 64, height: 64)
+        let analysis = ExposureKernel.analyze(linearImage: input, analysisBuffer: 0.05)
+        let params = ExposureKernel.deriveRenderParams(ExposureSettings(), analysis)
+
+        let source = try pipeline.upload(input)
+        let float32 = try pipeline.render(source: source, params: params).encoded
+        let display = try pipeline.renderDisplay(source: source, params: params)
+
+        #expect(display.width == 64 && display.height == 64)
+        var maxDiff = 0.0
+        for i in 0..<(64 * 64) {
+            for c in 0..<3 {
+                let f = Double(float32.pixels[i * 3 + c])
+                let b = Double(display.rgba[i * 4 + c]) / 255.0
+                maxDiff = max(maxDiff, abs(f - b))
+            }
+            #expect(display.rgba[i * 4 + 3] == 255)  // opaque alpha
+        }
+        #expect(maxDiff <= 1.5 / 255.0, "display path max diff \(maxDiff)")
+        // Histograms from both paths agree exactly (same linear texture).
+        let floatHist = try pipeline.render(source: source, params: params).histogram
+        #expect(display.histogram == floatHist)
+    }
+
     @Test func histogramMatchesCPU() throws {
         let pipeline = try #require(GPU.pipeline, "Metal unavailable")
         let pixels = try Fixtures2.floats("synthetic64/input.bin")

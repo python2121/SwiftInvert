@@ -24,6 +24,9 @@ final class AppModel {
     var histogram: [UInt32]?
     var statusMessage: String?
     var isExporting = false
+    /// True while the session is decoding or re-running the base analysis
+    /// (drives the bottom-left indicator; plain slider renders don't set it).
+    var isAnalyzing = false
 
     /// Active pre-process selection tool. While a tool is on, the detail view
     /// shows the uncropped frame and drag draws the selection rect.
@@ -133,13 +136,18 @@ final class AppModel {
                 let uncropped = self.toolMode != .none
                 guard let session = self.session else { break }
                 do {
+                    if await session.needsPreparation(settings: snapshot) {
+                        self.isAnalyzing = true
+                    }
                     let output = try await session.render(settings: snapshot, uncropped: uncropped)
+                    self.isAnalyzing = false
                     if Task.isCancelled { break }
                     self.displayImage = output.image
                     self.histogram = output.histogram
                     self.statusMessage = nil
                     NSLog("NegSwift: rendered \(self.selection?.lastPathComponent ?? "?") (\(output.image.width)x\(output.image.height))")
                 } catch {
+                    self.isAnalyzing = false
                     if !Task.isCancelled {
                         self.statusMessage = "Render failed: \(error)"
                         NSLog("NegSwift: render failed for \(self.selection?.lastPathComponent ?? "?"): \(error)")

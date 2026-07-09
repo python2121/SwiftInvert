@@ -3,6 +3,19 @@ import Foundation
 import NegativeKit
 
 enum ImageConversion {
+    /// GPU-quantized RGBA8 rows (display fast path) → color-managed CGImage.
+    /// No CPU conversion: the bytes go straight into the data provider.
+    static func cgImage(rgba8 bytes: [UInt8], width: Int, height: Int) -> CGImage? {
+        guard let cs = CGColorSpace(name: CGColorSpace.rommrgb),
+            let provider = CGDataProvider(data: Data(bytes) as CFData)
+        else { return nil }
+        return CGImage(
+            width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32,
+            bytesPerRow: width * 4, space: cs,
+            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue),
+            provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
+    }
+
     /// Encoded (ROMM TRC) buffer → color-managed CGImage. Tagging rommrgb makes
     /// ColorSync handle the display transform (NegPy needed a littleCMS LUT here).
     static func cgImage(fromEncoded img: RGBImage, bitsPerComponent: Int = 8) -> CGImage? {

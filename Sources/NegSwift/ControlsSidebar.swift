@@ -39,8 +39,10 @@ struct ControlsSidebar: View {
                 GroupBox("Print") {
                     VStack(alignment: .leading, spacing: 10) {
                         Toggle("Auto exposure", isOn: $model.settings.autoExposure)
+                        // Right = brighter (all brightness sliders share that
+                        // direction). Internally NegPy's print density: 2 − b.
                         LabeledSlider(
-                            label: "Density", value: $model.settings.density, range: -3...4,
+                            label: "Brightness", value: brightnessBinding, range: -3...4,
                             format: "%.2f", defaultValue: 1.0)
                         Toggle("Auto contrast", isOn: $model.settings.autoNormalizeContrast)
                         LabeledSlider(
@@ -60,7 +62,7 @@ struct ControlsSidebar: View {
                             format: "%.2f", defaultValue: 0)
                         LabeledSlider(
                             label: "Shadow contrast", value: $model.settings.shadowContrast,
-                            range: -1...1, format: "%.2f", defaultValue: 0)
+                            range: -1...2, format: "%.2f", defaultValue: 0)
                         LabeledSlider(
                             label: "Highlights", value: $model.settings.highlights, range: -1...1,
                             format: "%.2f", defaultValue: 0)
@@ -123,6 +125,13 @@ struct ControlsSidebar: View {
             .padding(12)
         }
         .frame(width: 195)
+    }
+
+    /// Brightness ↔ density inversion so dragging right brightens the print.
+    private var brightnessBinding: Binding<Double> {
+        Binding(
+            get: { 2 - model.settings.density },
+            set: { model.settings.density = 2 - $0 })
     }
 
     /// One pre-process tool row: activate-tool button + clear button when set.

@@ -124,11 +124,15 @@ public enum ExposureKernel {
     /// analysisRect wins and disables the centered buffer inset; otherwise the
     /// output cropRect scopes the meters (so borders outside the crop can't
     /// throw off the inversion) with the buffer applied inside it.
+    /// Default centered inset: 10% per side = the middle 80% of the frame
+    /// (NegSwift default; NegPy ships 5%).
+    public static let defaultAnalysisBuffer = 0.10
+
     public static func analyze(
         linearImage: RGBImage,
         cropRect: NormalizedRect? = nil,
         analysisRect: NormalizedRect? = nil,
-        analysisBuffer: Double = 0.05,
+        analysisBuffer: Double = defaultAnalysisBuffer,
         whitePointOffset: Double = 0,
         blackPointOffset: Double = 0
     ) -> ExposureAnalysis {

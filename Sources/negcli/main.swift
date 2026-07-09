@@ -158,7 +158,7 @@ do {
             settings.density = 1.0 + Double(i % 10) * 0.05  // vary like a slider drag
             let params = ExposureKernel.deriveRenderParams(settings, analysis)
             let src = reupload ? try pipeline.upload(img) : source
-            _ = try pipeline.render(source: src, params: params)  // includes readback
+            _ = try pipeline.renderDisplay(source: src, params: params)  // the app's interactive path
         }
         let total = -start.timeIntervalSinceNow
         print(String(

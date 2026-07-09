@@ -39,6 +39,9 @@ public final class RenderPipeline: @unchecked Sendable {
         let h: Int
     }
     private var intermediates: [SizeKey: (normalized: MTLTexture, linear: MTLTexture, encoded: MTLTexture)] = [:]
+    /// Display-path encode target: same encode kernel writing into rgba8unorm —
+    /// the GPU quantizes for free and readback is 4× smaller with no CPU repack.
+    private var display8: [SizeKey: MTLTexture] = [:]
     private var histBuffer: MTLBuffer?
     private let maxCachedPixels = 4_000_000
     /// Serializes render(): the cached intermediates and histogram buffer are
@@ -229,5 +232,96 @@ public final class RenderPipeline: @unchecked Sendable {
         let source = try upload(image)
         let result = try render(source: source, params: params)
         return (result.encoded, result.histogram)
+    }
+
+    // MARK: - Display fast path
+
+    /// One display render's read-back results: 8-bit RGBA rows (ROMM-encoded,
+    /// alpha = 255), ready for a CGImage without any CPU conversion loop.
+    public struct DisplayResult: Sendable {
+        public let rgba: [UInt8]
+        public let width: Int
+        public let height: Int
+        public let histogram: [UInt32]
+    }
+
+    /// The interactive-preview chain: identical passes, but the final encode
+    /// writes straight into an rgba8unorm texture (float→8-bit quantization on
+    /// the GPU) and reads back a quarter of the bytes.
+    public func renderDisplay(
+        source: MTLTexture, params: RenderParams, computeHistogram: Bool = true
+    ) throws -> DisplayResult {
+        renderLock.lock()
+        defer { renderLock.unlock() }
+        let w = source.width, h = source.height
+        let (normalized, linear, _) = try intermediatesFor(width: w, height: h)
+
+        let key = SizeKey(w: w, h: h)
+        let encoded8: MTLTexture
+        if let cached = display8[key] {
+            encoded8 = cached
+        } else {
+            let desc = MTLTextureDescriptor.texture2DDescriptor(
+                pixelFormat: .rgba8Unorm, width: w, height: h, mipmapped: false)
+            desc.usage = [.shaderWrite]
+            desc.storageMode = .shared
+            guard let tex = device.makeTexture(descriptor: desc) else {
+                throw RenderError.resource("display texture \(w)x\(h)")
+            }
+            if w * h <= maxCachedPixels {
+                if display8.count >= 4 { display8.removeAll() }
+                display8[key] = tex
+            }
+            encoded8 = tex
+        }
+
+        var normU = UniformsBuilder.normUniforms(params)
+        var curveU = UniformsBuilder.curveUniforms(params)
+        if histBuffer == nil {
+            histBuffer = device.makeBuffer(length: 1024 * 4, options: .storageModeShared)
+        }
+        guard let histBuffer else { throw RenderError.resource("histogram buffer") }
+        memset(histBuffer.contents(), 0, 1024 * 4)
+
+        guard let cmd = queue.makeCommandBuffer(), let enc = cmd.makeComputeCommandEncoder() else {
+            throw RenderError.resource("command buffer")
+        }
+        enc.setTexture(source, index: 0)
+        enc.setTexture(normalized, index: 1)
+        enc.setBytes(&normU, length: MemoryLayout<NormUniforms>.stride, index: 0)
+        dispatch(enc, normalizePSO, width: w, height: h)
+
+        enc.setTexture(normalized, index: 0)
+        enc.setTexture(linear, index: 1)
+        enc.setBytes(&curveU, length: MemoryLayout<CurveUniforms>.stride, index: 0)
+        dispatch(enc, curvePSO, width: w, height: h)
+
+        if computeHistogram {
+            enc.setTexture(linear, index: 0)
+            enc.setBuffer(histBuffer, offset: 0, index: 0)
+            enc.setComputePipelineState(histogramPSO)
+            let tg = MTLSizeMake(16, 16, 1)
+            let grid = MTLSizeMake((w + 15) / 16, (h + 15) / 16, 1)
+            enc.dispatchThreadgroups(grid, threadsPerThreadgroup: tg)
+        }
+
+        enc.setTexture(linear, index: 0)
+        enc.setTexture(encoded8, index: 1)
+        dispatch(enc, encodePSO, width: w, height: h)
+        enc.endEncoding()
+
+        cmd.commit()
+        cmd.waitUntilCompleted()
+        if let error = cmd.error { throw RenderError.resource("command buffer failed: \(error)") }
+
+        var rgba = [UInt8](repeating: 0, count: w * h * 4)
+        rgba.withUnsafeMutableBufferPointer { buf in
+            encoded8.getBytes(
+                buf.baseAddress!, bytesPerRow: w * 4, from: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0)
+        }
+        let histogram = histBuffer.contents().withMemoryRebound(to: UInt32.self, capacity: 1024) {
+            Array(UnsafeBufferPointer(start: $0, count: 1024))
+        }
+        return DisplayResult(rgba: rgba, width: w, height: h, histogram: histogram)
     }
 }

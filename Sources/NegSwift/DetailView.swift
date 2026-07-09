@@ -30,6 +30,17 @@ struct DetailView: View {
                     description: Text("Select a negative from the library."))
             }
         }
+        .overlay(alignment: .bottomLeading) {
+            if model.isAnalyzing {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Analyzing…").font(.caption)
+                }
+                .padding(8)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
+                .padding(10)
+            }
+        }
         .onChange(of: model.toolMode) { _, mode in
             // Selection drags are mapped on the fitted frame; reset zoom first.
             if mode != .none { resetZoom() }
@@ -86,7 +97,11 @@ struct DetailView: View {
 
     private var existingRect: NormalizedRect? {
         switch model.toolMode {
-        case .analysisRegion: return model.settings.analysisRect
+        case .analysisRegion:
+            // No custom region → show the default centered 80% the meters use.
+            let b = ExposureKernel.defaultAnalysisBuffer
+            return model.settings.analysisRect
+                ?? NormalizedRect(x: b, y: b, width: 1 - 2 * b, height: 1 - 2 * b)
         case .crop: return model.settings.cropRect
         case .none: return nil
         }

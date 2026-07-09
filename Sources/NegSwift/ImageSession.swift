@@ -75,16 +75,25 @@ actor ImageSession {
         return croppedTexture!
     }
 
+    /// True when the next render must decode or re-meter (drives the
+    /// "Analyzing…" indicator; plain slider renders skip both).
+    func needsPreparation(settings: ExposureSettings) -> Bool {
+        guard preview != nil, analysis != nil else { return true }
+        let key = AnalysisKey(
+            analysisRect: settings.analysisRect, cropRect: settings.cropRect,
+            whitePoint: settings.whitePointOffset, blackPoint: settings.blackPointOffset)
+        return key != analysisKey
+    }
+
     /// `uncropped` shows the full frame (used while a selection tool is active
     /// so the user can drag on the whole image, like NegPy's crop_preview_full).
     func render(settings: ExposureSettings, uncropped: Bool = false) throws -> RenderOutput {
         let (image, analysis) = try prepare(settings: settings)
         let params = ExposureKernel.deriveRenderParams(settings, analysis)
         let source = try sourceTexture(image: image, settings: settings, uncropped: uncropped)
-        let result = try pipeline.render(source: source, params: params)
-        guard let cg = ImageConversion.cgImage(fromEncoded: result.encoded) else {
-            throw RenderError.resource("CGImage conversion")
-        }
+        let result = try pipeline.renderDisplay(source: source, params: params)
+        guard let cg = ImageConversion.cgImage(rgba8: result.rgba, width: result.width, height: result.height)
+        else { throw RenderError.resource("CGImage conversion") }
         return RenderOutput(image: cg, histogram: result.histogram)
     }
 

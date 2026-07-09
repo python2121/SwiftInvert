@@ -87,7 +87,10 @@ public enum K {
     public static let shadowsMaxLift = 0.5
     // Density swing of the Highlights slider at ±1 (negative slider = recover).
     public static let highlightsMaxShift = 0.4
-    // Max extra slope within each region at contrast slider ±1.
+    // Max extra slope within each region at contrast slider ±1. The shadow
+    // contrast slider ranges −1…+2 (positive values only steepen the curve, so
+    // extra positive headroom cannot break monotonicity; the −1 floor is where
+    // the monotone bound lives).
     public static let shadowContrastMax = 0.5
     public static let highlightContrastMax = 0.5
     // One photographic stop in log10 density.
