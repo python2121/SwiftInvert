@@ -43,7 +43,8 @@ public struct CurveUniforms {
     public var highlightContrast: Float
     public var vibrance: Float
     public var saturation: Float
-    public var _pad: SIMD2<Float> = .zero
+    public var preSaturation: Float
+    public var _pad: Float = 0
 }
 
 /// RenderParams (NegativeKit's per-slider derivation) → GPU uniform packing.
@@ -94,7 +95,8 @@ public enum UniformsBuilder {
             highlightsShift: Float(params.highlights * K.highlightsMaxShift),
             highlightContrast: Float(params.highlightContrast * K.highlightContrastMax),
             vibrance: Float(params.vibrance),
-            saturation: Float(params.saturation)
+            saturation: Float(params.saturation),
+            preSaturation: Float(params.preSaturation)
         )
     }
 }

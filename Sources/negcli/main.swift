@@ -122,6 +122,7 @@ do {
         if let v = options["--shadow-contrast"].flatMap(Double.init) { settings.shadowContrast = v }
         if let v = options["--highlights"].flatMap(Double.init) { settings.highlights = v }
         if let v = options["--highlight-contrast"].flatMap(Double.init) { settings.highlightContrast = v }
+        if let v = options["--pre-saturation"].flatMap(Double.init) { settings.preSaturation = v }
 
         let start = Date()
         let img = try RawDecoder().decode(

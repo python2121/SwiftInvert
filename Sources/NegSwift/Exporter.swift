@@ -1,6 +1,7 @@
 import CoreGraphics
 import Foundation
 import ImageIO
+import MetalRenderKit
 import NegativeKit
 import UniformTypeIdentifiers
 
@@ -25,6 +26,19 @@ enum ExportFormat: String, CaseIterable, Identifiable {
 
 enum ExportError: Error { case encodeFailed }
 
+enum ExportColorSpace: String, Codable, CaseIterable, Identifiable {
+    case sRGB
+    case rommRGB
+
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .sRGB: return "sRGB"
+        case .rommRGB: return "ProPhoto (wide gamut)"
+        }
+    }
+}
+
 /// User-facing export options (the quality modal). Defaults are deliberately
 /// high quality; persisted as the sticky last-used configuration.
 struct ExportOptions: Codable, Equatable {
@@ -32,6 +46,9 @@ struct ExportOptions: Codable, Equatable {
     var jpegQuality: Double = 0.92
     var resize: Bool = false
     var maxLongEdge: Int = 3000
+    /// sRGB default (NegPy's default): correct everywhere, including viewers
+    /// that mishandle wide-gamut profiles.
+    var colorSpace: ExportColorSpace = .sRGB
 
     static func loadSticky() -> ExportOptions {
         guard let data = UserDefaults.standard.data(forKey: "exportOptions"),
@@ -56,16 +73,26 @@ enum Exporter {
         if options.resize, options.maxLongEdge >= 16 {
             image = image.downsampled(maxLongEdge: options.maxLongEdge)
         }
-        let cg: CGImage?
+        let outputBits = options.format == .jpeg ? 8 : 16
+        var cg: CGImage?
+        switch options.colorSpace {
+        case .sRGB:
+            // Build 16-bit ROMM first so the ColorSync conversion quantizes once.
+            if let romm16 = ColorIO.cgImage(fromEncoded: image, bitsPerComponent: 16),
+                let srgb = CGColorSpace(name: CGColorSpace.sRGB)
+            {
+                cg = ColorIO.converted(romm16, to: srgb, bitsPerComponent: outputBits)
+            }
+        case .rommRGB:
+            cg = ColorIO.cgImage(fromEncoded: image, bitsPerComponent: outputBits)
+        }
         let type: UTType
         var destOptions: [CFString: Any] = [:]
         switch options.format {
         case .jpeg:
-            cg = ImageConversion.cgImage(fromEncoded: image, bitsPerComponent: 8)
             type = .jpeg
             destOptions[kCGImageDestinationLossyCompressionQuality] = options.jpegQuality
         case .tiff16:
-            cg = ImageConversion.cgImage(fromEncoded: image, bitsPerComponent: 16)
             type = .tiff
         }
         guard let cg,

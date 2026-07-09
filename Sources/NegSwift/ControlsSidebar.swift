@@ -91,6 +91,9 @@ struct ControlsSidebar: View {
                     VStack(alignment: .leading, spacing: 10) {
                         // C/M/Y trim sliders hidden for now (fields remain in
                         // settings/sidecars; Temp/Tint below are the WB controls).
+                        LabeledSlider(
+                            label: "Pre-saturation", value: $model.settings.preSaturation,
+                            range: 0.5...2.0, format: "%.2f", defaultValue: 1.0)
                         Toggle("Auto cast removal", isOn: $model.settings.autoCastRemoval)
                         LabeledSlider(
                             label: "Cast strength", value: $model.settings.castRemovalStrength,

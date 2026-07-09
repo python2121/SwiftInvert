@@ -48,6 +48,12 @@ public struct ExposureSettings: Codable, Equatable, Sendable {
     public var vibrance: Double = 1.0
     public var saturation: Double = 1.0
 
+    // Pre-saturation (Negative Lab Pro concept): scales per-pixel density
+    // deviations from neutral in normalized log space BEFORE the print curve,
+    // restoring the inter-channel separation the per-channel normalization
+    // equalizes away. 1.0 = off; acts on hue separation, not just chroma.
+    public var preSaturation: Double = 1.0
+
     // Overall white balance as Temp (blue↔yellow along the Planckian direction,
     // + = warmer) and Tint (green↔magenta, + = magenta); composes additively
     // with the CMY trim sliders in filtration_offsets space.
@@ -103,6 +109,7 @@ public struct ExposureSettings: Codable, Equatable, Sendable {
         overallContrast = d(.overallContrast, 0)
         vibrance = d(.vibrance, 1.0)
         saturation = d(.saturation, 1.0)
+        preSaturation = d(.preSaturation, 1.0)
         temp = d(.temp, 0)
         tint = d(.tint, 0)
         colorShadows = (try? c.decode(SIMD3<Double>.self, forKey: .colorShadows)) ?? .zero
@@ -152,6 +159,8 @@ public struct RenderParams: Equatable, Sendable {
     // CIELAB chroma ops on the linear print (1.0 = off).
     public var vibrance: Double = 1.0
     public var saturation: Double = 1.0
+    /// Pre-curve density-deviation gain (1.0 = off).
+    public var preSaturation: Double = 1.0
     // Per-band CMY density offsets (already scaled to density units).
     public var shadowCMY: SIMD3<Double> = .zero
     public var midCMY: SIMD3<Double> = .zero
@@ -163,6 +172,7 @@ public struct RenderParams: Equatable, Sendable {
         toeWidth: Double, shoulderWidth: Double, dMin: Double, vStar: Double,
         shadows: Double = 0, shadowContrast: Double = 0, highlights: Double = 0,
         highlightContrast: Double = 0, vibrance: Double = 1.0, saturation: Double = 1.0,
+        preSaturation: Double = 1.0,
         shadowCMY: SIMD3<Double> = .zero, midCMY: SIMD3<Double> = .zero,
         highlightCMY: SIMD3<Double> = .zero
     ) {
@@ -183,6 +193,7 @@ public struct RenderParams: Equatable, Sendable {
         self.highlightContrast = highlightContrast
         self.vibrance = vibrance
         self.saturation = saturation
+        self.preSaturation = preSaturation
         self.shadowCMY = shadowCMY
         self.midCMY = midCMY
         self.highlightCMY = highlightCMY
@@ -361,6 +372,7 @@ public enum ExposureKernel {
             highlightContrast: settings.highlightContrast,
             vibrance: settings.vibrance,
             saturation: settings.saturation,
+            preSaturation: settings.preSaturation,
             // Band sliders ±1 → ±cmy_max_density print-density offsets
             // (NegPy's shadow/highlight CMY scale, plus a mids band).
             shadowCMY: settings.colorShadows * K.cmyMaxDensity,

@@ -80,10 +80,19 @@ public enum ReferenceCurve {
         let hiShift = params.highlights * K.highlightsMaxShift
         let hiContrast = params.highlightContrast * K.highlightContrastMax
 
+        let preSat = params.preSaturation
         var out = img
         out.pixels.withUnsafeMutableBufferPointer { buf in
             var i = 0
             while i < buf.count {
+                // Pre-saturation: scale density deviations from the per-pixel
+                // neutral (channel mean) before any print decision.
+                if preSat != 1.0 {
+                    let m = (Double(buf[i]) + Double(buf[i + 1]) + Double(buf[i + 2])) / 3.0
+                    for ch in 0..<3 {
+                        buf[i + ch] = Float(m + preSat * (Double(buf[i + ch]) - m))
+                    }
+                }
                 for ch in 0..<3 {
                     let val = Double(buf[i + ch]) + params.cmyOffsets[ch]
                     var v = params.slopes[ch] * (val - params.pivots[ch]) + params.curvatures[ch] * val * val

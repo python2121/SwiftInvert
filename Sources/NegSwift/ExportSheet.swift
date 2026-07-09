@@ -25,6 +25,10 @@ struct ExportSheet: View {
             }
             .pickerStyle(.segmented)
 
+            Picker("Color space", selection: $options.colorSpace) {
+                ForEach(ExportColorSpace.allCases) { Text($0.label).tag($0) }
+            }
+
             if options.format == .jpeg {
                 HStack {
                     Text("Quality")
@@ -48,7 +52,7 @@ struct ExportSheet: View {
                 }
             }
 
-            Text("Files are written next to the source with the format's extension. ROMM RGB profile embedded.")
+            Text("Files are written next to the source with the format's extension; the chosen profile is embedded.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 

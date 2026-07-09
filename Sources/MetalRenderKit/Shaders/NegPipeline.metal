@@ -46,10 +46,12 @@ struct CurveUniforms {
     float shadowContrast;
     float highlightsShift;
     float highlightContrast;
-    // CIELAB chroma ops (1.0 = off) + padding to a 16-byte multiple.
+    // CIELAB chroma ops (1.0 = off).
     float vibrance;
     float saturation;
-    float2 _pad;
+    // Pre-curve density-deviation gain (1.0 = off) + pad to 16-byte multiple.
+    float preSaturation;
+    float _pad;
 };
 
 // Region-mask constants — must match K.toneRegionSharpness / K.*ToneAnchor
@@ -139,6 +141,13 @@ kernel void printCurve(
 ) {
     if (gid.x >= input.get_width() || gid.y >= input.get_height()) { return; }
     float3 color = input.read(gid).rgb;
+
+    // Pre-saturation: scale density deviations from the per-pixel neutral
+    // (channel mean) before any print decision — mirrors ReferenceCurve.
+    if (p.preSaturation != 1.0f) {
+        float m = (color.r + color.g + color.b) / 3.0f;
+        color = float3(m) + p.preSaturation * (color - float3(m));
+    }
 
     const float eps = 1e-6f;
     float a_hl = p.aShBase * p.widthRef / max(p.shoulderWidth, eps);

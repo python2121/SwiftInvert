@@ -41,6 +41,7 @@ enum Fixtures2 {
         #expect(MemoryLayout<CurveUniforms>.offset(of: \.highlightContrast) == 204)
         #expect(MemoryLayout<CurveUniforms>.offset(of: \.vibrance) == 208)
         #expect(MemoryLayout<CurveUniforms>.offset(of: \.saturation) == 212)
+        #expect(MemoryLayout<CurveUniforms>.offset(of: \.preSaturation) == 216)
     }
 }
 
@@ -116,6 +117,7 @@ enum Fixtures2 {
         settings.highlightContrast = 0.6
         settings.vibrance = 1.5
         settings.saturation = 1.3
+        settings.preSaturation = 1.3
         settings.temp = 0.4
         settings.tint = -0.3
         settings.colorShadows = SIMD3(0.5, -0.3, 0.2)
