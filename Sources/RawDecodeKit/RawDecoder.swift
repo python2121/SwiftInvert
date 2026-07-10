@@ -35,7 +35,7 @@ public struct RawDecoder {
     public init() {}
 
     /// Supported RAW file extensions (lowercase), from NegPy's loaders/constants.py
-    /// minus TIFF/JPEG (NegSwift is camera-RAW only).
+    /// minus TIFF/JPEG (SwiftInvert is camera-RAW only).
     public static let rawExtensions: Set<String> = [
         "cr2", "cr3", "crw", "nef", "nrw", "arw", "srf", "sr2", "dng", "raf",
         "rw2", "orf", "pef", "srw", "erf", "kdc", "dcr", "mos", "mrw", "raw",

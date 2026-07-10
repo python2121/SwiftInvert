@@ -4,7 +4,7 @@ import Testing
 @testable import NegativeKit
 
 /// Property tests for the regional tone controls (exposure, shadows/highlights
-/// lift + contrast). These are NegSwift additions with no NegPy fixture — the
+/// lift + contrast). These are SwiftInvert additions with no NegPy fixture — the
 /// contract is: zero = identity (fixture tests), each control acts only in its
 /// region, in the right direction, and keeps the transfer monotone.
 @Suite struct ToneControlsTests {

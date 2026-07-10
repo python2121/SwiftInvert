@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 @main
-struct NegSwiftApp: App {
+struct SwiftInvertApp: App {
     @State private var model = AppModel()
 
     init() {
@@ -13,7 +13,7 @@ struct NegSwiftApp: App {
     }
 
     var body: some Scene {
-        WindowGroup("NegSwift") {
+        WindowGroup("SwiftInvert") {
             ContentView(model: model)
         }
     }

@@ -1,7 +1,7 @@
 #include <metal_stdlib>
 using namespace metal;
 
-// NegSwift render chain, ported from NegPy's WGSL shaders (C-41 path only:
+// SwiftInvert render chain, ported from NegPy's WGSL shaders (C-41 path only:
 // no B&W/E6 modes, no dye mix, no dodge/burn EV map, no crosstalk unmix).
 // Compiled at runtime with MTLDevice.makeLibrary(source:).
 //
@@ -131,7 +131,7 @@ kernel void normalizeLog(
 }
 
 // ── Pass 2: asymmetric H&D print curve → LINEAR reflectance (exposure.wgsl,
-//    minus its trailing oetf_encode — NegSwift keeps the linear/encoded split
+//    minus its trailing oetf_encode — SwiftInvert keeps the linear/encoded split
 //    at the same boundary as NegPy's CPU engine) ─────────────────────────────
 kernel void printCurve(
     texture2d<float, access::read> input [[texture(0)]],

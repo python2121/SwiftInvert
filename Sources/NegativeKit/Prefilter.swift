@@ -99,7 +99,7 @@ public enum Prefilter {
         return out
     }
 
-    /// Full chain: log10 → (roi skipped: NegSwift meters the whole frame) →
+    /// Full chain: log10 → (roi skipped: SwiftInvert meters the whole frame) →
     /// centered buffer crop → block-median grid.
     public static func prefilterLogGrid(_ image: RGBImage, analysisBuffer: Double) -> RGBImage {
         var img = logImage(image)

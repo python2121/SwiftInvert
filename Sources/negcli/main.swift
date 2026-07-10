@@ -8,7 +8,7 @@ import UniformTypeIdentifiers
 func usage() -> Never {
     print(
         """
-        negcli — headless NegSwift pipeline driver
+        negcli — headless SwiftInvert pipeline driver
 
         Usage:
           negcli decode <raw-file> -o <out.tiff> [--preview] [--max-edge N]

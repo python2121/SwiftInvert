@@ -114,13 +114,24 @@ final class AppModel {
     private var isRestoringSettings = false
 
     init() {
+        // One-time migration from the pre-rename defaults domain ("NegSwift"):
+        // unbundled binaries key their preferences by process name.
+        if UserDefaults.standard.object(forKey: "libraryFolder") == nil,
+            let legacy = UserDefaults(suiteName: "NegSwift")
+        {
+            for key in ["libraryFolder", "canvasColor", "exportOptions"] {
+                if let value = legacy.object(forKey: key) {
+                    UserDefaults.standard.set(value, forKey: key)
+                }
+            }
+        }
         // The pipeline must exist before the folder restore: scanFolder sets the
         // selection, whose didSet immediately kicks the first render.
         do {
             pipeline = try RenderPipeline()
         } catch {
             statusMessage = "Metal unavailable: \(error)"
-            NSLog("NegSwift: RenderPipeline init failed: \(error)")
+            NSLog("SwiftInvert: RenderPipeline init failed: \(error)")
         }
         if let path = UserDefaults.standard.string(forKey: "libraryFolder") {
             let url = URL(fileURLWithPath: path)
@@ -206,12 +217,12 @@ final class AppModel {
                     self.displayImage = output.image
                     self.histogram = output.histogram
                     self.statusMessage = nil
-                    NSLog("NegSwift: rendered \(self.selection?.lastPathComponent ?? "?") (\(output.image.width)x\(output.image.height))")
+                    NSLog("SwiftInvert: rendered \(self.selection?.lastPathComponent ?? "?") (\(output.image.width)x\(output.image.height))")
                 } catch {
                     self.isAnalyzing = false
                     if !Task.isCancelled {
                         self.statusMessage = "Render failed: \(error)"
-                        NSLog("NegSwift: render failed for \(self.selection?.lastPathComponent ?? "?"): \(error)")
+                        NSLog("SwiftInvert: render failed for \(self.selection?.lastPathComponent ?? "?"): \(error)")
                     }
                     break
                 }
@@ -329,7 +340,7 @@ final class AppModel {
                     completed += 1
                 } catch {
                     failures += 1
-                    NSLog("NegSwift: export failed for \(url.lastPathComponent): \(error)")
+                    NSLog("SwiftInvert: export failed for \(url.lastPathComponent): \(error)")
                 }
             }
             if Task.isCancelled {

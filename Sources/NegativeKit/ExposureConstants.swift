@@ -2,7 +2,7 @@ import Foundation
 
 /// Verbatim port of NegPy's EXPOSURE_CONSTANTS (negpy/features/exposure/models.py).
 /// C-41-only subset: E6/B&W, flat-master, paper-profile and dodge/burn constants
-/// that NegSwift doesn't use are omitted.
+/// that SwiftInvert doesn't use are omitted.
 public enum K {
     // CMY white-balance sliders: slider ±1 → ±this absolute density.
     public static let cmyMaxDensity = 0.2
@@ -70,7 +70,7 @@ public enum K {
     public static let paperMidtoneGamma = 0.15
     public static let paperGammaWidth = 0.6
 
-    // ── Regional tone controls (NegSwift addition, no NegPy equivalent) ──────
+    // ── Regional tone controls (SwiftInvert addition, no NegPy equivalent) ──────
     // Shadow/highlight lift and per-region contrast operate on print density v
     // (after the curve core + midtone gamma, before regional CMY and the
     // toe/shoulder bounds) with smooth sigmoid region masks:

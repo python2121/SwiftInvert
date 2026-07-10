@@ -1,4 +1,4 @@
-# NegSwift
+# SwiftInvert
 
 A minimal native macOS rewrite of [NegPy](../NegPy)'s film-negative conversion:
 a library of camera-scanned negatives, C-41 conversion with NegPy-quality
@@ -15,7 +15,7 @@ cast removal), and a histogram. Swift + SwiftUI + Metal, no Python at runtime.
 
 ```bash
 swift build
-swift run NegSwift          # the app
+swift run SwiftInvert          # the app
 swift test                  # parity tests against NegPy-dumped fixtures
 .build/debug/negcli         # headless pipeline driver (decode/thumb/render)
 ```
@@ -29,7 +29,7 @@ swift test                  # parity tests against NegPy-dumped fixtures
   curve → ProPhoto ROMM encode → histogram), ported from NegPy's WGSL shaders.
 - `RawDecodeKit` — LibRaw wrapper matching NegPy's rawpy decode parameters
   (linear sensor-native decode, unity WB, EXIF orientation baked after).
-- `NegSwift` — the SwiftUI app. `negcli` — headless CLI for verification.
+- `SwiftInvert` — the SwiftUI app. `negcli` — headless CLI for verification.
 
 ## Parity fixtures
 

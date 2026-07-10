@@ -1,11 +1,11 @@
-"""Dump parity fixtures from the NegPy reference implementation for the NegSwift port.
+"""Dump parity fixtures from the NegPy reference implementation for the SwiftInvert port.
 
 Run from the NegPy repo (needs its environment):
 
     cd /Users/andrewnowicki/Documents/code/NegPy
-    uv run python /Users/andrewnowicki/Documents/code/NegSwift/scripts/dump_fixtures.py
+    uv run python /Users/andrewnowicki/Documents/code/SwiftInvert/scripts/dump_fixtures.py
 
-Outputs to NegSwift/Tests/Fixtures/:
+Outputs to SwiftInvert/Tests/Fixtures/:
   - closed_form.json          scalar oracles for CurveLogic / percentile / OETF
   - ramp257.json              257-sample ramp through the default print curve
   - synthetic64/              64x64 stage-boundary fixtures for 3 exposure configs
@@ -62,7 +62,7 @@ from negpy.features.exposure.processor import NormalizationProcessor, Photometri
 from negpy.features.process.models import ProcessConfig, ProcessMode
 from negpy.kernel.image.logic import working_oetf_decode, working_oetf_encode
 
-OUT = Path("/Users/andrewnowicki/Documents/code/NegSwift/Tests/Fixtures")
+OUT = Path("/Users/andrewnowicki/Documents/code/SwiftInvert/Tests/Fixtures")
 
 
 def dump_bin(path: Path, arr: np.ndarray) -> dict:

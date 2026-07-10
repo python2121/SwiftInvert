@@ -3,7 +3,7 @@ import Testing
 
 @testable import NegativeKit
 
-/// Per-band color balance + Temp/Tint properties (NegSwift additions on the
+/// Per-band color balance + Temp/Tint properties (SwiftInvert additions on the
 /// tone-region masks; zero = identity is covered by the untouched fixtures).
 @Suite struct ColorGradingTests {
     /// Ramp through the print curve with band CMY injected.

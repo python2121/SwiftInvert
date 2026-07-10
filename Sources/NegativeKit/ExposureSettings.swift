@@ -204,7 +204,7 @@ public struct RenderParams: Equatable, Sendable {
 
 public enum ExposureKernel {
     /// Full per-image analysis: prefilter + bounds + all meters. The neutral axis
-    /// is measured against offset bounds; NegSwift re-runs analysis when the
+    /// is measured against offset bounds; SwiftInvert re-runs analysis when the
     /// white/black-point offsets or pre-process rects change (cheap at grid size).
     ///
     /// Region priority mirrors NegPy's resolve_analysis_region: a freehand
@@ -212,7 +212,7 @@ public enum ExposureKernel {
     /// output cropRect scopes the meters (so borders outside the crop can't
     /// throw off the inversion) with the buffer applied inside it.
     /// Default centered inset: 10% per side = the middle 80% of the frame
-    /// (NegSwift default; NegPy ships 5%).
+    /// (SwiftInvert default; NegPy ships 5%).
     public static let defaultAnalysisBuffer = 0.10
 
     /// The expensive, offset-independent half of the analysis: the prefiltered

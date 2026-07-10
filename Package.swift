@@ -4,7 +4,7 @@ import PackageDescription
 let v5 = [SwiftSetting.swiftLanguageMode(.v5)]
 
 let package = Package(
-    name: "NegSwift",
+    name: "SwiftInvert",
     platforms: [.macOS(.v14)],
     targets: [
         .systemLibrary(
@@ -27,7 +27,7 @@ let package = Package(
             swiftSettings: v5
         ),
         .executableTarget(
-            name: "NegSwift",
+            name: "SwiftInvert",
             dependencies: ["RawDecodeKit", "NegativeKit", "MetalRenderKit"],
             swiftSettings: v5
         ),

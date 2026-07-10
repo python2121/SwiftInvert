@@ -15,7 +15,7 @@ test:
 	swift test $(TEST_FLAGS)
 
 run:
-	swift run NegSwift
+	swift run SwiftInvert
 
 release:
 	swift build -c release

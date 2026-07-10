@@ -30,7 +30,7 @@ struct LibraryView: View {
                 }
             }
         }
-        .navigationTitle(model.folderURL?.lastPathComponent ?? "NegSwift")
+        .navigationTitle(model.folderURL?.lastPathComponent ?? "SwiftInvert")
         .toolbar {
             ToolbarItem {
                 Button("Choose Folder…", systemImage: "folder") { model.chooseFolder() }
