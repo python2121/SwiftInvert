@@ -95,9 +95,11 @@ struct ControlsSidebar: View {
                             label: "Pre-saturation", value: $model.settings.preSaturation,
                             range: 0.5...2.0, format: "%.2f", defaultValue: 1.15)
                         Toggle("Auto cast removal", isOn: $model.settings.autoCastRemoval)
+                        // >1 overcorrects past the measured neutral axis; the
+                        // kernel's cast clamps bound it at any strength.
                         LabeledSlider(
                             label: "Cast strength", value: $model.settings.castRemovalStrength,
-                            range: 0...1, format: "%.2f", defaultValue: 0.5)
+                            range: 0...2, format: "%.2f", defaultValue: 0.5)
                         Divider()
                         LabeledSlider(
                             label: "Vibrance", value: $model.settings.vibrance,

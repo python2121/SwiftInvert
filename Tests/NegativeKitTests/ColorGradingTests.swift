@@ -76,6 +76,28 @@ import Testing
         }
     }
 
+    @Test func castStrengthBeyondOneStaysBounded() {
+        // Strength 2 overcorrects harder than 1 but the kernel clamps keep the
+        // per-channel curve sane (slope range, finite pivots/curvatures).
+        var strong = ExposureSettings()
+        strong.castRemovalStrength = 2.0
+        strong.autoCastRemoval = false  // bypass confidence scaling for determinism
+        var mild = ExposureSettings()
+        mild.castRemovalStrength = 0.5
+        mild.autoCastRemoval = false
+        let pStrong = ExposureKernel.deriveRenderParams(strong, SyntheticGrid.analysis)
+        let pMild = ExposureKernel.deriveRenderParams(mild, SyntheticGrid.analysis)
+        var strongerSomewhere = false
+        for ch in [0, 2] {  // red/blue tilt vs green
+            #expect(pStrong.slopes[ch] >= K.slopeMin && pStrong.slopes[ch] <= K.slopeMax)
+            #expect(pStrong.pivots[ch].isFinite && pStrong.curvatures[ch].isFinite)
+            if abs(pStrong.slopes[ch] - pStrong.slopes.y) > abs(pMild.slopes[ch] - pMild.slopes.y) + 1e-9 {
+                strongerSomewhere = true
+            }
+        }
+        #expect(strongerSomewhere, "strength 2 should tilt R/B harder than 0.5")
+    }
+
     @Test func sidecarRoundTripsGrading() throws {
         var s = ExposureSettings()
         s.temp = 0.3
