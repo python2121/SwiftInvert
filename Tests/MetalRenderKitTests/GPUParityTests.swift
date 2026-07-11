@@ -51,6 +51,7 @@ enum Fixtures2 {
         var s = ExposureSettings()
         // NegPy fixtures predate pre-saturation; pin the neutral value.
         s.preSaturation = 1.0
+    s.trueBlack = false  // NegPy default; fixtures dumped without BPC
         s.density = e["density"] as! Double
         s.grade = e["grade"] as! Double
         s.wbCyan = e["wb_cyan"] as! Double

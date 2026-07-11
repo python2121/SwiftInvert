@@ -28,10 +28,10 @@ import Testing
 
     @Test func sidecarRoundTrip() throws {
         var s = ExposureSettings()
-        s.trueBlack = true
+        s.trueBlack = false
         let back = try JSONDecoder().decode(ExposureSettings.self, from: JSONEncoder().encode(s))
         #expect(back == s)
         let legacy = try JSONDecoder().decode(ExposureSettings.self, from: Data("{}".utf8))
-        #expect(legacy.trueBlack == false)
+        #expect(legacy.trueBlack == true)  // sidecars without the key adopt the new default
     }
 }

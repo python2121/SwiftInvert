@@ -19,6 +19,7 @@ func settingsFrom(_ config: [String: Any]) -> ExposureSettings {
     // NegPy fixtures predate pre-saturation (a SwiftInvert-only default of 1.15);
     // parity requires the neutral value.
     s.preSaturation = 1.0
+    s.trueBlack = false  // NegPy default; fixtures dumped without BPC
     s.density = e["density"] as! Double
     s.grade = e["grade"] as! Double
     s.wbCyan = e["wb_cyan"] as! Double

@@ -254,6 +254,7 @@ cases; per-channel crossover trims are a candidate future feature.
 **Deliberate divergences from NegPy** (fixture tests pin the NegPy-neutral
 values where needed):
 - `preSaturation` default **1.15** (NegPy has no equivalent; parity tests set 1.0),
+- `trueBlack` default **on** (NegPy ships it off; parity tests set false),
 - default analysis buffer **0.10** vs NegPy 0.05 (tests pass 0.05 explicitly),
 - NegPy's default lab sharpen (0.25) is not implemented,
 - SwiftInvert-only controls: exposure stops, tone controls

@@ -31,7 +31,8 @@ public struct ExposureSettings: Codable, Equatable, Sendable {
     public var paperDmin: Bool = true
     /// True Black: black point compensation — paper Dmax maps to display black
     /// (relative-colorimetric style; without it paper black floats at ~0.5%).
-    public var trueBlack: Bool = false
+    /// Default ON (SwiftInvert divergence: NegPy ships it off).
+    public var trueBlack: Bool = true
 
     // Regional tone controls (see K.toneRegionSharpness block). Lightroom sign
     // conventions: shadows +1 lifts shadows; highlights −1 brings highlights
@@ -105,7 +106,7 @@ public struct ExposureSettings: Codable, Equatable, Sendable {
         shoulder = d(.shoulder, 0)
         shoulderWidth = d(.shoulderWidth, 2.5)
         paperDmin = b(.paperDmin, true)
-        trueBlack = b(.trueBlack, false)
+        trueBlack = b(.trueBlack, true)
         exposureStops = d(.exposureStops, 0)
         shadows = d(.shadows, 0)
         shadowContrast = d(.shadowContrast, 0)
