@@ -150,7 +150,8 @@ def run_pipeline(img: np.ndarray, exposure: ExposureConfig, out_dir: Path, dump_
     final_bounds = ctx.metrics["final_bounds"]
     neutral_axis_refs = ctx.metrics.get("neutral_axis_refs")
     confidence = neutral_axis_refs[3] if neutral_axis_refs is not None else None
-    strength = effective_cast_strength(exposure.cast_removal_strength, exposure.auto_cast_removal, confidence)
+    # NegPy >=0.36: confidence scaling is always applied (auto toggle removed).
+    strength = effective_cast_strength(exposure.cast_removal_strength, confidence)
     slopes, pivots, curvatures = per_channel_curve_params(
         exposure.grade,
         exposure.density,
@@ -173,7 +174,7 @@ def run_pipeline(img: np.ndarray, exposure: ExposureConfig, out_dir: Path, dump_
             "density": exposure.density, "grade": exposure.grade,
             "wb_cyan": exposure.wb_cyan, "wb_magenta": exposure.wb_magenta, "wb_yellow": exposure.wb_yellow,
             "auto_exposure": exposure.auto_exposure, "auto_normalize_contrast": exposure.auto_normalize_contrast,
-            "cast_removal_strength": exposure.cast_removal_strength, "auto_cast_removal": exposure.auto_cast_removal,
+            "cast_removal_strength": exposure.cast_removal_strength,
             "toe": exposure.toe, "toe_width": exposure.toe_width,
             "shoulder": exposure.shoulder, "shoulder_width": exposure.shoulder_width,
             "paper_dmin": exposure.paper_dmin,
@@ -296,8 +297,8 @@ def dump_closed_form() -> None:
             for s, t, sh in [(2.0, 0.0, 0.0), (3.2653, 0.0, 0.0), (10.0, 0.0, 0.0), (5.0, 0.5, -0.3)]
         ],
         "effective_cast_strength": [
-            {"strength": s, "auto": a, "confidence": c, "out": jsonable(effective_cast_strength(s, a, c))}
-            for s, a, c in [(0.5, True, 0.8), (0.5, True, None), (0.5, False, 0.8), (0.9, True, 0.2)]
+            {"strength": s, "confidence": c, "out": jsonable(effective_cast_strength(s, c))}
+            for s, c in [(0.5, 0.8), (0.5, None), (0.9, 0.2), (2.0, 0.7)]
         ],
         "working_oetf": [
             {"x": x, "enc": jsonable(float(working_oetf_encode(np.float32(x)))),

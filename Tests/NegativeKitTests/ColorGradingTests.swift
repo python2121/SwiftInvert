@@ -79,12 +79,12 @@ import Testing
     @Test func castStrengthBeyondOneStaysBounded() {
         // Strength 2 overcorrects harder than 1 but the kernel clamps keep the
         // per-channel curve sane (slope range, finite pivots/curvatures).
+        // Confidence scaling is always on (NegPy 0.36); both settings share the
+        // same fixture confidence, so the strength comparison stays deterministic.
         var strong = ExposureSettings()
         strong.castRemovalStrength = 2.0
-        strong.autoCastRemoval = false  // bypass confidence scaling for determinism
         var mild = ExposureSettings()
         mild.castRemovalStrength = 0.5
-        mild.autoCastRemoval = false
         let pStrong = ExposureKernel.deriveRenderParams(strong, SyntheticGrid.analysis)
         let pMild = ExposureKernel.deriveRenderParams(mild, SyntheticGrid.analysis)
         var strongerSomewhere = false

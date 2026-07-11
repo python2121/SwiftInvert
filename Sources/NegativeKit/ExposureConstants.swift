@@ -27,8 +27,11 @@ public enum K {
     public static let toeSharpnessBase = 4.0
     public static let shoulderSharpnessBase = 3.0
     public static let toeShoulderWidthRef = 2.5
-    // Density shift per toe/shoulder slider unit.
-    public static let toeHeight = 0.35
+    // Density shift per toe/shoulder slider unit. toeHeight is larger than
+    // shoulderHeight (NegPy 0.36 recalibration): density is log10, so a ΔD
+    // near d_max reads perceptually far smaller than the same ΔD near d_min —
+    // 0.90 evens out toe vs shoulder slider strength in L*.
+    public static let toeHeight = 0.90
     public static let shoulderHeight = 0.35
     // Grade → slope calibration: k = scale * densityRange / (ISO R / 100).
     public static let gradeContrastScale = 2.9
@@ -54,16 +57,16 @@ public enum K {
     public static let anchorMeterPercentile = 50.0
     public static let anchorMeterBand = 0.12
     public static let anchorMeterStrength = 0.2
-    // Grade-coupled knees.
-    public static let toeGradeStrength = 0.15
+    // Grade-coupled knees. toeGradeStrength is rescaled by 0.35/0.90 so the
+    // grade-coupled baseline ΔD (strength · toeHeight) keeps its calibrated
+    // value after the perceptual toeHeight change — default output unchanged
+    // (mirrors NegPy 0.36).
+    public static let toeGradeStrength = 0.15 * 0.35 / 0.90
     public static let shoulderGradeStrength = 0.12
     // Auto grade.
     public static let autoGradeTarget = 0.5
     public static let autoGradeStrength = 0.4
     public static let autoGradeNominalRatio = 2.0
-    // Dim-surround gamma / veiling flare (optional toggles).
-    public static let targetSystemGamma = 1.10
-    public static let flareFraction = 0.005
     // Textural-range percentile margin.
     public static let texturalRangeClip = 10.0
     // Variable-gamma paper S-curve.

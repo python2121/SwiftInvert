@@ -88,7 +88,7 @@ import Testing
         }
         for c in try cases("effective_cast_strength") {
             let got = CurveLogic.effectiveCastStrength(
-                c["strength"] as! Double, auto: c["auto"] as! Bool, confidence: c["confidence"] as? Double)
+                c["strength"] as! Double, confidence: c["confidence"] as? Double)
             expectClose(got, c["out"] as! Double, accuracy: 1e-9, "\(c)")
         }
     }

@@ -17,8 +17,8 @@ public struct ExposureSettings: Codable, Equatable, Sendable {
     /// Auto grade: adapt slope to the measured textural range.
     public var autoNormalizeContrast: Bool = true
     /// C-41 gray balance (orange-mask cancel).
+    /// Always confidence-scaled (NegPy 0.36 removed the auto toggle).
     public var castRemovalStrength: Double = 0.5
-    public var autoCastRemoval: Bool = true
     /// Histogram edge handles (log-density offsets on the analyzed bounds).
     public var whitePointOffset: Double = 0
     public var blackPointOffset: Double = 0
@@ -29,6 +29,9 @@ public struct ExposureSettings: Codable, Equatable, Sendable {
     public var shoulderWidth: Double = 2.5
     /// Paper white floor on (NegPy paper_dmin, d_min = 0.06).
     public var paperDmin: Bool = true
+    /// True Black: black point compensation — paper Dmax maps to display black
+    /// (relative-colorimetric style; without it paper black floats at ~0.5%).
+    public var trueBlack: Bool = false
 
     // Regional tone controls (see K.toneRegionSharpness block). Lightroom sign
     // conventions: shadows +1 lifts shadows; highlights −1 brings highlights
@@ -95,7 +98,6 @@ public struct ExposureSettings: Codable, Equatable, Sendable {
         autoExposure = b(.autoExposure, true)
         autoNormalizeContrast = b(.autoNormalizeContrast, true)
         castRemovalStrength = d(.castRemovalStrength, 0.5)
-        autoCastRemoval = b(.autoCastRemoval, true)
         whitePointOffset = d(.whitePointOffset, 0)
         blackPointOffset = d(.blackPointOffset, 0)
         toe = d(.toe, 0)
@@ -103,6 +105,7 @@ public struct ExposureSettings: Codable, Equatable, Sendable {
         shoulder = d(.shoulder, 0)
         shoulderWidth = d(.shoulderWidth, 2.5)
         paperDmin = b(.paperDmin, true)
+        trueBlack = b(.trueBlack, false)
         exposureStops = d(.exposureStops, 0)
         shadows = d(.shadows, 0)
         shadowContrast = d(.shadowContrast, 0)
@@ -163,6 +166,8 @@ public struct RenderParams: Equatable, Sendable {
     public var saturation: Double = 1.0
     /// Pre-curve density-deviation gain (1.0 = off).
     public var preSaturation: Double = 1.0
+    /// Black point compensation (paper Dmax → display black).
+    public var trueBlack: Bool = false
     // Per-band CMY density offsets (already scaled to density units).
     public var shadowCMY: SIMD3<Double> = .zero
     public var midCMY: SIMD3<Double> = .zero
@@ -174,7 +179,7 @@ public struct RenderParams: Equatable, Sendable {
         toeWidth: Double, shoulderWidth: Double, dMin: Double, vStar: Double,
         shadows: Double = 0, shadowContrast: Double = 0, highlights: Double = 0,
         highlightContrast: Double = 0, vibrance: Double = 1.0, saturation: Double = 1.0,
-        preSaturation: Double = 1.0,
+        preSaturation: Double = 1.0, trueBlack: Bool = false,
         shadowCMY: SIMD3<Double> = .zero, midCMY: SIMD3<Double> = .zero,
         highlightCMY: SIMD3<Double> = .zero
     ) {
@@ -196,6 +201,7 @@ public struct RenderParams: Equatable, Sendable {
         self.vibrance = vibrance
         self.saturation = saturation
         self.preSaturation = preSaturation
+        self.trueBlack = trueBlack
         self.shadowCMY = shadowCMY
         self.midCMY = midCMY
         self.highlightCMY = highlightCMY
@@ -295,7 +301,7 @@ public enum ExposureKernel {
         let dMin = settings.paperDmin ? K.dMin : 0.0
         let anchor = settings.autoExposure ? analysis.anchor : nil
         let strength = CurveLogic.effectiveCastStrength(
-            settings.castRemovalStrength, auto: settings.autoCastRemoval, confidence: analysis.neutralConfidence)
+            settings.castRemovalStrength, confidence: analysis.neutralConfidence)
 
         var neutralAxisNorm: (mid: SIMD3<Double>, shadow: SIMD3<Double>, highlight: SIMD3<Double>?)?
         if let mid = analysis.neutralMid, let shadow = analysis.neutralShadow {
@@ -379,6 +385,7 @@ public enum ExposureKernel {
             vibrance: settings.vibrance,
             saturation: settings.saturation,
             preSaturation: settings.preSaturation,
+            trueBlack: settings.trueBlack,
             // Band sliders ±1 → ±cmy_max_density print-density offsets
             // (NegPy's shadow/highlight CMY scale, plus a mids band).
             shadowCMY: settings.colorShadows * K.cmyMaxDensity,

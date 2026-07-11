@@ -32,8 +32,8 @@ public struct CurveUniforms {
     public var toeHeight: Float
     public var shHeight: Float
     public var zoneCenter: Float
-    public var flare: Float
-    public var surroundGamma: Float
+    public var trueBlack: Float
+    public var _reserved0: Float = 0
     public var vStar: Float
     public var midtoneGamma: Float
     public var gammaWidth: Float
@@ -85,8 +85,7 @@ public enum UniformsBuilder {
             toeHeight: Float(K.toeHeight),
             shHeight: Float(K.shoulderHeight),
             zoneCenter: Float(K.anchorTargetDensity),
-            flare: 0,
-            surroundGamma: 1.0,
+            trueBlack: params.trueBlack ? 1 : 0,
             vStar: Float(params.vStar),
             midtoneGamma: Float(K.paperMidtoneGamma),
             gammaWidth: Float(K.paperGammaWidth),

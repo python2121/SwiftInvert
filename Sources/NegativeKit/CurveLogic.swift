@@ -99,9 +99,11 @@ public enum CurveLogic {
         return out
     }
 
-    /// effective_cast_strength: auto biases the slider by neutral-set confidence.
-    public static func effectiveCastStrength(_ strength: Double, auto: Bool, confidence: Double?) -> Double {
-        if auto, let confidence { return confidence * strength }
+    /// effective_cast_strength: the neutral-set confidence always biases the
+    /// slider (NegPy 0.36 dropped the auto toggle — clean greys get full
+    /// strength, ambiguous frames get gentler correction).
+    public static func effectiveCastStrength(_ strength: Double, confidence: Double?) -> Double {
+        if let confidence { return confidence * strength }
         return strength
     }
 

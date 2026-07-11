@@ -94,7 +94,6 @@ struct ControlsSidebar: View {
                         LabeledSlider(
                             label: "Pre-saturation", value: $model.settings.preSaturation,
                             range: 0.5...2.0, format: "%.2f", defaultValue: 1.15)
-                        Toggle("Auto cast removal", isOn: $model.settings.autoCastRemoval)
                         // >1 overcorrects past the measured neutral axis; the
                         // kernel's cast clamps bound it at any strength.
                         LabeledSlider(
@@ -121,6 +120,8 @@ struct ControlsSidebar: View {
                         LabeledSlider(
                             label: "Shoulder", value: $model.settings.shoulder, range: -1...1,
                             format: "%.2f", defaultValue: 0)
+                        Toggle("True black", isOn: $model.settings.trueBlack)
+                            .help("Map paper Dmax to display black (black point compensation)")
                         LabeledSlider(
                             label: "White point", value: $model.settings.whitePointOffset,
                             range: -0.3...0.3, format: "%.3f", defaultValue: 0)

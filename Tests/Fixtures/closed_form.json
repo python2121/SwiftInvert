@@ -3,6 +3,9 @@
   "cmy_max_density": 0.2,
   "density_multiplier": 0.2,
   "anchor_target_density": 0.74,
+  "zone_density_sharpness": 4.0,
+  "zone_density_shadow_offset": 0.75,
+  "zone_density_highlight_offset": -0.4,
   "assumed_anchor": 0.46,
   "iso_r_min": 50.0,
   "iso_r_max": 180.0,
@@ -14,7 +17,7 @@
   "toe_sharpness_base": 4.0,
   "shoulder_sharpness_base": 3.0,
   "toeshoulder_width_ref": 2.5,
-  "toe_height": 0.35,
+  "toe_height": 0.9,
   "shoulder_height": 0.35,
   "grade_contrast_scale": 2.9,
   "analysis_grid": 1024,
@@ -44,14 +47,12 @@
   "anchor_meter_percentile": 50.0,
   "anchor_meter_band": 0.12,
   "anchor_meter_strength": 0.2,
-  "toe_grade_strength": 0.15,
+  "toe_grade_strength": 0.05833333333333333,
   "shoulder_grade_strength": 0.12,
   "auto_grade_target": 0.5,
   "auto_grade_strength": 0.4,
   "auto_grade_nominal_ratio": 2.0,
-  "target_system_gamma": 1.1,
   "textural_range_clip": 10.0,
-  "flare_fraction": 0.005,
   "flat_log_gain": 0.65,
   "flat_log_lift": 0.1,
   "paper_midtone_gamma": 0.15,
@@ -371,7 +372,7 @@
    "toe": 0.0,
    "shoulder": 0.0,
    "out": [
-    0.023724374999999995,
+    0.009226145833333331,
     0.018979499999999996
    ]
   },
@@ -380,7 +381,7 @@
    "toe": 0.0,
    "shoulder": 0.0,
    "out": [
-    0.15,
+    0.05833333333333333,
     0.12
    ]
   },
@@ -389,7 +390,7 @@
    "toe": 0.5,
    "shoulder": -0.3,
    "out": [
-    0.55625,
+    0.521875,
     -0.255
    ]
   }
@@ -397,27 +398,23 @@
  "effective_cast_strength": [
   {
    "strength": 0.5,
-   "auto": true,
    "confidence": 0.8,
    "out": 0.4
   },
   {
    "strength": 0.5,
-   "auto": true,
    "confidence": null,
    "out": 0.5
   },
   {
-   "strength": 0.5,
-   "auto": false,
-   "confidence": 0.8,
-   "out": 0.5
-  },
-  {
    "strength": 0.9,
-   "auto": true,
    "confidence": 0.2,
    "out": 0.18000000000000002
+  },
+  {
+   "strength": 2.0,
+   "confidence": 0.7,
+   "out": 1.4
   }
  ],
  "working_oetf": [

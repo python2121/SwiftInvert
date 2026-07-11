@@ -138,8 +138,9 @@ GPU uniform payload. Order matters:
 
 1. `finalBounds = baseBounds + (wp, bp)` offsets (floors+wp, ceils+bp).
 2. `dMin = paperDmin ? 0.06 : 0`; `anchor = autoExposure ? metered : nil`.
-3. `strength = autoCastRemoval ? confidence × slider : slider` (slider 0–2;
-   >1 overcorrects past the neutral axis; kernel clamps bound any value).
+3. `strength = confidence × slider` — confidence scaling is always on
+   (NegPy 0.36 removed the auto toggle; slider 0–2, >1 overcorrects past the
+   neutral axis; kernel clamps bound any value).
 4. **`perChannelCurveParams`** (`CurveLogic`, the C-41 gray-balance heart) —
    NegPy-exact. Green is the reference (its pivot rides the anchor). Modes:
    - *Neutral-axis* (default): R/B fitted to green's axis — quadratic through
@@ -186,8 +187,10 @@ One command buffer, passes in order (`RenderPipeline.render` /
       **3-band color** (same masks, `wM = max(1−wS−wH,0)`; NegPy's 2-band
       regional CMY generalized) → shoulder softplus toward `d_min_eff`
       (paper white) → toe softplus toward `d_max_eff` (paper black).
-   c. `t = 10^−D`, optional surround/flare (off in v1), clamp [0,1] →
-      **linear reflectance** out.
+   c. `t = 10^−D`; **True Black** (BPC, optional): `t → (t−b)/(1−b)` with
+      `b = 10^−dMax` referenced to the *physical* d_max so toe lifts survive
+      (negative toe raises the clip point); clamp [0,1] → **linear
+      reflectance** out.
 3. **`colorPop`** (dispatched ONLY when vibrance/saturation ≠ 1) — CIELAB
    (ProPhoto primaries, D50; matrices duplicated in MSL and
    `LabColor.swift` — keep in sync) vibrance (muted-chroma boost, /60
@@ -240,6 +243,13 @@ verifies every stage boundary:
   CIELAB ops),
 - GPU vs fixtures and GPU vs CPU reference at NegPy's own gates (mean<0.01,
   max<0.04); the rgba8 display path within 1.5/255 of the float path.
+
+Kernel constants are synced with **NegPy 0.36** (`toe_height` 0.90 with the
+`toe_grade_strength` rescale, True Black, always-confidence cast removal);
+fixtures were re-dumped from that revision. NegPy's per-layer R/G/B trims,
+Split Grade and Zone Density (their convergent take on our tone controls)
+are NOT ported — our tone controls + 3-band grading cover the achromatic
+cases; per-channel crossover trims are a candidate future feature.
 
 **Deliberate divergences from NegPy** (fixture tests pin the NegPy-neutral
 values where needed):

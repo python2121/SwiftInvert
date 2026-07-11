@@ -37,9 +37,7 @@ public enum ReferenceCurve {
     /// color balance). Input normalized log; output linear reflectance in [0, 1].
     public static func applyPrintCurve(
         _ img: RGBImage,
-        params: RenderParams,
-        flare: Double = 0,
-        surroundGamma: Double = 1.0
+        params: RenderParams
     ) -> RGBImage {
         let eps = 1e-6
         let toe = params.toeEff * K.toeShoulderStrength
@@ -56,7 +54,7 @@ public enum ReferenceCurve {
 
         // Neutral paper: d_min_rgb is uniform.
         let dMinRGB = SIMD3<Double>(repeating: max(params.dMin, 0))
-        var dMinEff = SIMD3<Double>(), dMaxEff = SIMD3<Double>(), flareWhite = SIMD3<Double>()
+        var dMinEff = SIMD3<Double>(), dMaxEff = SIMD3<Double>()
         for ch in 0..<3 {
             var dmn = dMinRGB[ch] + shoulder * K.shoulderHeight
             if dmn < 0 { dmn = 0 }
@@ -64,8 +62,13 @@ public enum ReferenceCurve {
             if dmx < dmn + 0.1 { dmx = dmn + 0.1 }
             dMinEff[ch] = dmn
             dMaxEff[ch] = dmx
-            flareWhite[ch] = pow(10.0, -dMinRGB[ch])
         }
+        // True Black (BPC) references the PHYSICAL d_max (not d_max_eff) so toe
+        // lifts survive; a negative toe raises the clip point — the softplus
+        // bound reaches d_max only asymptotically (mirrors NegPy 0.36).
+        var bpcDb = K.dMax
+        if toe < 0 { bpcDb = K.dMax + toe * K.toeHeight }
+        let bpcBlack = pow(10.0, -bpcDb)
 
         let midtoneGamma = K.paperMidtoneGamma
         let gammaWidth = K.paperGammaWidth
@@ -120,14 +123,10 @@ public enum ReferenceCurve {
                     }
 
                     let v1 = dMinEff[ch] + CurveLogic.softplus(aHl * (v - dMinEff[ch])) / aHl
-                    var density = dMaxEff[ch] - CurveLogic.softplus(aSh * (dMaxEff[ch] - v1)) / aSh
-
-                    if surroundGamma != 1.0 {
-                        density = dMinRGB[ch] + surroundGamma * (density - dMinRGB[ch])
-                    }
+                    let density = dMaxEff[ch] - CurveLogic.softplus(aSh * (dMaxEff[ch] - v1)) / aSh
                     var t = pow(10.0, -density)
-                    if flare != 0 {
-                        t = (t + flare * flareWhite[ch]) / (1.0 + flare)
+                    if params.trueBlack {
+                        t = (t - bpcBlack) / (1.0 - bpcBlack)
                     }
                     buf[i + ch] = Float(min(max(t, 0.0), 1.0))
                 }

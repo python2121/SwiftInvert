@@ -36,8 +36,10 @@ struct CurveUniforms {
     float toeHeight;
     float shHeight;
     float zoneCenter;
-    float flare;
-    float surroundGamma;
+    // True Black (BPC) flag (0/1) + reserved lane (ex-flare/surround slots,
+    // keeps the layout stable).
+    float trueBlack;
+    float _reserved0;
     float vStar;
     float midtoneGamma;
     float gammaWidth;
@@ -157,7 +159,11 @@ kernel void printCurve(
     float3 d_min_eff = max(d_min_rgb + float3(p.shoulder * p.shHeight), float3(0.0f));
     float d_max_base = p.toe >= 0.0f ? p.dMax - p.toe * p.toeHeight : p.dMax;
     float3 d_max_eff = max(float3(d_max_base), d_min_eff + float3(0.1f));
-    float3 flare_white = pow(float3(10.0f), -d_min_rgb);
+    // True Black (BPC) references the PHYSICAL d_max so toe lifts survive;
+    // negative toe raises the clip point (softplus reaches d_max only
+    // asymptotically) — mirrors ReferenceCurve/NegPy 0.36.
+    float bpc_db = p.toe < 0.0f ? p.dMax + p.toe * p.toeHeight : p.dMax;
+    float bpc_black = pow(10.0f, -bpc_db);
     bool hasBandCMY = any(p.shadowCMY.xyz != 0.0f) || any(p.midCMY.xyz != 0.0f)
         || any(p.highlightCMY.xyz != 0.0f);
 
@@ -193,13 +199,9 @@ kernel void printCurve(
         dens[ch] = d_max_eff[ch] - softplus(a_sh * (d_max_eff[ch] - v1)) / a_sh;
     }
 
-    float3 density = dens;
-    if (p.surroundGamma != 1.0f) {
-        density = d_min_rgb + p.surroundGamma * (density - d_min_rgb);
-    }
-    float3 transmittance = pow(float3(10.0f), -density);
-    if (p.flare != 0.0f) {
-        transmittance = (transmittance + p.flare * flare_white) / (1.0f + p.flare);
+    float3 transmittance = pow(float3(10.0f), -dens);
+    if (p.trueBlack != 0.0f) {
+        transmittance = (transmittance - bpc_black) / (1.0f - bpc_black);
     }
     output.write(float4(clamp(transmittance, float3(0.0f), float3(1.0f)), 1.0f), gid);
 }

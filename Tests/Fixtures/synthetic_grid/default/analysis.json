@@ -8,7 +8,6 @@
   "auto_exposure": true,
   "auto_normalize_contrast": true,
   "cast_removal_strength": 0.5,
-  "auto_cast_removal": true,
   "toe": 0.0,
   "toe_width": 2.5,
   "shoulder": 0.0,
@@ -91,7 +90,7 @@
    0.0,
    0.0
   ],
-  "toe_eff": 0.011795755898123969,
+  "toe_eff": 0.004587238404825987,
   "shoulder_eff": 0.009436604718499175,
   "cast_strength": 0.47964944158281597,
   "d_min": 0.06,

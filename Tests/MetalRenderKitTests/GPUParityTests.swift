@@ -59,8 +59,7 @@ enum Fixtures2 {
         s.autoExposure = e["auto_exposure"] as! Bool
         s.autoNormalizeContrast = e["auto_normalize_contrast"] as! Bool
         s.castRemovalStrength = e["cast_removal_strength"] as! Double
-        s.autoCastRemoval = e["auto_cast_removal"] as! Bool
-        s.toe = e["toe"] as! Double
+            s.toe = e["toe"] as! Double
         s.toeWidth = e["toe_width"] as! Double
         s.shoulder = e["shoulder"] as! Double
         s.shoulderWidth = e["shoulder_width"] as! Double
@@ -120,6 +119,7 @@ enum Fixtures2 {
         settings.vibrance = 1.5
         settings.saturation = 1.3
         settings.preSaturation = 1.3
+        settings.trueBlack = true
         settings.temp = 0.4
         settings.tint = -0.3
         settings.colorShadows = SIMD3(0.5, -0.3, 0.2)

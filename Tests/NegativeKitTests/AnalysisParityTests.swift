@@ -27,7 +27,6 @@ func settingsFrom(_ config: [String: Any]) -> ExposureSettings {
     s.autoExposure = e["auto_exposure"] as! Bool
     s.autoNormalizeContrast = e["auto_normalize_contrast"] as! Bool
     s.castRemovalStrength = e["cast_removal_strength"] as! Double
-    s.autoCastRemoval = e["auto_cast_removal"] as! Bool
     s.toe = e["toe"] as! Double
     s.toeWidth = e["toe_width"] as! Double
     s.shoulder = e["shoulder"] as! Double
