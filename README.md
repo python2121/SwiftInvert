@@ -36,3 +36,9 @@ swift test                  # parity tests against NegPy-dumped fixtures
 `Tests/Fixtures/` is dumped from the NegPy reference implementation by
 `scripts/dump_fixtures.py` (run inside NegPy's environment; see the script
 docstring). Swift tests verify each stage boundary against them.
+
+## License
+
+SwiftInvert is licensed under the [GNU General Public License v3.0](LICENSE).
+LibRaw is used under its LGPL-2.1 option via dynamic linking (LGPL-2.1 §3
+permits GPL conversion, making it GPL-3.0-compatible).
