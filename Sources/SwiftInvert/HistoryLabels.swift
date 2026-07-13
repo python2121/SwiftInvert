@@ -41,6 +41,7 @@ func historyLabel(from a: ExposureSettings, to b: ExposureSettings) -> String {
     add("Paper white", a.paperDmin != b.paperDmin, b.paperDmin ? "on" : "off")
     add("True black", a.trueBlack != b.trueBlack, b.trueBlack ? "on" : "off")
     add("Rotate", a.rotation != b.rotation)
+    add("Fine rotation", a.fineRotation != b.fineRotation, num(b.fineRotation, "%.1f°"))
     add("Flip", a.flipHorizontal != b.flipHorizontal)
     add(b.cropRect == nil ? "Crop cleared" : "Crop", a.cropRect != b.cropRect)
     add(b.analysisRect == nil ? "Analysis region cleared" : "Analysis region", a.analysisRect != b.analysisRect)

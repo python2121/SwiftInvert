@@ -4,6 +4,9 @@ import SwiftUI
 struct DetailView: View {
     @Bindable var model: AppModel
 
+    @AppStorage("showGridLines") private var showGridLines = false
+    @AppStorage("gridLineType") private var gridLineType = GridLineType.thirds.rawValue
+
     @State private var zoom: CGFloat = 1
     @State private var baseZoom: CGFloat = 1
     @State private var pan: CGSize = .zero
@@ -156,13 +159,20 @@ struct DetailView: View {
             let fitted = fittedRect(
                 imageSize: CGSize(width: image.width, height: image.height), in: geo.size)
             ZStack {
-                Image(decorative: image, scale: 1.0)
-                    .resizable()
-                    .interpolation(.high)
-                    .frame(width: fitted.width, height: fitted.height)
-                    .scaleEffect(zoom)
-                    .offset(pan)
-                    .position(x: geo.size.width / 2, y: geo.size.height / 2)
+                ZStack {
+                    Image(decorative: image, scale: 1.0)
+                        .resizable()
+                        .interpolation(.high)
+                    if showGridLines, model.toolMode == .none,
+                        let type = GridLineType(rawValue: gridLineType)
+                    {
+                        GridOverlay(type: type)
+                    }
+                }
+                .frame(width: fitted.width, height: fitted.height)
+                .scaleEffect(zoom)
+                .offset(pan)
+                .position(x: geo.size.width / 2, y: geo.size.height / 2)
 
                 if model.toolMode != .none {
                     SelectionOverlay(frame: fitted, existing: existingRect) { rect in

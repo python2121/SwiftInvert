@@ -41,6 +41,8 @@ struct ControlsSidebar: View {
                 Spacer(minLength: 0)
             }
 
+            Divider()
+            CropRotationSection(model: model)
             SectionResizeHandle(height: $historyHeight, range: 90...520)
             HistoryPanel(model: model, listHeight: historyHeight)
         }
@@ -57,10 +59,6 @@ struct ControlsSidebar: View {
                             "Crop for Analysis", mode: .analysisRegion,
                             isSet: model.settings.analysisRect != nil,
                             clear: { model.settings.analysisRect = nil })
-                        toolRow(
-                            "Crop", mode: .crop,
-                            isSet: model.settings.cropRect != nil,
-                            clear: { model.settings.cropRect = nil })
                         if model.toolMode != .none {
                             Text("Drag on the image to select the area.")
                                 .font(.caption2)

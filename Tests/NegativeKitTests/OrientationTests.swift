@@ -54,13 +54,44 @@ import Testing
         #expect(img.oriented(rotationCW: 360, flipHorizontal: false).pixels == img.pixels)
     }
 
+    @Test func fineRotationZeroIsIdentity() {
+        let img = SyntheticGrid.input
+        let out = img.oriented(rotationCW: 0, flipHorizontal: false, fineRotation: 0)
+        #expect(out.pixels == img.pixels)
+    }
+
+    @Test func fineRotationCropsToInscribedRect() {
+        let img = SyntheticGrid.input  // 1600×1066
+        let degrees = 3.5
+        let out = img.fineRotated(degrees: degrees)
+        let expected = RGBImage.inscribedRectSize(
+            width: Double(img.width), height: Double(img.height),
+            radians: degrees * .pi / 180)
+        #expect(abs(Double(out.width) - expected.width) <= 1.0, "width \(out.width) vs \(expected.width)")
+        #expect(abs(Double(out.height) - expected.height) <= 1.0, "height \(out.height) vs \(expected.height)")
+        // Smaller than the source in both dimensions (corners cropped away).
+        #expect(out.width < img.width && out.height < img.height)
+    }
+
+    @Test func fineRotationOfUniformImageStaysUniform() {
+        var img = RGBImage(width: 300, height: 200)
+        for i in 0..<img.pixels.count { img.pixels[i] = 0.42 }
+        let out = img.fineRotated(degrees: -7.3)
+        // Bilinear resampling of a constant field is exact; no empty corners
+        // may leak in (they'd show as 0).
+        for v in out.pixels {
+            #expect(abs(v - 0.42) < 1e-5)
+        }
+    }
+
     @Test func sidecarRoundTripsOrientation() throws {
         var s = ExposureSettings()
         s.rotation = 270
         s.flipHorizontal = true
+        s.fineRotation = -2.4
         let back = try JSONDecoder().decode(ExposureSettings.self, from: JSONEncoder().encode(s))
         #expect(back == s)
         let legacy = try JSONDecoder().decode(ExposureSettings.self, from: Data("{}".utf8))
-        #expect(legacy.rotation == 0 && legacy.flipHorizontal == false)
+        #expect(legacy.rotation == 0 && legacy.flipHorizontal == false && legacy.fineRotation == 0)
     }
 }

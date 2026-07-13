@@ -72,7 +72,7 @@ public struct RGBImage: @unchecked Sendable {
 
     /// User orientation: rotation in clockwise 90° steps, then an optional
     /// horizontal flip (applied in display space, after the rotation).
-    public func oriented(rotationCW: Int, flipHorizontal: Bool) -> RGBImage {
+    public func oriented(rotationCW: Int, flipHorizontal: Bool, fineRotation: Double = 0) -> RGBImage {
         var img = self
         switch ((rotationCW % 360) + 360) % 360 {
         case 90: img = img.applyingFlip(6)
@@ -81,7 +81,74 @@ public struct RGBImage: @unchecked Sendable {
         default: break
         }
         if flipHorizontal { img = img.flippedHorizontally() }
+        if abs(fineRotation) > 0.005 { img = img.fineRotated(degrees: fineRotation) }
         return img
+    }
+
+    /// Largest axis-aligned rectangle (maximal area) inscribed in a w×h image
+    /// rotated by `radians` — the standard straighten auto-crop.
+    public static func inscribedRectSize(width w: Double, height h: Double, radians: Double)
+        -> (width: Double, height: Double)
+    {
+        let sinA = abs(sin(radians)), cosA = abs(cos(radians))
+        let longSide = max(w, h), shortSide = min(w, h)
+        if shortSide <= 2 * sinA * cosA * longSide || abs(sinA - cosA) < 1e-10 {
+            // Half-constrained: opposite corners touch the long sides.
+            let x = 0.5 * shortSide
+            return w >= h ? (x / sinA, x / cosA) : (x / cosA, x / sinA)
+        }
+        let cos2A = cosA * cosA - sinA * sinA
+        return ((w * cosA - h * sinA) / cos2A, (h * cosA - w * sinA) / cos2A)
+    }
+
+    /// Arbitrary-angle rotation (clockwise-positive, display space), bilinear
+    /// resampled and auto-cropped to the largest inscribed rectangle so no
+    /// empty corners exist — keeps the analysis meters and display clean.
+    public func fineRotated(degrees: Double) -> RGBImage {
+        let radians = degrees * .pi / 180
+        guard abs(radians) > 1e-6 else { return self }
+        let w = Double(width), h = Double(height)
+        let inscribed = Self.inscribedRectSize(width: w, height: h, radians: radians)
+        let ow = max(Int(inscribed.width.rounded(.down)), 1)
+        let oh = max(Int(inscribed.height.rounded(.down)), 1)
+
+        var out = RGBImage(width: ow, height: oh)
+        // Clockwise visual rotation in y-down coordinates: sample the source
+        // through the inverse rotation about both centers.
+        let cs = cos(radians), sn = sin(radians)
+        let cx = (w - 1) / 2, cy = (h - 1) / 2
+        let ocx = (Double(ow) - 1) / 2, ocy = (Double(oh) - 1) / 2
+        let maxX = width - 1, maxY = height - 1
+
+        out.pixels.withUnsafeMutableBufferPointer { dst in
+            pixels.withUnsafeBufferPointer { src in
+                for oy in 0..<oh {
+                    let dy = Double(oy) - ocy
+                    for ox in 0..<ow {
+                        let dx = Double(ox) - ocx
+                        let sx = cx + cs * dx + sn * dy
+                        let sy = cy - sn * dx + cs * dy
+                        let x0 = min(max(Int(sx.rounded(.down)), 0), maxX)
+                        let y0 = min(max(Int(sy.rounded(.down)), 0), maxY)
+                        let x1 = min(x0 + 1, maxX)
+                        let y1 = min(y0 + 1, maxY)
+                        let fx = Float(min(max(sx - Double(x0), 0), 1))
+                        let fy = Float(min(max(sy - Double(y0), 0), 1))
+                        let i00 = (y0 * width + x0) * 3
+                        let i10 = (y0 * width + x1) * 3
+                        let i01 = (y1 * width + x0) * 3
+                        let i11 = (y1 * width + x1) * 3
+                        let o = (oy * ow + ox) * 3
+                        for c in 0..<3 {
+                            let top = src[i00 + c] * (1 - fx) + src[i10 + c] * fx
+                            let bottom = src[i01 + c] * (1 - fx) + src[i11 + c] * fx
+                            dst[o + c] = top * (1 - fy) + bottom * fy
+                        }
+                    }
+                }
+            }
+        }
+        return out
     }
 
     /// Area-average downsample so the long edge is at most `maxLongEdge`

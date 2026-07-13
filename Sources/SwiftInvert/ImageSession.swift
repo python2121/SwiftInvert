@@ -16,6 +16,7 @@ actor ImageSession {
     private struct OrientKey: Equatable {
         var rotation: Int
         var flipHorizontal: Bool
+        var fineRotation: Double
     }
     private var orientKey: OrientKey?
 
@@ -59,10 +60,13 @@ actor ImageSession {
         if basePreview == nil {
             basePreview = try RawDecoder().decode(url: url, quality: .preview, maxLongEdge: 1536)
         }
-        let oKey = OrientKey(rotation: settings.rotation, flipHorizontal: settings.flipHorizontal)
+        let oKey = OrientKey(
+            rotation: settings.rotation, flipHorizontal: settings.flipHorizontal,
+            fineRotation: settings.fineRotation)
         if preview == nil || oKey != orientKey {
             preview = basePreview!.oriented(
-                rotationCW: settings.rotation, flipHorizontal: settings.flipHorizontal)
+                rotationCW: settings.rotation, flipHorizontal: settings.flipHorizontal,
+                fineRotation: settings.fineRotation)
             orientKey = oKey
             // Everything downstream is in oriented space.
             fullTexture = nil
@@ -113,7 +117,9 @@ actor ImageSession {
     /// don't flash it).
     func needsPreparation(settings: ExposureSettings) -> Bool {
         guard preview != nil, prepared != nil else { return true }
-        if OrientKey(rotation: settings.rotation, flipHorizontal: settings.flipHorizontal) != orientKey {
+        if OrientKey(
+            rotation: settings.rotation, flipHorizontal: settings.flipHorizontal,
+            fineRotation: settings.fineRotation) != orientKey {
             return true
         }
         return PreparedKey(analysisRect: settings.analysisRect, cropRect: settings.cropRect) != preparedKey
@@ -135,7 +141,9 @@ actor ImageSession {
     func exportRender(settings: ExposureSettings) throws -> RGBImage {
         let (_, analysis) = try prepare(settings: settings)
         var full = try RawDecoder().decode(url: url, quality: .full)
-            .oriented(rotationCW: settings.rotation, flipHorizontal: settings.flipHorizontal)
+            .oriented(
+                rotationCW: settings.rotation, flipHorizontal: settings.flipHorizontal,
+                fineRotation: settings.fineRotation)
         if let crop = settings.cropRect { full = full.cropped(to: crop) }
         let params = ExposureKernel.deriveRenderParams(settings, analysis)
         let (encoded, _) = try pipeline.render(image: full, params: params)

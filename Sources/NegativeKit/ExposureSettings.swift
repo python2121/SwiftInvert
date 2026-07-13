@@ -79,6 +79,8 @@ public struct ExposureSettings: Codable, Equatable, Sendable {
     // display-space rects, rendering and export all agree.
     public var rotation: Int = 0  // clockwise degrees: 0/90/180/270
     public var flipHorizontal: Bool = false
+    /// Straighten: degrees, clockwise-positive, auto-cropped to the inscribed rect.
+    public var fineRotation: Double = 0
 
     // Pre-process rects (NegPy analysis_rect / manual_crop_rect semantics):
     // analysisRect scopes ONLY the metering (buffer disabled inside it);
@@ -126,6 +128,7 @@ public struct ExposureSettings: Codable, Equatable, Sendable {
         colorHighs = (try? c.decode(SIMD3<Double>.self, forKey: .colorHighs)) ?? .zero
         rotation = (try? c.decode(Int.self, forKey: .rotation)) ?? 0
         flipHorizontal = b(.flipHorizontal, false)
+        fineRotation = d(.fineRotation, 0)
         analysisRect = try? c.decode(NormalizedRect.self, forKey: .analysisRect)
         cropRect = try? c.decode(NormalizedRect.self, forKey: .cropRect)
     }
