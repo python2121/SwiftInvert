@@ -9,11 +9,14 @@ struct HistoryPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            header
-            if !collapsed {
-                historyList
-            } else {
+            if collapsed {
+                // Last section in the stack: anchor to the BOTTOM when
+                // collapsed (free space goes above the header).
                 Spacer(minLength: 0)
+                header
+            } else {
+                header
+                historyList
             }
         }
         .padding(.vertical, 8)
