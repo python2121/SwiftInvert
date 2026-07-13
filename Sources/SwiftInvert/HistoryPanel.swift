@@ -5,33 +5,19 @@ import SwiftUI
 /// the redo history (dimmed); any new edit clears them. Click a row to jump.
 struct HistoryPanel: View {
     @Bindable var model: AppModel
-    /// When false, the collapsed header renders at fixed height with no
-    /// internal spacer — the parent places the flexible space instead (used
-    /// when the sections above are also collapsed and sink down to meet it).
-    var flexible: Bool = true
+    /// Fixed open height (parent-clamped); the parent's spacer above the
+    /// bottom group provides the anchoring, so this panel is always intrinsic.
+    var listHeight: Double = 150
     @AppStorage("historyCollapsed") private var collapsed = false
 
     var body: some View {
-        Group {
-            if collapsed && !flexible {
-                header
-                    .padding(.vertical, 8)
-            } else {
-                VStack(alignment: .leading, spacing: 6) {
-                    if collapsed {
-                        // Last section: anchor to the BOTTOM when collapsed
-                        // (free space goes above the header).
-                        Spacer(minLength: 0)
-                        header
-                    } else {
-                        header
-                        historyList
-                    }
-                }
-                .padding(.vertical, 8)
-                .frame(maxHeight: .infinity, alignment: .top)
+        VStack(alignment: .leading, spacing: 6) {
+            header
+            if !collapsed {
+                historyList
             }
         }
+        .padding(.vertical, 8)
     }
 
     private var header: some View {
@@ -81,7 +67,7 @@ struct HistoryPanel: View {
             }
             .padding(.horizontal, 8)
         }
-        .frame(maxHeight: .infinity)
+        .frame(height: listHeight)
     }
 
     private func row(index: Int, entry: AppModel.HistoryEntry) -> some View {

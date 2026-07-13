@@ -8,6 +8,7 @@ struct ControlsSidebar: View {
     @AppStorage("cropRotationCollapsed") private var cropRotationCollapsed = false
     @AppStorage("historyCollapsed") private var historyCollapsed = false
     @AppStorage("adjustmentsHeight") private var adjustmentsHeight = 440.0
+    @AppStorage("historyHeight") private var historyHeight = 150.0
 
     var body: some View {
         // GeometryReader + top alignment: stored section heights are clamped to
@@ -60,22 +61,19 @@ struct ControlsSidebar: View {
                     Divider()
                 }
 
-                // Collapsed sections sink to join the element below them:
-                // when everything from here down is collapsed, the flexible
-                // space moves ABOVE the collapsed headers so they stack at the
-                // bottom together.
-                if cropRotationCollapsed && historyCollapsed {
-                    Spacer(minLength: 0)
-                    CropRotationSection(model: model)
-                    Divider()
-                    HistoryPanel(model: model, flexible: false)
-                } else {
-                    // Fixed-height section at its natural height; History (the
-                    // resizable remainder) fills or bottom-anchors below it.
-                    CropRotationSection(model: model)
-                    Divider()
-                    HistoryPanel(model: model)
+                // The bottom group (Crop & Rotation + History) is anchored
+                // to the bottom, collapsed or expanded: the flexible gap lives
+                // here, above it. Sections open at their defaults — C&R at its
+                // intrinsic height, History at its stored height (150 default,
+                // resizable via the handle on its top edge).
+                Spacer(minLength: 0)
+                CropRotationSection(model: model)
+                Divider()
+                if !historyCollapsed {
+                    SectionResizeHandle(
+                        height: $historyHeight, range: 80...600, sectionIsBelow: true)
                 }
+                HistoryPanel(model: model, listHeight: fitHistory(available: geo.size.height))
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
@@ -83,17 +81,24 @@ struct ControlsSidebar: View {
         .animation(.easeOut(duration: 0.12), value: adjustmentsCollapsed)
     }
 
-    /// Clamp the Adjustments height to the window, reserving room for Crop &
-    /// Rotation at its intrinsic height plus the headers/handle and a minimum
-    /// History strip. The floor (210) always fits the pinned histogram — the
-    /// section can never be squeezed below its fixed content, whose invisible
-    /// clipped overflow used to eat clicks meant for the sections below
-    /// (.clipped() is visual only; it does not clip hit-testing).
+    /// Clamp the Adjustments height to the window, reserving the bottom
+    /// group (C&R intrinsic + History at its clamped height) and chrome. The
+    /// floor (210) always fits the pinned histogram — the section can never be
+    /// squeezed below its fixed content, whose invisible clipped overflow used
+    /// to eat clicks meant for the sections below (.clipped() is visual only;
+    /// it does not clip hit-testing).
     private func effectiveHeights(available: CGFloat) -> CGFloat {
         guard !adjustmentsCollapsed else { return 0 }
         let cropIntrinsic: CGFloat = cropRotationCollapsed ? 46 : 220
-        let chrome: CGFloat = 120  // top header + handle + minimum History strip
-        return min(adjustmentsHeight, max(available - chrome - cropIntrinsic, 210))
+        let historyH: CGFloat = historyCollapsed ? 44 : fitHistory(available: available) + 56
+        let chrome: CGFloat = 80  // top header + handle
+        return min(adjustmentsHeight, max(available - chrome - cropIntrinsic - historyH, 210))
+    }
+
+    /// History's effective open height: its stored preference, clamped so the
+    /// bottom group can always fit under a minimal Adjustments strip.
+    private func fitHistory(available: CGFloat) -> CGFloat {
+        min(historyHeight, max(available - 380, 80))
     }
 
     private var scrollingControls: some View {
