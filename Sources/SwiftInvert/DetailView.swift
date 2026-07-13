@@ -176,13 +176,6 @@ struct DetailView: View {
             .onTapGesture(count: 2) {
                 withAnimation(.easeOut(duration: 0.15)) { resetZoom() }
             }
-            // Press-and-hold (1 s): show the stock conversion for comparison;
-            // release returns to the current edit.
-            .onLongPressGesture(minimumDuration: 1.0) {
-                if model.toolMode == .none { model.setBaselinePreview(true) }
-            } onPressingChanged: { pressing in
-                if !pressing { model.setBaselinePreview(false) }
-            }
             .overlay(alignment: .top) {
                 if model.showingBaseline {
                     Text("Original conversion")

@@ -43,6 +43,13 @@ struct ControlsSidebar: View {
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
+                        HoldButton(
+                            label: "View Original", systemImage: "eye",
+                            isEnabled: model.selection != nil
+                        ) { pressing in
+                            model.setBaselinePreview(pressing)
+                        }
+                        .help("Hold to compare against the stock conversion")
                     }
                     .padding(6)
                 }
@@ -213,5 +220,43 @@ struct LabeledSlider: View {
                 .controlSize(.small)
                 .onTapGesture(count: 2) { value = defaultValue }
         }
+    }
+}
+
+
+/// Button that acts while pressed and held (standard buttons fire on release):
+/// a ButtonStyle exposes isPressed, which we forward as press/release events.
+struct HoldButton: View {
+    let label: String
+    let systemImage: String
+    var isEnabled: Bool = true
+    let onPressingChanged: (Bool) -> Void
+
+    var body: some View {
+        Button {} label: {
+            Label(label, systemImage: systemImage)
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(HoldButtonStyle(onPressingChanged: onPressingChanged))
+        .disabled(!isEnabled)
+    }
+}
+
+private struct HoldButtonStyle: ButtonStyle {
+    let onPressingChanged: (Bool) -> Void
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .padding(.vertical, 3)
+            .padding(.horizontal, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(configuration.isPressed ? Color.accentColor.opacity(0.25) : Color.primary.opacity(0.06)))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(Color.primary.opacity(0.15), lineWidth: 1))
+            .onChange(of: configuration.isPressed) { _, pressed in
+                onPressingChanged(pressed)
+            }
     }
 }
