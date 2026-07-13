@@ -7,7 +7,6 @@ struct ControlsSidebar: View {
     @AppStorage("adjustmentsCollapsed") private var adjustmentsCollapsed = false
     @AppStorage("cropRotationCollapsed") private var cropRotationCollapsed = false
     @AppStorage("adjustmentsHeight") private var adjustmentsHeight = 440.0
-    @AppStorage("cropRotationHeight") private var cropRotationHeight = 175.0
 
     var body: some View {
         // GeometryReader + top alignment: stored section heights are clamped to
@@ -49,25 +48,20 @@ struct ControlsSidebar: View {
                             .padding(.horizontal, 12)
                         scrollingControls
                     }
-                    .frame(height: fit.adjustments)
-                    .clipped()
+                    .frame(height: fit)
+                    // The handle "at the top of the crop section": it resizes
+                    // Adjustments; Crop & Rotation below keeps its intrinsic
+                    // height and just moves, and History (the resizable
+                    // remainder) absorbs the push.
                     SectionResizeHandle(
                         height: $adjustmentsHeight, range: 220...820, sectionIsBelow: false)
                 } else {
                     Divider()
                 }
 
-                if cropRotationCollapsed {
-                    CropRotationSection(model: model)
-                    Divider()
-                } else {
-                    ScrollView {
-                        CropRotationSection(model: model)
-                    }
-                    .frame(height: fit.cropRotation)
-                    SectionResizeHandle(
-                        height: $cropRotationHeight, range: 90...360, sectionIsBelow: false)
-                }
+                // Fixed-height section: always shown at its natural height.
+                CropRotationSection(model: model)
+                Divider()
 
                 HistoryPanel(model: model)
             }
@@ -77,18 +71,17 @@ struct ControlsSidebar: View {
         .animation(.easeOut(duration: 0.12), value: adjustmentsCollapsed)
     }
 
-    /// Clamp stored section heights to the window: reserve room for the
-    /// headers/handles chrome and a minimum History strip, give Adjustments
-    /// first claim on the rest, Crop & Rotation what remains. Stored values
-    /// keep the user's preference for taller windows.
-    private func effectiveHeights(available: CGFloat) -> (adjustments: CGFloat, cropRotation: CGFloat) {
-        let chrome: CGFloat = 150  // headers + handles + minimum History header
-        let cropWanted = cropRotationCollapsed ? 0 : cropRotationHeight
-        let adjMax = max(available - chrome - min(cropWanted, 90), 120)
-        let adj = adjustmentsCollapsed ? 0 : min(adjustmentsHeight, adjMax)
-        let cropMax = max(available - chrome - adj, 60)
-        let crop = cropRotationCollapsed ? 0 : min(cropRotationHeight, cropMax)
-        return (adj, crop)
+    /// Clamp the Adjustments height to the window, reserving room for Crop &
+    /// Rotation at its intrinsic height plus the headers/handle and a minimum
+    /// History strip. The floor (210) always fits the pinned histogram — the
+    /// section can never be squeezed below its fixed content, whose invisible
+    /// clipped overflow used to eat clicks meant for the sections below
+    /// (.clipped() is visual only; it does not clip hit-testing).
+    private func effectiveHeights(available: CGFloat) -> CGFloat {
+        guard !adjustmentsCollapsed else { return 0 }
+        let cropIntrinsic: CGFloat = cropRotationCollapsed ? 46 : 220
+        let chrome: CGFloat = 120  // top header + handle + minimum History strip
+        return min(adjustmentsHeight, max(available - chrome - cropIntrinsic, 210))
     }
 
     private var scrollingControls: some View {
