@@ -76,12 +76,24 @@ struct ContentView: View {
                 if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
             }
             .gesture(
-                DragGesture(minimumDistance: 1)
+                // Global space: the splitter itself moves during the drag, so a
+                // local-space translation oscillates (measured against a frame
+                // that shifts under the cursor) and the layout jitters.
+                DragGesture(minimumDistance: 1, coordinateSpace: .global)
                     .onChanged { g in
                         if dragStartWidth == nil { dragStartWidth = libraryWidth }
-                        libraryWidth = min(max(dragStartWidth! + g.translation.width, 200), 560)
+                        libraryWidth = (dragStartWidth! + g.translation.width)
+                            .rounded()
+                            .clamped(to: 200...560)
                     }
                     .onEnded { _ in dragStartWidth = nil }
             )
+    }
+}
+
+
+extension Double {
+    fileprivate func clamped(to range: ClosedRange<Double>) -> Double {
+        Swift.min(Swift.max(self, range.lowerBound), range.upperBound)
     }
 }
