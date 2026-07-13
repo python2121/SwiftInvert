@@ -66,6 +66,10 @@ func drawScene(in rect: CGRect, sepia: Bool) {
 //    CTM. Called twice: canvas pass (sepia) and lens pass (color frames). ────
 func drawStrip(colorFrames: Bool) {
     let bandH: CGFloat = 430
+    // The strip is drawn in its own transparency layer so the perforations can
+    // be punched out with .clear — real holes showing the background through,
+    // whatever the background is.
+    ctx.beginTransparencyLayer(auxiliaryInfo: nil)
     ctx.setFillColor(color(0x211a12))
     ctx.fill(CGRect(x: -size * 1.6, y: -bandH / 2, width: size * 3.2, height: bandH))
 
@@ -83,24 +87,27 @@ func drawStrip(colorFrames: Bool) {
         ctx.stroke(frame)
     }
 
-    // Classic perforations: two rows of rounded holes, punched darker than the
-    // band, with a faint top highlight so they read as cut-outs.
+    // Classic perforations: two rows of rounded holes punched clean through
+    // the film (cleared to transparent → the background shows through), with a
+    // subtle dark rim so the cut edge reads.
     let holeW: CGFloat = 46, holeH: CGFloat = 40
     for yCenter in [bandH / 2 - 55, -bandH / 2 + 55] {
         var hx: CGFloat = -size * 1.6
         while hx < size * 1.6 {
             let hole = CGRect(x: hx, y: yCenter - holeH / 2, width: holeW, height: holeH)
             let path = CGPath(roundedRect: hole, cornerWidth: 10, cornerHeight: 10, transform: nil)
-            ctx.setFillColor(color(0x090705))
+            ctx.setBlendMode(.clear)
             ctx.addPath(path)
             ctx.fillPath()
-            ctx.setStrokeColor(color(0x4a3d2c, 0.55))
-            ctx.setLineWidth(3)
+            ctx.setBlendMode(.normal)
+            ctx.setStrokeColor(color(0x0c0a08, 0.85))
+            ctx.setLineWidth(4)
             ctx.addPath(path)
             ctx.strokePath()
             hx += 94
         }
     }
+    ctx.endTransparencyLayer()
 }
 
 let stripAngle: CGFloat = -0.32  // ~ -18°
