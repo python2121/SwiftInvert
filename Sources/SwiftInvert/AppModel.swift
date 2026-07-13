@@ -408,6 +408,13 @@ final class AppModel {
         if !isRestoringSettings && !isNavigatingHistory { scheduleHistoryCommit() }
     }
 
+    /// Preview at full source resolution instead of the 1536px proxy (the HQ
+    /// button in the canvas control bar). Session-only by design: a persisted
+    /// flag would silently make every launch pay full-res render costs.
+    var hqPreview = false {
+        didSet { if oldValue != hqPreview { scheduleRender() } }
+    }
+
     /// Latest-wins render coalescing: one render in flight; a change during a
     /// render marks it pending and re-renders once with the newest settings.
     private func scheduleRender() {
@@ -422,12 +429,13 @@ final class AppModel {
                 self.renderPending = false
                 let snapshot = self.showingBaseline ? self.baselineSettings() : self.settings
                 let uncropped = self.toolMode != .none
+                let hq = self.hqPreview
                 guard let session = self.session else { break }
                 do {
-                    if await session.needsPreparation(settings: snapshot) {
+                    if await session.needsPreparation(settings: snapshot, hq: hq) {
                         self.isAnalyzing = true
                     }
-                    let output = try await session.render(settings: snapshot, uncropped: uncropped)
+                    let output = try await session.render(settings: snapshot, uncropped: uncropped, hq: hq)
                     self.isAnalyzing = false
                     if Task.isCancelled { break }
                     self.displayImage = output.image

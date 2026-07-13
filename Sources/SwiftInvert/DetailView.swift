@@ -106,6 +106,23 @@ struct DetailView: View {
                     Image(systemName: "arrow.left.and.right.righttriangle.left.righttriangle.right")
                 }
                 .help("Flip horizontally")
+                Button {
+                    model.hqPreview.toggle()
+                } label: {
+                    Text("HQ")
+                        .font(.system(size: 10, weight: .semibold))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(model.hqPreview ? Color.accentColor.opacity(0.3) : Color.primary.opacity(0.06)))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 4)
+                                .strokeBorder(
+                                    model.hqPreview ? Color.accentColor : Color.secondary.opacity(0.4),
+                                    lineWidth: 1))
+                }
+                .help("Preview at full source resolution (slower); off = 1536px proxy")
             }
             .disabled(model.selection == nil)
 

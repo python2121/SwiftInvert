@@ -43,6 +43,16 @@ actor ImageSession {
     private var croppedTexture: MTLTexture?
     private var croppedTextureRect: NormalizedRect?
 
+    /// HQ preview: the full-resolution decode cached like the proxy tower
+    /// (analysis still runs on the proxy, so HQ shows exactly what export
+    /// produces). Hundreds of MB per image — freed by the first non-HQ render.
+    private var hqBase: RGBImage?
+    private var hqOriented: RGBImage?
+    private var hqOrientKey: OrientKey?
+    private var hqFullTexture: MTLTexture?
+    private var hqCroppedTexture: MTLTexture?
+    private var hqCroppedRect: NormalizedRect?
+
     struct RenderOutput: Sendable {
         let image: CGImage
         let histogram: [UInt32]
@@ -112,10 +122,55 @@ actor ImageSession {
         return croppedTexture!
     }
 
+    /// The full-resolution source texture for HQ previews, cached with the
+    /// same decode → orient → crop keying as the proxy path.
+    private func hqSourceTexture(settings: ExposureSettings, uncropped: Bool) throws -> MTLTexture {
+        if hqBase == nil {
+            hqBase = try RawDecoder().decode(url: url, quality: .full)
+        }
+        let oKey = OrientKey(
+            rotation: settings.rotation, flipHorizontal: settings.flipHorizontal,
+            fineRotation: settings.fineRotation)
+        if hqOriented == nil || oKey != hqOrientKey {
+            hqOriented = hqBase!.oriented(
+                rotationCW: settings.rotation, flipHorizontal: settings.flipHorizontal,
+                fineRotation: settings.fineRotation)
+            hqOrientKey = oKey
+            hqFullTexture = nil
+            hqCroppedTexture = nil
+            hqCroppedRect = nil
+        }
+        if uncropped || settings.cropRect == nil {
+            if hqFullTexture == nil { hqFullTexture = try pipeline.upload(hqOriented!) }
+            return hqFullTexture!
+        }
+        let crop = settings.cropRect!
+        if hqCroppedTexture == nil || hqCroppedRect != crop {
+            hqCroppedTexture = try pipeline.upload(hqOriented!.cropped(to: crop))
+            hqCroppedRect = crop
+        }
+        return hqCroppedTexture!
+    }
+
+    private func clearHQ() {
+        hqBase = nil
+        hqOriented = nil
+        hqOrientKey = nil
+        hqFullTexture = nil
+        hqCroppedTexture = nil
+        hqCroppedRect = nil
+    }
+
     /// True when the next render must decode or run the heavy prepared stage
     /// (drives the "Analyzing…" indicator; offset-only finalizes are fast and
     /// don't flash it).
-    func needsPreparation(settings: ExposureSettings) -> Bool {
+    func needsPreparation(settings: ExposureSettings, hq: Bool = false) -> Bool {
+        if hq {
+            let oKey = OrientKey(
+                rotation: settings.rotation, flipHorizontal: settings.flipHorizontal,
+                fineRotation: settings.fineRotation)
+            if hqBase == nil || hqOriented == nil || oKey != hqOrientKey { return true }
+        }
         guard preview != nil, prepared != nil else { return true }
         if OrientKey(
             rotation: settings.rotation, flipHorizontal: settings.flipHorizontal,
@@ -127,10 +182,16 @@ actor ImageSession {
 
     /// `uncropped` shows the full frame (used while a selection tool is active
     /// so the user can drag on the whole image, like NegPy's crop_preview_full).
-    func render(settings: ExposureSettings, uncropped: Bool = false) throws -> RenderOutput {
+    func render(settings: ExposureSettings, uncropped: Bool = false, hq: Bool = false) throws -> RenderOutput {
         let (image, analysis) = try prepare(settings: settings)
         let params = ExposureKernel.deriveRenderParams(settings, analysis)
-        let source = try sourceTexture(image: image, settings: settings, uncropped: uncropped)
+        let source: MTLTexture
+        if hq {
+            source = try hqSourceTexture(settings: settings, uncropped: uncropped)
+        } else {
+            clearHQ()
+            source = try sourceTexture(image: image, settings: settings, uncropped: uncropped)
+        }
         let result = try pipeline.renderDisplay(source: source, params: params)
         guard let cg = ImageConversion.cgImage(rgba8: result.rgba, width: result.width, height: result.height)
         else { throw RenderError.resource("CGImage conversion") }

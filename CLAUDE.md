@@ -76,7 +76,11 @@ against rawpy on real files): `gamma=(1,1)`, `no_auto_bright`, `output_bps=16`,
 
 - **Preview path**: `half_size=1` + linear demosaic (`user_qual=0`) — except
   X-Trans sensors (`idata.filters == 9`), where half_size aliases the 6×6 CFA;
-  they decode full and downsample. Preview is capped at 1536 px long edge.
+  they decode full and downsample. Preview is capped at 1536 px long edge —
+unless the HQ toggle (canvas control bar, `AppModel.hqPreview`,
+session-only) is on: then the display render runs on the cached
+full-resolution decode (`ImageSession.hqSourceTexture`; analysis stays on
+the proxy, matching export), freed by the first non-HQ render.
 - **Full path** (export): LibRaw default (best) demosaic, full resolution.
 - EXIF orientation baked in Swift afterwards (`applyingFlip`, dcraw codes:
   3=180°, 5=90°CCW, 6=90°CW). C struct's flexible array member must be read
