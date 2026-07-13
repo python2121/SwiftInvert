@@ -6,6 +6,7 @@ import SwiftUI
 /// styling to match the adjustments sidebar (no vibrancy overlay).
 struct LibraryView: View {
     @Bindable var model: AppModel
+    var onToggleVisibility: () -> Void = {}
 
     private let columns = [GridItem(.adaptive(minimum: 120, maximum: 180), spacing: 8)]
 
@@ -15,7 +16,6 @@ struct LibraryView: View {
             Divider()
             content
         }
-        .frame(width: 320)
         .background(Color(nsColor: .windowBackgroundColor))
     }
 
@@ -37,6 +37,13 @@ struct LibraryView: View {
             }
             .buttonStyle(.borderless)
             .help("Choose library folder…")
+            Button {
+                onToggleVisibility()
+            } label: {
+                Image(systemName: "sidebar.left")
+            }
+            .buttonStyle(.borderless)
+            .help("Hide library")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
