@@ -16,7 +16,7 @@ struct ControlsSidebar: View {
         // is centered by SwiftUI, which pushed the top off-screen).
         GeometryReader { geo in
             let historyFit = fitHistory(available: geo.size.height)
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 5) {
                     Button {
                         adjustmentsCollapsed.toggle()
@@ -75,10 +75,10 @@ struct ControlsSidebar: View {
                 }
                 HistoryPanel(model: model, listHeight: historyFit)
             }
-            // Matches the inter-section gap (8 section pad + 10 stack
+            // Matches the inter-section gap (8 section pad + 4 stack
             // spacing) so a collapsed History header sits as far off the
             // bottom edge as collapsed C&R sits off its divider.
-            .padding(.bottom, 10)
+            .padding(.bottom, 4)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
         .frame(width: 235)
