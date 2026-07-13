@@ -61,19 +61,28 @@ struct ControlsSidebar: View {
                     Divider()
                 }
 
-                // The bottom group (Crop & Rotation + History) is anchored
-                // to the bottom, collapsed or expanded: the flexible gap lives
-                // here, above it. Sections open at their defaults — C&R at its
-                // intrinsic height, History at its stored height (150 default,
-                // resizable via the handle on its top edge).
-                Spacer(minLength: 0)
-                CropRotationSection(model: model)
-                Divider()
-                if !historyCollapsed {
+                // Sections pack tightly top-down (no gaps between them);
+                // the single flexible space sits at the BOTTOM of the stack,
+                // so resizing Adjustments visibly pushes C&R + History down.
+                // Only trailing COLLAPSED sections sink to the bottom edge.
+                if cropRotationCollapsed && historyCollapsed {
+                    Spacer(minLength: 0)
+                    CropRotationSection(model: model)
+                    Divider()
+                    HistoryPanel(model: model, listHeight: 0)
+                } else if historyCollapsed {
+                    CropRotationSection(model: model)
+                    Spacer(minLength: 0)
+                    Divider()
+                    HistoryPanel(model: model, listHeight: 0)
+                } else {
+                    CropRotationSection(model: model)
+                    // The handle doubles as the separator (it draws a divider).
                     SectionResizeHandle(
                         height: $historyHeight, range: 80...600, sectionIsBelow: true)
+                    HistoryPanel(model: model, listHeight: fitHistory(available: geo.size.height))
+                    Spacer(minLength: 0)
                 }
-                HistoryPanel(model: model, listHeight: fitHistory(available: geo.size.height))
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
