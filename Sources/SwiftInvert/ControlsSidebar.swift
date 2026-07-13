@@ -5,6 +5,7 @@ struct ControlsSidebar: View {
     @Bindable var model: AppModel
 
     @AppStorage("adjustmentsCollapsed") private var adjustmentsCollapsed = false
+    @AppStorage("historyHeight") private var historyHeight = 230.0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -40,8 +41,8 @@ struct ControlsSidebar: View {
                 Spacer(minLength: 0)
             }
 
-            Divider()
-            HistoryPanel(model: model)
+            SectionResizeHandle(height: $historyHeight, range: 90...520)
+            HistoryPanel(model: model, listHeight: historyHeight)
         }
         .frame(width: 215)
         .animation(.easeOut(duration: 0.12), value: adjustmentsCollapsed)
