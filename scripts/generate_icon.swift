@@ -115,7 +115,7 @@ ctx.clip()
 
 func drawBackgroundGradient() {
     ctx.drawLinearGradient(
-        gradient([color(0x5a4f41), color(0x2e2820)]),
+        gradient([color(0xe8e8ec), color(0xc2c2c8)]),
         start: CGPoint(x: size / 2, y: size), end: CGPoint(x: size / 2, y: 0), options: [])
 }
 drawBackgroundGradient()
