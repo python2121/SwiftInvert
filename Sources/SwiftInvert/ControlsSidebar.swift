@@ -73,7 +73,7 @@ struct ControlsSidebar: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
-        .frame(width: 215)
+        .frame(width: 235)
         .animation(.easeOut(duration: 0.12), value: adjustmentsCollapsed)
     }
 
