@@ -89,9 +89,16 @@ final class AppModel {
 
     // MARK: - Orientation & canvas
 
-    func rotateClockwise() { settings.rotation = ((settings.rotation + 90) % 360 + 360) % 360 }
-    func rotateCounterclockwise() { settings.rotation = ((settings.rotation - 90) % 360 + 360) % 360 }
-    func flipHorizontal() { settings.flipHorizontal.toggle() }
+    func rotateClockwise() {
+        pendingHistoryLabel = "Rotate 90° CW"
+        settings.rotation = ((settings.rotation + 90) % 360 + 360) % 360 }
+    func rotateCounterclockwise() {
+        pendingHistoryLabel = "Rotate 90° CCW"
+        settings.rotation = ((settings.rotation - 90) % 360 + 360) % 360 }
+    func flipHorizontal() {
+        pendingHistoryLabel = "Flip horizontal"
+        settings.flipHorizontal.toggle()
+    }
 
     enum CanvasColor: String, CaseIterable, Identifiable {
         case gray, veryDarkGray, black
@@ -119,8 +126,12 @@ final class AppModel {
 
     func commitSelection(_ rect: NormalizedRect) {
         switch toolMode {
-        case .analysisRegion: settings.analysisRect = rect
-        case .crop: settings.cropRect = rect
+        case .analysisRegion:
+            pendingHistoryLabel = "Analysis region"
+            settings.analysisRect = rect
+        case .crop:
+            pendingHistoryLabel = "Crop"
+            settings.cropRect = rect
         case .none: break
         }
         toolMode = .none  // settings didSet already re-renders (and re-analyzes)
@@ -135,6 +146,113 @@ final class AppModel {
     /// Set while restoring settings from a sidecar so opening a file doesn't
     /// immediately write one back (saves happen only on real user edits).
     private var isRestoringSettings = false
+
+    // MARK: - Edit history (undo/redo)
+
+    struct HistoryEntry: Identifiable, Sendable {
+        let id = UUID()
+        let label: String
+        let settings: ExposureSettings
+    }
+    private struct HistoryState {
+        var entries: [HistoryEntry]
+        var index: Int
+    }
+    /// Per-image histories, kept for the session.
+    private var histories: [URL: HistoryState] = [:]
+    private var historyURL: URL?
+    var historyEntries: [HistoryEntry] = []
+    var historyIndex = 0
+    private var historyCommitTask: Task<Void, Never>?
+    private var isNavigatingHistory = false
+    /// Named actions (Rotate, Crop, Reset all…) set this before mutating
+    /// settings; the debounced commit prefers it over the field diff.
+    var pendingHistoryLabel: String?
+
+    var canUndo: Bool { historyIndex > 0 }
+    var canRedo: Bool { historyIndex < historyEntries.count - 1 }
+
+    /// Stash the outgoing image's history, load (or seed) the incoming one.
+    private func loadHistory(for url: URL?) {
+        if let old = historyURL {
+            histories[old] = HistoryState(entries: historyEntries, index: historyIndex)
+        }
+        historyCommitTask?.cancel()
+        pendingHistoryLabel = nil
+        historyURL = url
+        guard let url else {
+            historyEntries = []
+            historyIndex = 0
+            return
+        }
+        if let saved = histories[url] {
+            historyEntries = saved.entries
+            historyIndex = saved.index
+        } else {
+            historyEntries = [HistoryEntry(label: "Original conversion", settings: settings)]
+            historyIndex = 0
+        }
+    }
+
+    /// Slider drags coalesce: one entry per settled change (0.7 s after the
+    /// last tick), labelled by diffing against the current history state.
+    private func scheduleHistoryCommit() {
+        guard selection != nil else { return }
+        historyCommitTask?.cancel()
+        historyCommitTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(700))
+            guard !Task.isCancelled else { return }
+            self?.commitHistory()
+        }
+    }
+
+    private func commitHistory() {
+        guard !historyEntries.isEmpty, historyIndex < historyEntries.count else { return }
+        let current = settings
+        guard historyEntries[historyIndex].settings != current else {
+            pendingHistoryLabel = nil
+            return
+        }
+        // A new change clears everything ahead of the current state (redo).
+        historyEntries.removeSubrange((historyIndex + 1)...)
+        let label = pendingHistoryLabel
+            ?? historyLabel(from: historyEntries[historyIndex].settings, to: current)
+        historyEntries.append(HistoryEntry(label: label, settings: current))
+        historyIndex = historyEntries.count - 1
+        pendingHistoryLabel = nil
+    }
+
+    func undo() {
+        guard selection != nil else { return }
+        historyCommitTask?.cancel()
+        // Flush an in-flight (uncommitted) change so undo steps back exactly one.
+        if !historyEntries.isEmpty, historyEntries[historyIndex].settings != settings {
+            commitHistory()
+        }
+        guard canUndo else { return }
+        historyIndex -= 1
+        applyHistorySettings()
+    }
+
+    func redo() {
+        guard canRedo else { return }
+        historyCommitTask?.cancel()
+        historyIndex += 1
+        applyHistorySettings()
+    }
+
+    func jumpToHistory(_ index: Int) {
+        guard index >= 0, index < historyEntries.count, index != historyIndex else { return }
+        historyCommitTask?.cancel()
+        historyIndex = index
+        applyHistorySettings()
+    }
+
+    private func applyHistorySettings() {
+        isNavigatingHistory = true
+        settings = historyEntries[historyIndex].settings
+        isNavigatingHistory = false
+    }
 
     init() {
         // One-time migration from the pre-rename defaults domain ("NegSwift"):
@@ -253,11 +371,13 @@ final class AppModel {
             settings = restored
         }
         isRestoringSettings = false
+        loadHistory(for: url)
     }
 
     private func settingsChanged() {
         scheduleRender()
         if !isRestoringSettings { scheduleSave() }
+        if !isRestoringSettings && !isNavigatingHistory { scheduleHistoryCommit() }
     }
 
     /// Latest-wins render coalescing: one render in flight; a change during a
@@ -314,6 +434,7 @@ final class AppModel {
     /// Reset every slider/toggle to defaults; the pre-process rects are
     /// geometry, not adjustments, and survive the reset.
     func resetSettings() {
+        pendingHistoryLabel = "Reset all"
         var fresh = ExposureSettings()
         fresh.analysisRect = settings.analysisRect
         fresh.cropRect = settings.cropRect

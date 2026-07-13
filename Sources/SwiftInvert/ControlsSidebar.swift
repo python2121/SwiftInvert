@@ -4,10 +4,24 @@ import SwiftUI
 struct ControlsSidebar: View {
     @Bindable var model: AppModel
 
+    @AppStorage("adjustmentsCollapsed") private var adjustmentsCollapsed = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("Adjustments").font(.headline)
+            HStack(spacing: 5) {
+                Button {
+                    adjustmentsCollapsed.toggle()
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 9, weight: .semibold))
+                            .rotationEffect(.degrees(adjustmentsCollapsed ? 0 : 90))
+                            .foregroundStyle(.secondary)
+                        Text("Adjustments").font(.headline)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
                 Spacer()
                 Button("Reset All") { model.resetSettings() }
                     .controlSize(.small)
@@ -16,13 +30,21 @@ struct ControlsSidebar: View {
             .padding(.horizontal, 12)
             .padding(.top, 12)
 
-            // Pinned: the histogram stays visible while the controls scroll.
-            HistogramView(model: model)
-                .padding(.horizontal, 12)
+            if !adjustmentsCollapsed {
+                // Pinned: the histogram stays visible while the controls scroll.
+                HistogramView(model: model)
+                    .padding(.horizontal, 12)
 
-            scrollingControls
+                scrollingControls
+            } else {
+                Spacer(minLength: 0)
+            }
+
+            Divider()
+            HistoryPanel(model: model)
         }
         .frame(width: 215)
+        .animation(.easeOut(duration: 0.12), value: adjustmentsCollapsed)
     }
 
     private var scrollingControls: some View {

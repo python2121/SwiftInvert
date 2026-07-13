@@ -275,6 +275,13 @@ values where needed):
   (`showingBaseline` renders stock settings with current geometry), export
   batch task with progress/cancel.
 - **`ImageSession`** (actor): the per-image cache tower (see §2) + render.
+- **Edit history**: per-image undo/redo in AppModel (`historyEntries`/`historyIndex`,
+  session-scoped per URL). Slider drags coalesce via a 0.7 s debounced commit;
+  labels come from `historyLabel(from:to:)` (HistoryLabels.swift — add a line
+  there for every new settings field) or `pendingHistoryLabel` for named
+  actions (Rotate/Crop/Reset). New edits truncate the redo tail. Undo flushes
+  any in-flight uncommitted change first. UI: HistoryPanel (⌘Z/⇧⌘Z,
+  click-to-jump), below the collapsible Adjustments section.
 - **Sidecars**: `<basename>.swiftinvert.json` next to the source
   (`SidecarStore`); pre-rename `.negswift.json` read as fallback and removed
   on next save. Missing keys decode to defaults (custom `init(from:)` in
