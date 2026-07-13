@@ -9,12 +9,17 @@ and appending a history entry.
 ## Last reviewed
 
 ```
-commit:   cac6396  ("fix: Apply Settings roll count respects the filename filter (#450) (#451)")
-reviewed: 2026-07-11
-fixtures: Tests/Fixtures/ dumped from this commit
+commit:   f279337  ("docs: consolidate 0.37.0 dust and analysis changelog entries (#486)")
+reviewed: 2026-07-13
+fixtures: Tests/Fixtures/ dumped from cac6396 (still valid — no kernel/constant
+          changes in cac6396..f279337)
 ```
 
 ## How to run a review
+
+**Preferred: run the `/negpy-review` skill** (`.claude/skills/negpy-review/`)
+— it automates the steps below, applies the port/skip judging rules, and
+updates this file. The manual procedure, for reference:
 
 1. `cd ~/Documents/code/NegPy && git fetch origin`
 2. `git log --oneline <last-reviewed>..origin/main` — the unreviewed range.
@@ -33,6 +38,45 @@ fixtures: Tests/Fixtures/ dumped from this commit
 6. Update the **Last reviewed** marker and append to the history below.
 
 ## Review history
+
+### 2026-07-13 — through `f279337` (0.37.0 release, 25 commits)
+
+**Kernel status:** untouched. No changes to normalization/curve logic,
+`EXPOSURE_CONSTANTS`, or the characterization goldens — no fixture re-dump
+needed. Only two commits touched `features/exposure/` at all:
+
+**Ported:** nothing (nothing required).
+
+**Candidates flagged (not yet decided):**
+- `77c8113` Analysis panel: merged H&D chart, **spot densitometer**, zone
+  strip. New `density_histogram` metric (120 bins over −0.1…1.1 normalized-log
+  density, `analysis.py`/`density_hist.wgsl`) computed per render; the
+  densitometer maps hover → normalized-log coords → zone/density read-out.
+  Presentation-layer, but a genuinely useful darkroom tool we lack.
+- `stats.py` rework (same PR): "Negative character" diagnostic — measured
+  density range vs `default_grade_range()`, ratio <0.80 → "flat (≈N−1)",
+  >1.25 → "contrasty (≈N+1)". Cheap to add if we grow a stats read-out.
+- `fb4b7a7` default TIFF compression LZW → Adobe Deflate (ZIP) + horizontal
+  predictor. Our export currently writes **uncompressed** TIFF (no
+  compression options set in `Exporter.swift`); worth adding compression,
+  though ImageIO's Deflate-TIFF support needs verifying (LZW is the safe bet).
+- `7f4b7a7` clockwise-positive fine rotation + Straighten reference-line
+  tool — we only have 90° steps; geometry feature, not pipeline.
+
+**Not applicable / out of scope:**
+- `db72e9f` CPU/GPU parity for **B&W** renders (post-curve luma collapse in
+  `exposure.wgsl` is `mode == 1` only; we don't ship B&W). Its histogram
+  sub-fix (bin from float output before quantization, drop the 4× stride)
+  is a CPU-preview artifact fix — our `histogram256` already bins the linear
+  float content on GPU.
+- `e56c199` preserve edits when EXIF rewrites change the file hash — NegPy
+  keys sidecars by content hash; ours are filename-keyed.
+- `1deeba6` batch export path/mode bug — their session-export plumbing.
+- Toners (`4a3cd34`), crosstalk profile editor (`0bba263`), retouch/heal &
+  dust (`9b04f49`, `05b8763`), dodge-burn masks (`2cf6afd`), camera scanning
+  (`c558a16`, `15d15c7`), shortcut-editor UI (4 commits), EXIF string
+  sanitizing (`8363495`), changelog/screenshot churn — all stages/features
+  we deliberately don't ship.
 
 ### 2026-07-11 — through `cac6396` (v0.35 → v0.36 era, ~20 commits)
 

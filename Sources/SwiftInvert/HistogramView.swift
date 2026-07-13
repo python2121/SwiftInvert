@@ -15,7 +15,6 @@ struct HistogramView: View {
     @Bindable var model: AppModel
 
     @State private var logScale = true
-    @State private var hoverBin: Int?
     // Offset value at drag start (handles accumulate from there).
     @State private var dragStartOffset: Double?
 
@@ -42,22 +41,19 @@ struct HistogramView: View {
                 RoundedRectangle(cornerRadius: 6).fill(.black.opacity(0.88))
                 if let bins {
                     canvas(bins: bins, size: geo.size)
-                    clippingIndicators(bins: bins)
+                    // Hover lives in its own layer with its own state: if the
+                    // whole chart re-rendered per mouse move, the indicators'
+                    // tooltip tracking areas were rebuilt continuously and the
+                    // tooltips never got their hover-dwell (the "unreliable
+                    // hover" bug).
+                    HistogramHoverLayer(bins: bins, width: geo.size.width)
                     handles(size: geo.size)
-                    if let hoverBin { hoverReadout(bins: bins, bin: hoverBin) }
+                    clippingIndicators(bins: bins)  // topmost: stable tooltips
                 } else {
                     Text("—").foregroundStyle(.tertiary)
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: 6))
-            .onContinuousHover { phase in
-                switch phase {
-                case .active(let p):
-                    hoverBin = min(max(Int(p.x / geo.size.width * 255), 0), 255)
-                case .ended:
-                    hoverBin = nil
-                }
-            }
         }
     }
 
@@ -131,6 +127,8 @@ struct HistogramView: View {
                     Image(systemName: "arrowtriangle.left.fill")
                         .font(.system(size: 8))
                         .foregroundStyle(color(black))
+                        .padding(5)
+                        .contentShape(Rectangle())
                         .help(String(
                             format: "Shadow clipping — R %.1f%%  G %.1f%%  B %.1f%%",
                             black.x * 100, black.y * 100, black.z * 100))
@@ -140,12 +138,14 @@ struct HistogramView: View {
                     Image(systemName: "arrowtriangle.right.fill")
                         .font(.system(size: 8))
                         .foregroundStyle(color(white))
+                        .padding(5)
+                        .contentShape(Rectangle())
                         .help(String(
                             format: "Highlight clipping — R %.1f%%  G %.1f%%  B %.1f%%",
                             white.x * 100, white.y * 100, white.z * 100))
                 }
             }
-            .padding(4)
+            .padding(0)
             Spacer()
         }
     }
@@ -201,27 +201,7 @@ struct HistogramView: View {
         .help(isBlack ? "Black point (drag right to deepen blacks)" : "White point (drag left to brighten whites)")
     }
 
-    // MARK: - Hover readout & footer
-
-    private func hoverReadout(bins: [UInt32], bin: Int) -> some View {
-        let total = max(Double(bins[0..<256].reduce(0) { $0 + UInt64($1) }), 1)
-        func pct(_ c: Int) -> Double { Double(bins[c * 256 + bin]) / total * 100 }
-        return VStack {
-            HStack {
-                Spacer()
-                Text(String(format: "L %d  ·  R %.1f  G %.1f  B %.1f", bin, pct(0), pct(1), pct(2)))
-                    .font(.system(size: 8).monospacedDigit())
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 2)
-                    .background(.black.opacity(0.7), in: Capsule())
-                    .foregroundStyle(.white.opacity(0.9))
-            }
-            .padding(.horizontal, 16)
-            .padding(.top, 3)
-            Spacer()
-        }
-        .allowsHitTesting(false)
-    }
+    // MARK: - Footer
 
     private var footer: some View {
         HStack(spacing: 3) {
@@ -257,5 +237,45 @@ struct HistogramView: View {
             }
             Text("Highlights").font(.system(size: 8)).foregroundStyle(.tertiary)
         }
+    }
+}
+
+
+/// Hover tracking + level readout, isolated so mouse movement re-renders only
+/// this layer (the indicators' tooltips above stay stable).
+private struct HistogramHoverLayer: View {
+    let bins: [UInt32]
+    let width: CGFloat
+    @State private var hoverBin: Int?
+
+    var body: some View {
+        Color.clear
+            .contentShape(Rectangle())
+            .onContinuousHover { phase in
+                switch phase {
+                case .active(let p):
+                    hoverBin = min(max(Int(p.x / width * 255), 0), 255)
+                case .ended:
+                    hoverBin = nil
+                }
+            }
+            .overlay(alignment: .top) {
+                if let bin = hoverBin {
+                    readout(bin: bin)
+                        .padding(.top, 3)
+                }
+            }
+    }
+
+    private func readout(bin: Int) -> some View {
+        let total = max(Double(bins[0..<256].reduce(0) { $0 + UInt64($1) }), 1)
+        func pct(_ c: Int) -> Double { Double(bins[c * 256 + bin]) / total * 100 }
+        return Text(String(format: "L %d  ·  R %.1f  G %.1f  B %.1f", bin, pct(0), pct(1), pct(2)))
+            .font(.system(size: 8).monospacedDigit())
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background(.black.opacity(0.7), in: Capsule())
+            .foregroundStyle(.white.opacity(0.9))
+            .allowsHitTesting(false)
     }
 }

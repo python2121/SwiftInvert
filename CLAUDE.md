@@ -247,6 +247,9 @@ verifies every stage boundary:
 **Upstream review log: see `UPSTREAM.md`** — it records the last NegPy
 commit reviewed (the baseline for "what changed upstream?" requests) and
 the port/skip decisions per review. Update it after every upstream review.
+For "what changed in NegPy?" requests, run the **`/negpy-review` skill**
+(`.claude/skills/negpy-review/`) — it fetches upstream, triages the diff
+around the inversion pipeline, and maintains UPSTREAM.md.
 
 Kernel constants are synced with **NegPy 0.36** (`toe_height` 0.90 with the
 `toe_grade_strength` rescale, True Black, always-confidence cast removal);
