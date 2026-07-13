@@ -93,6 +93,10 @@ final class AppModel {
     /// the rotation as a display transform (no pipeline re-render, no settings
     /// mutation); commit happens once on release.
     var straightenDragValue: Double?
+    /// The fineRotation the current displayImage was BAKED with. The detail
+    /// view rotates the display by (target − baked), so the preview holds
+    /// through the post-release re-bake instead of snapping back.
+    var displayedFineRotation: Double = 0
 
     func rotateClockwise() {
         pendingHistoryLabel = "Rotate 90° CW"
@@ -408,6 +412,7 @@ final class AppModel {
                     self.isAnalyzing = false
                     if Task.isCancelled { break }
                     self.displayImage = output.image
+                    self.displayedFineRotation = snapshot.fineRotation
                     self.histogram = output.histogram
                     self.statusMessage = nil
                     NSLog("SwiftInvert: rendered \(self.selection?.lastPathComponent ?? "?") (\(output.image.width)x\(output.image.height))")

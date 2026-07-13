@@ -160,10 +160,13 @@ struct DetailView: View {
                 imageSize: CGSize(width: image.width, height: image.height), in: geo.size)
             ZStack {
                 ZStack {
-                    // Straighten preview: while the slider is engaged the delta
-                    // is a display transform (rotate + cover-scale mimicking the
-                    // inscribed crop) — no pipeline work until release.
-                    let delta = model.straightenDragValue.map { $0 - model.settings.fineRotation } ?? 0
+                    // Straighten preview: the display rotates by the difference
+                    // between the target angle (drag value or committed setting)
+                    // and the angle the shown image was baked with — live during
+                    // the drag, and held through the post-release re-bake so the
+                    // image doesn't snap back while analysis re-runs.
+                    let target = model.straightenDragValue ?? model.settings.fineRotation
+                    let delta = target - model.displayedFineRotation
                     Image(decorative: image, scale: 1.0)
                         .resizable()
                         .interpolation(.high)
