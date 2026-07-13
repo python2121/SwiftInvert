@@ -281,7 +281,10 @@ values where needed):
   batch task with progress/cancel.
 - **`ImageSession`** (actor): the per-image cache tower (see §2) + render.
 - **Edit history**: per-image undo/redo in AppModel (`historyEntries`/`historyIndex`,
-  session-scoped per URL). Slider drags coalesce via a 0.7 s debounced commit;
+  session-scoped per URL). Slider/handle drags commit on RELEASE (drag =
+  preview: `setControlEditing` via the `controlEditingChanged` environment
+  hook holds commits while any control is held); non-drag changes coalesce
+  via a 0.7 s debounced commit;
   labels come from `historyLabel(from:to:)` (HistoryLabels.swift — add a line
   there for every new settings field) or `pendingHistoryLabel` for named
   actions (Rotate/Crop/Reset). New edits truncate the redo tail. Undo flushes

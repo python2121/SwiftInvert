@@ -86,6 +86,7 @@ struct ControlsSidebar: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
         .frame(width: 235)
+        .environment(\.controlEditingChanged) { model.setControlEditing($0) }
         .animation(.easeOut(duration: 0.12), value: adjustmentsCollapsed)
     }
 
@@ -259,12 +260,28 @@ struct ControlsSidebar: View {
     }
 }
 
+/// Sliders report drag begin/end through the environment so AppModel can
+/// hold history commits until release (drag = preview; release = the
+/// undoable act). One .environment() at the sidebar root wires every
+/// LabeledSlider without threading the model through 17 call sites.
+private struct ControlEditingKey: EnvironmentKey {
+    static let defaultValue: @MainActor (Bool) -> Void = { _ in }
+}
+
+extension EnvironmentValues {
+    var controlEditingChanged: @MainActor (Bool) -> Void {
+        get { self[ControlEditingKey.self] }
+        set { self[ControlEditingKey.self] = newValue }
+    }
+}
+
 struct LabeledSlider: View {
     let label: String
     @Binding var value: Double
     let range: ClosedRange<Double>
     let format: String
     let defaultValue: Double
+    @Environment(\.controlEditingChanged) private var controlEditingChanged
 
     private var isChanged: Bool { abs(value - defaultValue) > 1e-9 }
 
@@ -288,7 +305,7 @@ struct LabeledSlider: View {
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(isChanged ? .primary : .secondary)
             }
-            Slider(value: $value, in: range)
+            Slider(value: $value, in: range) { controlEditingChanged($0) }
                 .controlSize(.small)
                 .onTapGesture(count: 2) { value = defaultValue }
         }

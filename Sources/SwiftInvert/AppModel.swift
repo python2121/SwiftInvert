@@ -203,10 +203,29 @@ final class AppModel {
         }
     }
 
-    /// Slider drags coalesce: one entry per settled change (0.7 s after the
-    /// last tick), labelled by diffing against the current history state.
+    /// Draggable controls report begin/end here: renders keep flowing
+    /// mid-drag, but the history commit is held until release — dragging is
+    /// preview; letting go is the undoable act. A drag session yields one
+    /// entry: the state before interaction -> where the control ended up.
+    private var controlEditCount = 0
+
+    func setControlEditing(_ editing: Bool) {
+        if editing {
+            controlEditCount += 1
+            historyCommitTask?.cancel()
+        } else {
+            controlEditCount = max(0, controlEditCount - 1)
+            if controlEditCount == 0 { commitHistory() }
+        }
+    }
+
+    /// Non-drag changes (toggles, double-click resets, named actions)
+    /// coalesce: one entry per settled change (0.7 s after the last tick),
+    /// labelled by diffing against the current history state. During a
+    /// control drag nothing is scheduled — setControlEditing commits once
+    /// on release.
     private func scheduleHistoryCommit() {
-        guard selection != nil else { return }
+        guard selection != nil, controlEditCount == 0 else { return }
         historyCommitTask?.cancel()
         historyCommitTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(700))

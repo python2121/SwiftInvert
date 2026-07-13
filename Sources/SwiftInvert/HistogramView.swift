@@ -185,6 +185,7 @@ struct HistogramView: View {
                     if dragStartOffset == nil {
                         dragStartOffset =
                             isBlack ? model.settings.blackPointOffset : model.settings.whitePointOffset
+                        model.setControlEditing(true)
                     }
                     let delta = Double(g.translation.width / travel) * offsetFullScale
                     if isBlack {
@@ -193,7 +194,10 @@ struct HistogramView: View {
                         model.settings.whitePointOffset = min(max(dragStartOffset! - delta, 0), offsetFullScale)
                     }
                 }
-                .onEnded { _ in dragStartOffset = nil }
+                .onEnded { _ in
+                    dragStartOffset = nil
+                    model.setControlEditing(false)
+                }
         )
         .onTapGesture(count: 2) {
             if isBlack { model.settings.blackPointOffset = 0 } else { model.settings.whitePointOffset = 0 }
