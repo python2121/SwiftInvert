@@ -5,7 +5,6 @@ import SwiftUI
 /// the redo history (dimmed); any new edit clears them. Click a row to jump.
 struct HistoryPanel: View {
     @Bindable var model: AppModel
-    var listHeight: Double = 230
     @AppStorage("historyCollapsed") private var collapsed = false
 
     var body: some View {
@@ -13,9 +12,12 @@ struct HistoryPanel: View {
             header
             if !collapsed {
                 historyList
+            } else {
+                Spacer(minLength: 0)
             }
         }
         .padding(.vertical, 8)
+        .frame(maxHeight: .infinity, alignment: .top)
     }
 
     private var header: some View {
@@ -65,7 +67,7 @@ struct HistoryPanel: View {
             }
             .padding(.horizontal, 8)
         }
-        .frame(height: listHeight)
+        .frame(maxHeight: .infinity)
     }
 
     private func row(index: Int, entry: AppModel.HistoryEntry) -> some View {

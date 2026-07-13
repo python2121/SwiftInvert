@@ -5,7 +5,9 @@ struct ControlsSidebar: View {
     @Bindable var model: AppModel
 
     @AppStorage("adjustmentsCollapsed") private var adjustmentsCollapsed = false
-    @AppStorage("historyHeight") private var historyHeight = 230.0
+    @AppStorage("cropRotationCollapsed") private var cropRotationCollapsed = false
+    @AppStorage("adjustmentsHeight") private var adjustmentsHeight = 440.0
+    @AppStorage("cropRotationHeight") private var cropRotationHeight = 175.0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -31,20 +33,37 @@ struct ControlsSidebar: View {
             .padding(.horizontal, 12)
             .padding(.top, 12)
 
+            // Sections own their heights (handle on each section's bottom
+            // edge); resizing pushes everything below down and never touches
+            // sizing above. History, last, absorbs the remainder.
             if !adjustmentsCollapsed {
-                // Pinned: the histogram stays visible while the controls scroll.
-                HistogramView(model: model)
-                    .padding(.horizontal, 12)
-
-                scrollingControls
+                VStack(alignment: .leading, spacing: 10) {
+                    // Pinned: the histogram stays visible while controls scroll.
+                    HistogramView(model: model)
+                        .padding(.horizontal, 12)
+                    scrollingControls
+                }
+                .frame(height: adjustmentsHeight)
+                .clipped()
+                SectionResizeHandle(
+                    height: $adjustmentsHeight, range: 220...820, sectionIsBelow: false)
             } else {
-                Spacer(minLength: 0)
+                Divider()
             }
 
-            Divider()
-            CropRotationSection(model: model)
-            SectionResizeHandle(height: $historyHeight, range: 90...520)
-            HistoryPanel(model: model, listHeight: historyHeight)
+            if cropRotationCollapsed {
+                CropRotationSection(model: model)
+                Divider()
+            } else {
+                ScrollView {
+                    CropRotationSection(model: model)
+                }
+                .frame(height: cropRotationHeight)
+                SectionResizeHandle(
+                    height: $cropRotationHeight, range: 90...360, sectionIsBelow: false)
+            }
+
+            HistoryPanel(model: model)
         }
         .frame(width: 215)
         .animation(.easeOut(duration: 0.12), value: adjustmentsCollapsed)
