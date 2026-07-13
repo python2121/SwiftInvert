@@ -13,7 +13,30 @@ final class AppModel {
     var folderURL: URL? {
         didSet { UserDefaults.standard.set(folderURL?.path, forKey: "libraryFolder") }
     }
+    /// Flat, depth-first file list (drives selection ranges and index numbers).
     var files: [URL] = []
+    /// 1-based index badges, in `files` order.
+    var fileIndex: [URL: Int] = [:]
+    /// Folder hierarchy under `folderURL` (folders without RAWs pruned).
+    var folderTree: FolderNode?
+    var collapsedFolders: Set<URL> = []
+    var isScanning = false
+
+    struct FolderNode: Identifiable, Sendable {
+        let id: URL
+        let name: String
+        var files: [URL]
+        var subfolders: [FolderNode]
+        var totalCount: Int
+    }
+
+    func toggleCollapsed(_ url: URL) {
+        if collapsedFolders.contains(url) {
+            collapsedFolders.remove(url)
+        } else {
+            collapsedFolders.insert(url)
+        }
+    }
     var selection: URL? {
         didSet { if oldValue != selection { openSelection() } }
     }
@@ -149,18 +172,63 @@ final class AppModel {
         panel.message = "Choose a folder of camera-scanned negatives"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         folderURL = url
+        folderTree = nil
+        collapsedFolders = []
         Task { await thumbnails.clear() }
         scanFolder()
     }
 
     func scanFolder() {
-        guard let folderURL else { return }
+        guard let root = folderURL else { return }
+        isScanning = true
+        Task.detached(priority: .userInitiated) {
+            let tree = Self.buildTree(at: root, depth: 0)
+            var flattened: [URL] = []
+            Self.flatten(tree, into: &flattened)
+            let flat = flattened
+            await MainActor.run {
+                self.folderTree = tree
+                self.files = flat
+                self.fileIndex = Dictionary(
+                    uniqueKeysWithValues: flat.enumerated().map { ($0.element, $0.offset + 1) })
+                self.isScanning = false
+                if let selection = self.selection, !flat.contains(selection) {
+                    self.selection = flat.first
+                }
+                if self.selection == nil { self.selection = flat.first }
+            }
+        }
+    }
+
+    /// Recursive scan (VSCode-style tree): RAW files per folder, name-sorted,
+    /// hidden files/packages skipped, RAW-less branches pruned, depth-capped.
+    nonisolated private static func buildTree(at url: URL, depth: Int) -> FolderNode? {
+        guard depth <= 8 else { return nil }
+        let keys: [URLResourceKey] = [.isDirectoryKey, .isPackageKey]
         let contents = (try? FileManager.default.contentsOfDirectory(
-            at: folderURL, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)) ?? []
-        files = contents.filter { RawDecoder.isRawFile($0) }
-            .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
-        if let selection, !files.contains(selection) { self.selection = files.first }
-        if selection == nil { selection = files.first }
+            at: url, includingPropertiesForKeys: keys, options: .skipsHiddenFiles)) ?? []
+        func name(_ u: URL) -> String { u.lastPathComponent }
+        let files = contents.filter { RawDecoder.isRawFile($0) }
+            .sorted { name($0).localizedStandardCompare(name($1)) == .orderedAscending }
+        let dirs = contents.filter { u in
+            let values = try? u.resourceValues(forKeys: Set(keys))
+            return (values?.isDirectory ?? false) && !(values?.isPackage ?? false)
+        }
+        .sorted { name($0).localizedStandardCompare(name($1)) == .orderedAscending }
+        let subfolders = dirs.compactMap { buildTree(at: $0, depth: depth + 1) }
+        if files.isEmpty && subfolders.isEmpty { return nil }
+        let total = files.count + subfolders.reduce(0) { $0 + $1.totalCount }
+        return FolderNode(
+            id: url, name: url.lastPathComponent, files: files, subfolders: subfolders,
+            totalCount: total)
+    }
+
+    /// Depth-first: a folder's own files first, then its subfolders — the
+    /// order behind index numbers and shift-click ranges.
+    nonisolated private static func flatten(_ node: FolderNode?, into out: inout [URL]) {
+        guard let node else { return }
+        out.append(contentsOf: node.files)
+        for sub in node.subfolders { flatten(sub, into: &out) }
     }
 
     private func openSelection() {

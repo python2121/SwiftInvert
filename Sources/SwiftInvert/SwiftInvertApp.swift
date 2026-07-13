@@ -23,16 +23,15 @@ struct ContentView: View {
     @Bindable var model: AppModel
 
     var body: some View {
-        NavigationSplitView {
+        // Plain three-pane layout: the library is a solid panel like the
+        // adjustments sidebar (no NavigationSplitView vibrancy overlay).
+        HStack(spacing: 0) {
             LibraryView(model: model)
-                .navigationSplitViewColumnWidth(min: 200, ideal: 340)
-        } detail: {
-            HStack(spacing: 0) {
-                DetailView(model: model)
-                    .frame(minWidth: 400, maxWidth: .infinity, maxHeight: .infinity)
-                Divider()
-                ControlsSidebar(model: model)
-            }
+            Divider()
+            DetailView(model: model)
+                .frame(minWidth: 400, maxWidth: .infinity, maxHeight: .infinity)
+            Divider()
+            ControlsSidebar(model: model)
         }
         .onExitCommand { model.toolMode = .none }
         .sheet(item: $model.exportRequest) { request in

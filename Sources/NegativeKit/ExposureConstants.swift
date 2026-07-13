@@ -86,6 +86,10 @@ public enum K {
     public static let shadowToneAnchor = 1.40
     // Density anchor of the highlight region centre.
     public static let highlightToneAnchor = 0.30
+    // Dark Shadows: a second, deeper lift band — the Shadows anchor (1.40)
+    // covers broad darks; this targets the deepest printable tones near d_max.
+    // Same sharpness/amplitude, so the same monotone bounds apply.
+    public static let darkShadowToneAnchor = 1.85
     // Density swing of the Shadows slider at ±1 (positive slider = lift).
     // Slider ranges ±2: still monotone alone (2 · 0.5 · sharpness/4 = 0.875 < 1).
     public static let shadowsMaxLift = 0.5

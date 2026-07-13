@@ -78,6 +78,9 @@ struct ControlsSidebar: View {
                             label: "Shadow contrast", value: $model.settings.shadowContrast,
                             range: -3...6, format: "%.2f", defaultValue: 0)
                         LabeledSlider(
+                            label: "Dark shadows", value: $model.settings.darkShadows,
+                            range: -2...2, format: "%.2f", defaultValue: 0)
+                        LabeledSlider(
                             label: "Highlights", value: $model.settings.highlights, range: -1...1,
                             format: "%.2f", defaultValue: 0)
                         LabeledSlider(

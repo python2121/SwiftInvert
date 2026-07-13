@@ -36,10 +36,10 @@ struct CurveUniforms {
     float toeHeight;
     float shHeight;
     float zoneCenter;
-    // True Black (BPC) flag (0/1) + reserved lane (ex-flare/surround slots,
-    // keeps the layout stable).
+    // True Black (BPC) flag (0/1); darkShadowsLift rides the second
+    // ex-flare/surround slot (layout stable).
     float trueBlack;
-    float _reserved0;
+    float darkShadowsLift;
     float vStar;
     float midtoneGamma;
     float gammaWidth;
@@ -61,6 +61,7 @@ struct CurveUniforms {
 constant float TONE_SHARPNESS = 3.5f;
 constant float SHADOW_ANCHOR = 1.40f;
 constant float HIGHLIGHT_ANCHOR = 0.30f;
+constant float DARK_SHADOW_ANCHOR = 1.85f;
 
 inline float fast_sigmoid(float x) {
     if (x >= 0.0f) { return 1.0f / (1.0f + exp(-x)); }
@@ -178,11 +179,13 @@ kernel void printCurve(
 
         // Regional tone: sigmoid-masked density shifts + anchor-pivoted contrast,
         // parallel form (both masks on the incoming v) — mirrors ReferenceCurve.
-        if (p.shadowsLift != 0.0f || p.shadowContrast != 0.0f
+        if (p.shadowsLift != 0.0f || p.shadowContrast != 0.0f || p.darkShadowsLift != 0.0f
             || p.highlightsShift != 0.0f || p.highlightContrast != 0.0f) {
             float wS = fast_sigmoid(TONE_SHARPNESS * (v - SHADOW_ANCHOR));
             float wH = fast_sigmoid(TONE_SHARPNESS * (HIGHLIGHT_ANCHOR - v));
+            float wDS = fast_sigmoid(TONE_SHARPNESS * (v - DARK_SHADOW_ANCHOR));
             v = v + (-p.shadowsLift + p.shadowContrast * (v - SHADOW_ANCHOR)) * wS
+                  - p.darkShadowsLift * wDS
                   + (-p.highlightsShift + p.highlightContrast * (v - HIGHLIGHT_ANCHOR)) * wH;
         }
 

@@ -10,7 +10,7 @@ import Testing
 @Suite struct ToneControlsTests {
     /// Default print curve params over a ramp; tone fields injected per test.
     static func params(
-        shadows: Double = 0, shadowContrast: Double = 0,
+        shadows: Double = 0, shadowContrast: Double = 0, darkShadows: Double = 0,
         highlights: Double = 0, highlightContrast: Double = 0
     ) -> RenderParams {
         let slope = CurveLogic.gradeToSlope(115.0, densityRange: 1.3)
@@ -20,7 +20,7 @@ import Testing
             slopes: SIMD3(repeating: slope), pivots: SIMD3(repeating: pivot), curvatures: .zero,
             cmyOffsets: .zero, toeEff: 0, shoulderEff: 0, toeWidth: 2.5, shoulderWidth: 2.5,
             dMin: K.dMin, vStar: CurveLogic.referenceLinearValue(dMin: K.dMin),
-            shadows: shadows, shadowContrast: shadowContrast,
+            shadows: shadows, shadowContrast: shadowContrast, darkShadows: darkShadows,
             highlights: highlights, highlightContrast: highlightContrast)
     }
 
@@ -171,6 +171,34 @@ import Testing
         for i in 1..<contrastOut.count {
             #expect(contrastOut[i] <= contrastOut[i - 1] + 1e-4, "monotone at \(i)")
         }
+    }
+
+    @Test func darkShadowsTargetDeeperThanShadows() {
+        let base = Self.rampEncoded(Self.params())
+        let dark = Self.rampEncoded(Self.params(darkShadows: 1.0))
+        // Strong effect near the dark anchor, minimal at the broad-shadows
+        // anchor and in the mids/highlights.
+        let deepIdx = Self.idx(atDensity: K.darkShadowToneAnchor + 0.15)
+        let broadIdx = Self.idx(atDensity: K.shadowToneAnchor - 0.35)
+        let midIdx = Self.idx(atDensity: K.anchorTargetDensity)
+        #expect(dark[deepIdx] - base[deepIdx] > 0.015, "deep lift (got \(dark[deepIdx] - base[deepIdx]))")
+        #expect(abs(dark[broadIdx] - base[broadIdx]) < 0.012, "broad-shadow leak")
+        #expect(abs(dark[midIdx] - base[midIdx]) < 0.006, "midtone leak")
+        // Monotone at both extremes.
+        for extreme in [2.0, -2.0] {
+            let out = Self.rampEncoded(Self.params(darkShadows: extreme))
+            for i in 1..<out.count {
+                #expect(out[i] <= out[i - 1] + 1e-4, "non-monotone at \(i) for darkShadows \(extreme)")
+            }
+        }
+        // Sidecar round-trip + legacy default.
+        var s = ExposureSettings()
+        s.darkShadows = -0.7
+        if let back = try? JSONDecoder().decode(ExposureSettings.self, from: JSONEncoder().encode(s)) {
+            #expect(back == s)
+        }
+        let legacy = try? JSONDecoder().decode(ExposureSettings.self, from: Data("{}".utf8))
+        #expect(legacy?.darkShadows == 0)
     }
 
     @Test func zeroSettingsAreIdentity() {

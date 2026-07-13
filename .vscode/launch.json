@@ -1,0 +1,44 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:SwiftInvert}",
+            "name": "Debug negcli",
+            "target": "negcli",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug negcli"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:SwiftInvert}",
+            "name": "Release negcli",
+            "target": "negcli",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release negcli"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:SwiftInvert}",
+            "name": "Debug SwiftInvert",
+            "target": "SwiftInvert",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug SwiftInvert"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:SwiftInvert}",
+            "name": "Release SwiftInvert",
+            "target": "SwiftInvert",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release SwiftInvert"
+        }
+    ]
+}

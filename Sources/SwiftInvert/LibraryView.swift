@@ -1,91 +1,152 @@
+import AppKit
 import SwiftUI
 
+/// The library: a VSCode-style collapsible folder tree whose leaves are
+/// thumbnail strips (previews + index badges, no filenames). Plain panel
+/// styling to match the adjustments sidebar (no vibrancy overlay).
 struct LibraryView: View {
     @Bindable var model: AppModel
 
-    private let columns = [GridItem(.adaptive(minimum: 140, maximum: 200), spacing: 8)]
+    private let columns = [GridItem(.adaptive(minimum: 120, maximum: 180), spacing: 8)]
 
     var body: some View {
-        Group {
-            if model.folderURL == nil {
-                ContentUnavailableView {
-                    Label("No folder selected", systemImage: "folder")
-                } description: {
-                    Text("Choose a folder of camera-scanned negatives.")
-                } actions: {
-                    Button("Choose Folder…") { model.chooseFolder() }
+        VStack(spacing: 0) {
+            header
+            Divider()
+            content
+        }
+        .frame(width: 320)
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    private var header: some View {
+        HStack {
+            Text(model.folderURL?.lastPathComponent ?? "Library")
+                .font(.headline)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .help(model.folderURL?.path ?? "")
+            if model.isScanning {
+                ProgressView().controlSize(.small)
+            }
+            Spacer()
+            Button {
+                model.chooseFolder()
+            } label: {
+                Image(systemName: "folder")
+            }
+            .buttonStyle(.borderless)
+            .help("Choose library folder…")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if model.folderURL == nil {
+            ContentUnavailableView {
+                Label("No folder selected", systemImage: "folder")
+            } description: {
+                Text("Choose a folder — subfolders become collapsible film strips.")
+            } actions: {
+                Button("Choose Folder…") { model.chooseFolder() }
+            }
+        } else if let tree = model.folderTree {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 6) {
+                    FolderSection(model: model, node: tree, depth: 0, isRoot: true, columns: columns)
                 }
-            } else if model.files.isEmpty {
-                ContentUnavailableView(
-                    "No RAW files", systemImage: "photo.on.rectangle.angled",
-                    description: Text("No supported camera RAW files in this folder."))
-            } else {
-                ScrollView {
+                .padding(8)
+            }
+        } else if model.isScanning {
+            VStack {
+                Spacer()
+                ProgressView("Scanning…")
+                Spacer()
+            }
+            .frame(maxWidth: .infinity)
+        } else {
+            ContentUnavailableView(
+                "No RAW files", systemImage: "photo.on.rectangle.angled",
+                description: Text("No supported camera RAW files in this folder tree."))
+        }
+    }
+}
+
+/// One folder in the tree: a collapsible header row plus its thumbnail strip
+/// and child folders (recursive).
+struct FolderSection: View {
+    var model: AppModel
+    let node: AppModel.FolderNode
+    let depth: Int
+    let isRoot: Bool
+    let columns: [GridItem]
+
+    private var isCollapsed: Bool { model.collapsedFolders.contains(node.id) }
+    private var indent: CGFloat { CGFloat(depth) * 14 }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if !isRoot {
+                folderRow
+            }
+            if isRoot || !isCollapsed {
+                if !node.files.isEmpty {
                     LazyVGrid(columns: columns, spacing: 8) {
-                        ForEach(model.files, id: \.self) { url in
-                            gridCell(url)
+                        ForEach(node.files, id: \.self) { url in
+                            LibraryCell(model: model, url: url)
                         }
                     }
-                    .padding(8)
+                    .padding(.leading, indent + (isRoot ? 0 : 14))
+                }
+                ForEach(node.subfolders) { sub in
+                    FolderSection(
+                        model: model, node: sub, depth: isRoot ? 0 : depth + 1,
+                        isRoot: false, columns: columns)
                 }
             }
         }
-        .navigationTitle(model.folderURL?.lastPathComponent ?? "SwiftInvert")
-        .toolbar {
-            ToolbarItem {
-                Button("Choose Folder…", systemImage: "folder") { model.chooseFolder() }
+    }
+
+    private var folderRow: some View {
+        Button {
+            model.toggleCollapsed(node.id)
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .rotationEffect(.degrees(isCollapsed ? 0 : 90))
+                    .foregroundStyle(.secondary)
+                Image(systemName: "folder.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                Text(node.name)
+                    .font(.callout.weight(.medium))
+                    .lineLimit(1)
+                Text("\(node.totalCount)")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.tertiary)
+                Spacer()
             }
+            .padding(.leading, indent)
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
     }
 }
 
-extension LibraryView {
-    @ViewBuilder
-    fileprivate func gridCell(_ url: URL) -> some View {
-        ThumbnailCell(url: url, store: model.thumbnails, model: model)
-        .gesture(
-            ExclusiveGesture(
-                TapGesture().modifiers(.shift).onEnded { model.selectRange(to: url) },
-                ExclusiveGesture(
-                    TapGesture().modifiers(.command).onEnded { model.select(url, additive: true) },
-                    TapGesture().onEnded { model.select(url, additive: false) }
-                )
-            )
-        )
-        .contextMenu { exportMenu(for: url) }
-    }
-
-    @ViewBuilder
-    fileprivate func exportMenu(for url: URL) -> some View {
-        let urls: [URL] =
-            model.multiSelection.contains(url)
-            ? model.files.filter { model.multiSelection.contains($0) }
-            : [url]
-        let title = urls.count == 1 ? "Export Image…" : "Export \(urls.count) Images…"
-        Button(title) {
-            if !model.multiSelection.contains(url) {
-                model.select(url, additive: false)
-            }
-            model.exportRequest = AppModel.ExportRequest(urls: urls)
-        }
-        .disabled(model.isExporting)
-    }
-}
-
-struct ThumbnailCell: View {
-    let url: URL
-    let store: ThumbnailStore
-    // The cell reads selection state from the model inside its own body so
-    // Observation invalidates every affected cell — passing precomputed Bools
-    // through the lazy grid left stale halos on previously-materialized cells.
+/// Thumbnail + index badge (filename available on hover).
+struct LibraryCell: View {
     var model: AppModel
+    let url: URL
     @State private var image: CGImage?
 
     private var isSelected: Bool { model.multiSelection.contains(url) }
     private var isCurrent: Bool { model.selection == url }
 
     var body: some View {
-        VStack(spacing: 4) {
+        ZStack(alignment: .bottomLeading) {
             ZStack {
                 RoundedRectangle(cornerRadius: 6).fill(.quaternary)
                 if let image {
@@ -100,20 +161,50 @@ struct ThumbnailCell: View {
             }
             .aspectRatio(3.0 / 2.0, contentMode: .fit)
             .overlay {
-                // Full-strength ring on every selected cell; the current image
-                // gets the thicker ring.
                 RoundedRectangle(cornerRadius: 6)
                     .strokeBorder(
                         isSelected ? Color.accentColor : .clear,
                         lineWidth: isCurrent ? 3 : 2)
             }
-            Text(url.lastPathComponent)
-                .font(.caption2)
-                .lineLimit(1)
-                .foregroundStyle(isSelected ? .primary : .secondary)
+            if let index = model.fileIndex[url] {
+                Text("\(index)")
+                    .font(.system(size: 9, weight: .semibold).monospacedDigit())
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(.black.opacity(0.55), in: Capsule())
+                    .foregroundStyle(.white.opacity(0.9))
+                    .padding(4)
+            }
         }
+        .help(url.lastPathComponent)
         .task(id: url) {
-            image = await store.thumbnail(for: url)
+            image = await model.thumbnails.thumbnail(for: url)
         }
+        .gesture(
+            ExclusiveGesture(
+                TapGesture().modifiers(.shift).onEnded { model.selectRange(to: url) },
+                ExclusiveGesture(
+                    TapGesture().modifiers(.command).onEnded { model.select(url, additive: true) },
+                    TapGesture().onEnded { model.select(url, additive: false) }
+                )
+            )
+        )
+        .contextMenu { exportMenu }
+    }
+
+    @ViewBuilder
+    private var exportMenu: some View {
+        let urls: [URL] =
+            model.multiSelection.contains(url)
+            ? model.files.filter { model.multiSelection.contains($0) }
+            : [url]
+        let title = urls.count == 1 ? "Export Image…" : "Export \(urls.count) Images…"
+        Button(title) {
+            if !model.multiSelection.contains(url) {
+                model.select(url, additive: false)
+            }
+            model.exportRequest = AppModel.ExportRequest(urls: urls)
+        }
+        .disabled(model.isExporting)
     }
 }

@@ -115,6 +115,7 @@ enum Fixtures2 {
         settings.exposureStops = 0.7
         settings.shadows = 0.8
         settings.shadowContrast = -0.5
+        settings.darkShadows = 1.2
         settings.highlights = -0.9
         settings.highlightContrast = 0.6
         settings.vibrance = 1.5

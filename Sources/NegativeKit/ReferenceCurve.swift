@@ -75,10 +75,12 @@ public enum ReferenceCurve {
 
         // Regional tone controls, all-zero → identity (fixture parity preserved).
         let hasTone = params.shadows != 0 || params.shadowContrast != 0
+            || params.darkShadows != 0
             || params.highlights != 0 || params.highlightContrast != 0
         let hasBandCMY = params.shadowCMY != .zero || params.midCMY != .zero
             || params.highlightCMY != .zero
         let shLift = params.shadows * K.shadowsMaxLift
+        let dsLift = params.darkShadows * K.shadowsMaxLift
         let shContrast = max(params.shadowContrast * K.shadowContrastMax, K.shadowContrastNegFloor)
         let hiShift = params.highlights * K.highlightsMaxShift
         let hiContrast = params.highlightContrast * K.highlightContrastMax
@@ -108,7 +110,9 @@ public enum ReferenceCurve {
                     if hasTone {
                         let wS = CurveLogic.sigmoid(K.toneRegionSharpness * (v - K.shadowToneAnchor))
                         let wH = CurveLogic.sigmoid(K.toneRegionSharpness * (K.highlightToneAnchor - v))
+                        let wDS = CurveLogic.sigmoid(K.toneRegionSharpness * (v - K.darkShadowToneAnchor))
                         v += (-shLift + shContrast * (v - K.shadowToneAnchor)) * wS
+                        v += -dsLift * wDS
                         v += (-hiShift + hiContrast * (v - K.highlightToneAnchor)) * wH
                     }
 

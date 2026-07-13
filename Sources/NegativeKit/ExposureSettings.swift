@@ -41,6 +41,8 @@ public struct ExposureSettings: Codable, Equatable, Sendable {
     public var exposureStops: Double = 0
     public var shadows: Double = 0
     public var shadowContrast: Double = 0
+    /// Same lift as `shadows`, anchored deeper (darkShadowToneAnchor).
+    public var darkShadows: Double = 0
     public var highlights: Double = 0
     public var highlightContrast: Double = 0
     /// Overall contrast: rotates the whole curve around the reference tone
@@ -110,6 +112,7 @@ public struct ExposureSettings: Codable, Equatable, Sendable {
         exposureStops = d(.exposureStops, 0)
         shadows = d(.shadows, 0)
         shadowContrast = d(.shadowContrast, 0)
+        darkShadows = d(.darkShadows, 0)
         highlights = d(.highlights, 0)
         highlightContrast = d(.highlightContrast, 0)
         overallContrast = d(.overallContrast, 0)
@@ -160,6 +163,7 @@ public struct RenderParams: Equatable, Sendable {
     // Regional tone controls (exposureStops is folded into cmyOffsets upstream).
     public var shadows: Double = 0
     public var shadowContrast: Double = 0
+    public var darkShadows: Double = 0
     public var highlights: Double = 0
     public var highlightContrast: Double = 0
     // CIELAB chroma ops on the linear print (1.0 = off).
@@ -178,7 +182,7 @@ public struct RenderParams: Equatable, Sendable {
         finalBounds: LogNegativeBounds, slopes: SIMD3<Double>, pivots: SIMD3<Double>,
         curvatures: SIMD3<Double>, cmyOffsets: SIMD3<Double>, toeEff: Double, shoulderEff: Double,
         toeWidth: Double, shoulderWidth: Double, dMin: Double, vStar: Double,
-        shadows: Double = 0, shadowContrast: Double = 0, highlights: Double = 0,
+        shadows: Double = 0, shadowContrast: Double = 0, darkShadows: Double = 0, highlights: Double = 0,
         highlightContrast: Double = 0, vibrance: Double = 1.0, saturation: Double = 1.0,
         preSaturation: Double = 1.0, trueBlack: Bool = false,
         shadowCMY: SIMD3<Double> = .zero, midCMY: SIMD3<Double> = .zero,
@@ -197,6 +201,7 @@ public struct RenderParams: Equatable, Sendable {
         self.vStar = vStar
         self.shadows = shadows
         self.shadowContrast = shadowContrast
+        self.darkShadows = darkShadows
         self.highlights = highlights
         self.highlightContrast = highlightContrast
         self.vibrance = vibrance
@@ -381,6 +386,7 @@ public enum ExposureKernel {
             shadowContrast: settings.shadowContrast >= 0
                 ? settings.shadowContrast
                 : settings.shadowContrast * (abs(K.shadowContrastNegFloor) / (3.0 * K.shadowContrastMax)),
+            darkShadows: settings.darkShadows,
             highlights: settings.highlights,
             highlightContrast: settings.highlightContrast,
             vibrance: settings.vibrance,
