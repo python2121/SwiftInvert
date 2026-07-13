@@ -55,6 +55,45 @@ struct CropRotationSection: View {
         .padding(.horizontal, 12)
     }
 
+    /// Live straighten: the slider writes a transient drag value (display
+    /// transform preview + grid); the real bake commits once on release.
+    private var straightenRow: some View {
+        let displayed = model.straightenDragValue ?? model.settings.fineRotation
+        return VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 4) {
+                Text("Straighten").font(.caption)
+                if abs(displayed) > 1e-9 {
+                    Button {
+                        model.straightenDragValue = nil
+                        model.settings.fineRotation = 0
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Reset straighten")
+                }
+                Spacer()
+                Text(String(format: "%.1f°", displayed))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(abs(displayed) > 1e-9 ? .primary : .secondary)
+            }
+            Slider(
+                value: Binding(
+                    get: { model.straightenDragValue ?? model.settings.fineRotation },
+                    set: { model.straightenDragValue = $0 }),
+                in: -45...45
+            ) { editing in
+                if !editing, let value = model.straightenDragValue {
+                    model.settings.fineRotation = (value * 10).rounded() / 10
+                    model.straightenDragValue = nil
+                }
+            }
+            .controlSize(.small)
+        }
+    }
+
     private var content: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 6) {
@@ -78,9 +117,7 @@ struct CropRotationSection: View {
                 }
             }
 
-            LabeledSlider(
-                label: "Straighten", value: $model.settings.fineRotation,
-                range: -45...45, format: "%.1f°", defaultValue: 0)
+            straightenRow
 
             Toggle("Show grid lines", isOn: $showGridLines)
             if showGridLines {

@@ -89,6 +89,11 @@ final class AppModel {
 
     // MARK: - Orientation & canvas
 
+    /// Transient Straighten drag value: while non-nil the detail view previews
+    /// the rotation as a display transform (no pipeline re-render, no settings
+    /// mutation); commit happens once on release.
+    var straightenDragValue: Double?
+
     func rotateClockwise() {
         pendingHistoryLabel = "Rotate 90° CW"
         settings.rotation = ((settings.rotation + 90) % 360 + 360) % 360 }

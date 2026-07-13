@@ -160,16 +160,25 @@ struct DetailView: View {
                 imageSize: CGSize(width: image.width, height: image.height), in: geo.size)
             ZStack {
                 ZStack {
+                    // Straighten preview: while the slider is engaged the delta
+                    // is a display transform (rotate + cover-scale mimicking the
+                    // inscribed crop) — no pipeline work until release.
+                    let delta = model.straightenDragValue.map { $0 - model.settings.fineRotation } ?? 0
                     Image(decorative: image, scale: 1.0)
                         .resizable()
                         .interpolation(.high)
-                    if showGridLines, model.toolMode == .none,
-                        let type = GridLineType(rawValue: gridLineType)
+                        .rotationEffect(.degrees(delta))
+                        .scaleEffect(delta == 0 ? 1 : coverScale(image: image, degrees: delta))
+                    // Grid: on while its box is checked OR while straightening —
+                    // and it stays axis-aligned (that's what you level against).
+                    if model.toolMode == .none, let type = GridLineType(rawValue: gridLineType),
+                        showGridLines || model.straightenDragValue != nil
                     {
                         GridOverlay(type: type)
                     }
                 }
                 .frame(width: fitted.width, height: fitted.height)
+                .clipped()
                 .scaleEffect(zoom)
                 .offset(pan)
                 .position(x: geo.size.width / 2, y: geo.size.height / 2)
@@ -198,6 +207,15 @@ struct DetailView: View {
                 }
             }
         }
+    }
+
+    /// Scale that keeps the rotated preview covering the frame (the display
+    /// stand-in for the inscribed-rect crop the real bake applies).
+    private func coverScale(image: CGImage, degrees: Double) -> CGFloat {
+        let w = Double(image.width), h = Double(image.height)
+        let inscribed = RGBImage.inscribedRectSize(
+            width: w, height: h, radians: degrees * .pi / 180)
+        return CGFloat(max(w / max(inscribed.width, 1), h / max(inscribed.height, 1)))
     }
 
     private var existingRect: NormalizedRect? {
