@@ -22,7 +22,7 @@ swift build                 # debug build
 swift run -c release SwiftInvert   # the app (release: debug decode is ~10x slower)
 make test                   # Swift Testing suite — MUST use make, not bare `swift test`
 swift build -c release && .build/release/negcli   # headless CLI (decode/thumb/render/bench)
-make app                    # package dist/SwiftInvert.app (icon via LaunchServices)
+make app                    # package self-contained dist/SwiftInvert.app (bundles Homebrew dylibs)
 make install                # copy the bundle to /Applications
 
 # Regenerate parity fixtures (after deliberate NegPy kernel/constant changes):

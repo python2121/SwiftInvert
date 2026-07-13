@@ -15,7 +15,7 @@ cast removal), and a histogram. Swift + SwiftUI + Metal, no Python at runtime.
 
 ```bash
 swift run -c release SwiftInvert   # run from source (debug decode is ~10x slower)
-./build.sh                  # package dist/SwiftInvert.app (wraps `make app`)
+./build.sh                  # package self-contained dist/SwiftInvert.app (wraps `make app`)
 make install                # ...and copy it to /Applications
 make test                   # parity tests against NegPy-dumped fixtures (not bare `swift test`)
 .build/release/negcli       # headless pipeline driver (decode/thumb/render)

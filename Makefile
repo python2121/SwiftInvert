@@ -26,9 +26,12 @@ release:
 # SwiftPM's generated Bundle.module accessor resolves resource bundles at
 # Bundle.main.bundleURL/<name>.bundle — the .app TOP LEVEL — so the two
 # resource bundles (Metal shader source; app-icon PNG) are copied there, NOT
-# into Contents/Resources. Unsigned local build: fine as-is, but strict code
-# signing rejects top-level items besides Contents, so signing later means
-# revisiting that placement.
+# into Contents/Resources. Homebrew dylibs (LibRaw + transitive deps) are
+# copied into Contents/Frameworks and re-signed ad-hoc (bundle_dylibs.sh), so
+# the .app is self-contained. Individual binaries are ad-hoc signed; the
+# BUNDLE is unsigned — fine locally, but strict (distribution) signing
+# rejects top-level items besides Contents, so signing later means
+# revisiting the resource-bundle placement.
 APP_DIR := dist/SwiftInvert.app
 
 app: release
@@ -39,6 +42,7 @@ app: release
 	cp -R .build/release/SwiftInvert_SwiftInvert.bundle $(APP_DIR)/
 	cp -R .build/release/SwiftInvert_MetalRenderKit.bundle $(APP_DIR)/
 	cp Assets/SwiftInvert.icns $(APP_DIR)/Contents/Resources/AppIcon.icns
+	scripts/bundle_dylibs.sh $(APP_DIR)
 	@echo "Built $(APP_DIR)"
 
 install: app
