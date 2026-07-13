@@ -7,7 +7,6 @@ struct ControlsSidebar: View {
     @AppStorage("adjustmentsCollapsed") private var adjustmentsCollapsed = false
     @AppStorage("cropRotationCollapsed") private var cropRotationCollapsed = false
     @AppStorage("historyCollapsed") private var historyCollapsed = false
-    @AppStorage("adjustmentsHeight") private var adjustmentsHeight = 440.0
     @AppStorage("historyHeight") private var historyHeight = 150.0
 
     var body: some View {
@@ -16,7 +15,7 @@ struct ControlsSidebar: View {
         // the header can never pan off the top (unclamped overflow in a VStack
         // is centered by SwiftUI, which pushed the top off-screen).
         GeometryReader { geo in
-            let fit = effectiveHeights(available: geo.size.height)
+            let historyFit = fitHistory(available: geo.size.height)
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 5) {
                     Button {
@@ -40,9 +39,11 @@ struct ControlsSidebar: View {
                 .padding(.horizontal, 12)
                 .padding(.top, 12)
 
-                // Sections own their heights (handle on each section's bottom
-                // edge); resizing pushes everything below down and never
-                // touches sizing above. History, last, absorbs the remainder.
+                // Adjustments is the flexible section: its ScrollView absorbs
+                // all slack, so C&R (intrinsic) and History (stored height)
+                // pack tightly against the bottom with no dead gaps. Both
+                // handles around C&R drag the same boundary — C&R keeps its
+                // height, so resizing means resizing the History list.
                 if !adjustmentsCollapsed {
                     VStack(alignment: .leading, spacing: 10) {
                         // Pinned: histogram stays visible while controls scroll.
@@ -50,39 +51,29 @@ struct ControlsSidebar: View {
                             .padding(.horizontal, 12)
                         scrollingControls
                     }
-                    .frame(height: fit)
-                    // The handle "at the top of the crop section": it resizes
-                    // Adjustments; Crop & Rotation below keeps its intrinsic
-                    // height and just moves, and History (the resizable
-                    // remainder) absorbs the push.
-                    SectionResizeHandle(
-                        height: $adjustmentsHeight, range: 220...820, sectionIsBelow: false)
+                    .frame(minHeight: 210, maxHeight: .infinity)
+                    if historyCollapsed {
+                        Divider()
+                    } else {
+                        SectionResizeHandle(
+                            height: $historyHeight, range: 40...600, sectionIsBelow: true)
+                    }
                 } else {
                     Divider()
+                    // Collapsed: nothing flexible above, so the bottom group
+                    // sinks to the bottom edge.
+                    Spacer(minLength: 0)
                 }
 
-                // Sections pack tightly top-down (no gaps between them);
-                // the single flexible space sits at the BOTTOM of the stack,
-                // so resizing Adjustments visibly pushes C&R + History down.
-                // Only trailing COLLAPSED sections sink to the bottom edge.
-                if cropRotationCollapsed && historyCollapsed {
-                    Spacer(minLength: 0)
-                    CropRotationSection(model: model)
+                CropRotationSection(model: model)
+                if historyCollapsed {
                     Divider()
-                    HistoryPanel(model: model, listHeight: 0)
-                } else if historyCollapsed {
-                    CropRotationSection(model: model)
-                    Spacer(minLength: 0)
-                    Divider()
-                    HistoryPanel(model: model, listHeight: 0)
                 } else {
-                    CropRotationSection(model: model)
                     // The handle doubles as the separator (it draws a divider).
                     SectionResizeHandle(
-                        height: $historyHeight, range: 80...600, sectionIsBelow: true)
-                    HistoryPanel(model: model, listHeight: fitHistory(available: geo.size.height))
-                    Spacer(minLength: 0)
+                        height: $historyHeight, range: 40...600, sectionIsBelow: true)
                 }
+                HistoryPanel(model: model, listHeight: historyFit)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
@@ -90,24 +81,16 @@ struct ControlsSidebar: View {
         .animation(.easeOut(duration: 0.12), value: adjustmentsCollapsed)
     }
 
-    /// Clamp the Adjustments height to the window, reserving the bottom
-    /// group (C&R intrinsic + History at its clamped height) and chrome. The
-    /// floor (210) always fits the pinned histogram — the section can never be
-    /// squeezed below its fixed content, whose invisible clipped overflow used
-    /// to eat clicks meant for the sections below (.clipped() is visual only;
-    /// it does not clip hit-testing).
-    private func effectiveHeights(available: CGFloat) -> CGFloat {
-        guard !adjustmentsCollapsed else { return 0 }
-        let cropIntrinsic: CGFloat = cropRotationCollapsed ? 46 : 220
-        let historyH: CGFloat = historyCollapsed ? 44 : fitHistory(available: available) + 56
-        let chrome: CGFloat = 80  // top header + handle
-        return min(adjustmentsHeight, max(available - chrome - cropIntrinsic - historyH, 210))
-    }
-
-    /// History's effective open height: its stored preference, clamped so the
-    /// bottom group can always fit under a minimal Adjustments strip.
+    /// History's effective open height: the stored preference (opens at 150,
+    /// draggable down to 40 via either handle), clamped so everything above
+    /// still fits — C&R at its intrinsic height plus the Adjustments floor
+    /// (210, the pinned histogram: squeezing the section below its fixed
+    /// content leaves invisible clipped overflow that eats clicks — .clipped()
+    /// is visual only, it does not clip hit-testing).
     private func fitHistory(available: CGFloat) -> CGFloat {
-        min(historyHeight, max(available - 380, 80))
+        let cropH: CGFloat = cropRotationCollapsed ? 40 : 175
+        let above: CGFloat = adjustmentsCollapsed ? 130 : 370
+        return min(max(historyHeight, 40), max(available - above - cropH, 40))
     }
 
     private var scrollingControls: some View {

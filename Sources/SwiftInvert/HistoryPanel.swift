@@ -5,8 +5,8 @@ import SwiftUI
 /// the redo history (dimmed); any new edit clears them. Click a row to jump.
 struct HistoryPanel: View {
     @Bindable var model: AppModel
-    /// Fixed open height (parent-clamped); the parent's spacer above the
-    /// bottom group provides the anchoring, so this panel is always intrinsic.
+    /// Open list height, owned and clamped by the parent (the resize handles
+    /// around Crop & Rotation both drive it); this panel stays intrinsic.
     var listHeight: Double = 150
     @AppStorage("historyCollapsed") private var collapsed = false
 
