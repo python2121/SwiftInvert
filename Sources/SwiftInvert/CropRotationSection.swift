@@ -34,7 +34,7 @@ struct CropRotationSection: View {
                 content
             }
         }
-        .padding(.vertical, 8)
+        .padding(.vertical, 4)
     }
 
     private var header: some View {

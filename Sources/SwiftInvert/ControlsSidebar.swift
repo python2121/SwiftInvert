@@ -61,8 +61,12 @@ struct ControlsSidebar: View {
                 } else {
                     Divider()
                     // Collapsed: nothing flexible above, so the bottom group
-                    // sinks to the bottom edge.
+                    // sinks to the bottom edge — but History keeps its grip.
                     Spacer(minLength: 0)
+                    if !historyCollapsed {
+                        SectionResizeHandle(
+                            height: $historyHeight, range: 40...600, sectionIsBelow: true)
+                    }
                 }
 
                 CropRotationSection(model: model)
@@ -75,7 +79,7 @@ struct ControlsSidebar: View {
                 }
                 HistoryPanel(model: model, listHeight: historyFit)
             }
-            // Matches the inter-section gap (8 section pad + 4 stack
+            // Matches the inter-section gap (4 section pad + 4 stack
             // spacing) so a collapsed History header sits as far off the
             // bottom edge as collapsed C&R sits off its divider.
             .padding(.bottom, 4)
