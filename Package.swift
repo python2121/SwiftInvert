@@ -29,6 +29,7 @@ let package = Package(
         .executableTarget(
             name: "SwiftInvert",
             dependencies: ["RawDecodeKit", "NegativeKit", "MetalRenderKit"],
+            resources: [.copy("Resources")],
             swiftSettings: v5
         ),
         .testTarget(

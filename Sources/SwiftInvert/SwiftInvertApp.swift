@@ -9,6 +9,12 @@ struct SwiftInvertApp: App {
         // Running unbundled via `swift run` needs an explicit activation policy
         // for the window to appear and take focus.
         NSApplication.shared.setActivationPolicy(.regular)
+        // Unbundled (swift run) apps have no Info.plist icon; set it directly.
+        if let url = Bundle.module.url(forResource: "AppIcon", withExtension: "png", subdirectory: "Resources"),
+            let icon = NSImage(contentsOf: url)
+        {
+            NSApplication.shared.applicationIconImage = icon
+        }
         DispatchQueue.main.async { NSApplication.shared.activate(ignoringOtherApps: true) }
     }
 
