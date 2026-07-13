@@ -244,6 +244,10 @@ verifies every stage boundary:
 - GPU vs fixtures and GPU vs CPU reference at NegPy's own gates (mean<0.01,
   max<0.04); the rgba8 display path within 1.5/255 of the float path.
 
+**Upstream review log: see `UPSTREAM.md`** — it records the last NegPy
+commit reviewed (the baseline for "what changed upstream?" requests) and
+the port/skip decisions per review. Update it after every upstream review.
+
 Kernel constants are synced with **NegPy 0.36** (`toe_height` 0.90 with the
 `toe_grade_strength` rescale, True Black, always-confidence cast removal);
 fixtures were re-dumped from that revision. NegPy's per-layer R/G/B trims,
