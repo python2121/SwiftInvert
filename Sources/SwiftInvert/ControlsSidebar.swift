@@ -6,6 +6,7 @@ struct ControlsSidebar: View {
 
     @AppStorage("adjustmentsCollapsed") private var adjustmentsCollapsed = false
     @AppStorage("cropRotationCollapsed") private var cropRotationCollapsed = false
+    @AppStorage("historyCollapsed") private var historyCollapsed = false
     @AppStorage("adjustmentsHeight") private var adjustmentsHeight = 440.0
 
     var body: some View {
@@ -59,11 +60,22 @@ struct ControlsSidebar: View {
                     Divider()
                 }
 
-                // Fixed-height section: always shown at its natural height.
-                CropRotationSection(model: model)
-                Divider()
-
-                HistoryPanel(model: model)
+                // Collapsed sections sink to join the element below them:
+                // when everything from here down is collapsed, the flexible
+                // space moves ABOVE the collapsed headers so they stack at the
+                // bottom together.
+                if cropRotationCollapsed && historyCollapsed {
+                    Spacer(minLength: 0)
+                    CropRotationSection(model: model)
+                    Divider()
+                    HistoryPanel(model: model, flexible: false)
+                } else {
+                    // Fixed-height section at its natural height; History (the
+                    // resizable remainder) fills or bottom-anchors below it.
+                    CropRotationSection(model: model)
+                    Divider()
+                    HistoryPanel(model: model)
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
