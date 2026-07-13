@@ -10,63 +10,85 @@ struct ControlsSidebar: View {
     @AppStorage("cropRotationHeight") private var cropRotationHeight = 175.0
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 5) {
-                Button {
-                    adjustmentsCollapsed.toggle()
-                } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 9, weight: .semibold))
-                            .rotationEffect(.degrees(adjustmentsCollapsed ? 0 : 90))
-                            .foregroundStyle(.secondary)
-                        Text("Adjustments").font(.headline)
+        // GeometryReader + top alignment: stored section heights are clamped to
+        // what actually fits, and any residual overflow clips at the BOTTOM —
+        // the header can never pan off the top (unclamped overflow in a VStack
+        // is centered by SwiftUI, which pushed the top off-screen).
+        GeometryReader { geo in
+            let fit = effectiveHeights(available: geo.size.height)
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 5) {
+                    Button {
+                        adjustmentsCollapsed.toggle()
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 9, weight: .semibold))
+                                .rotationEffect(.degrees(adjustmentsCollapsed ? 0 : 90))
+                                .foregroundStyle(.secondary)
+                            Text("Adjustments").font(.headline)
+                        }
+                        .contentShape(Rectangle())
                     }
-                    .contentShape(Rectangle())
+                    .buttonStyle(.plain)
+                    Spacer()
+                    Button("Reset All") { model.resetSettings() }
+                        .controlSize(.small)
+                        .help("Reset every slider and toggle to its default (keeps crops)")
                 }
-                .buttonStyle(.plain)
-                Spacer()
-                Button("Reset All") { model.resetSettings() }
-                    .controlSize(.small)
-                    .help("Reset every slider and toggle to its default (keeps crops)")
-            }
-            .padding(.horizontal, 12)
-            .padding(.top, 12)
+                .padding(.horizontal, 12)
+                .padding(.top, 12)
 
-            // Sections own their heights (handle on each section's bottom
-            // edge); resizing pushes everything below down and never touches
-            // sizing above. History, last, absorbs the remainder.
-            if !adjustmentsCollapsed {
-                VStack(alignment: .leading, spacing: 10) {
-                    // Pinned: the histogram stays visible while controls scroll.
-                    HistogramView(model: model)
-                        .padding(.horizontal, 12)
-                    scrollingControls
+                // Sections own their heights (handle on each section's bottom
+                // edge); resizing pushes everything below down and never
+                // touches sizing above. History, last, absorbs the remainder.
+                if !adjustmentsCollapsed {
+                    VStack(alignment: .leading, spacing: 10) {
+                        // Pinned: histogram stays visible while controls scroll.
+                        HistogramView(model: model)
+                            .padding(.horizontal, 12)
+                        scrollingControls
+                    }
+                    .frame(height: fit.adjustments)
+                    .clipped()
+                    SectionResizeHandle(
+                        height: $adjustmentsHeight, range: 220...820, sectionIsBelow: false)
+                } else {
+                    Divider()
                 }
-                .frame(height: adjustmentsHeight)
-                .clipped()
-                SectionResizeHandle(
-                    height: $adjustmentsHeight, range: 220...820, sectionIsBelow: false)
-            } else {
-                Divider()
-            }
 
-            if cropRotationCollapsed {
-                CropRotationSection(model: model)
-                Divider()
-            } else {
-                ScrollView {
+                if cropRotationCollapsed {
                     CropRotationSection(model: model)
+                    Divider()
+                } else {
+                    ScrollView {
+                        CropRotationSection(model: model)
+                    }
+                    .frame(height: fit.cropRotation)
+                    SectionResizeHandle(
+                        height: $cropRotationHeight, range: 90...360, sectionIsBelow: false)
                 }
-                .frame(height: cropRotationHeight)
-                SectionResizeHandle(
-                    height: $cropRotationHeight, range: 90...360, sectionIsBelow: false)
-            }
 
-            HistoryPanel(model: model)
+                HistoryPanel(model: model)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
         .frame(width: 215)
         .animation(.easeOut(duration: 0.12), value: adjustmentsCollapsed)
+    }
+
+    /// Clamp stored section heights to the window: reserve room for the
+    /// headers/handles chrome and a minimum History strip, give Adjustments
+    /// first claim on the rest, Crop & Rotation what remains. Stored values
+    /// keep the user's preference for taller windows.
+    private func effectiveHeights(available: CGFloat) -> (adjustments: CGFloat, cropRotation: CGFloat) {
+        let chrome: CGFloat = 150  // headers + handles + minimum History header
+        let cropWanted = cropRotationCollapsed ? 0 : cropRotationHeight
+        let adjMax = max(available - chrome - min(cropWanted, 90), 120)
+        let adj = adjustmentsCollapsed ? 0 : min(adjustmentsHeight, adjMax)
+        let cropMax = max(available - chrome - adj, 60)
+        let crop = cropRotationCollapsed ? 0 : min(cropRotationHeight, cropMax)
+        return (adj, crop)
     }
 
     private var scrollingControls: some View {
