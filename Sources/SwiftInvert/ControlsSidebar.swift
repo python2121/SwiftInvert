@@ -75,6 +75,10 @@ struct ControlsSidebar: View {
                 }
                 HistoryPanel(model: model, listHeight: historyFit)
             }
+            // Matches the inter-section gap (8 section pad + 10 stack
+            // spacing) so a collapsed History header sits as far off the
+            // bottom edge as collapsed C&R sits off its divider.
+            .padding(.bottom, 10)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
         .frame(width: 235)
