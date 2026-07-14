@@ -44,13 +44,11 @@ public struct CurveUniforms {
     public var vibrance: Float
     public var saturation: Float
     public var preSaturation: Float
-    public var redHue: Float
-    public var redSaturation: Float
-    // Three scalar pads (a SIMD3 would 16-align and desync from the MSL
-    // struct's three floats) → 240-byte stride both sides.
+    // Pad so the band vectors land on a 16-byte boundary (matches MSL).
     public var _pad0: Float = 0
-    public var _pad1: Float = 0
-    public var _pad2: Float = 0
+    // Color-mixer bands, R/Y/G/B lanes.
+    public var bandHues: SIMD4<Float>
+    public var bandSaturations: SIMD4<Float>
 }
 
 /// RenderParams (NegativeKit's per-slider derivation) → GPU uniform packing.
@@ -103,8 +101,8 @@ public enum UniformsBuilder {
             vibrance: Float(params.vibrance),
             saturation: Float(params.saturation),
             preSaturation: Float(params.preSaturation),
-            redHue: Float(params.redHue),
-            redSaturation: Float(params.redSaturation)
+            bandHues: SIMD4<Float>(params.bandHues),
+            bandSaturations: SIMD4<Float>(params.bandSaturations)
         )
     }
 }

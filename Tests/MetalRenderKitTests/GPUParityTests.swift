@@ -33,9 +33,9 @@ enum Fixtures2 {
     @Test func uniformStrides() {
         // Must match the MSL structs in NegPipeline.metal.
         #expect(MemoryLayout<NormUniforms>.stride == 48)
-        #expect(MemoryLayout<CurveUniforms>.stride == 240)
-        #expect(MemoryLayout<CurveUniforms>.offset(of: \.redHue) == 220)
-        #expect(MemoryLayout<CurveUniforms>.offset(of: \.redSaturation) == 224)
+        #expect(MemoryLayout<CurveUniforms>.stride == 256)
+        #expect(MemoryLayout<CurveUniforms>.offset(of: \.bandHues) == 224)
+        #expect(MemoryLayout<CurveUniforms>.offset(of: \.bandSaturations) == 240)
         #expect(MemoryLayout<CurveUniforms>.offset(of: \.midCMY) == 80)
         #expect(MemoryLayout<CurveUniforms>.offset(of: \.toe) == 128)
         #expect(MemoryLayout<CurveUniforms>.offset(of: \.gammaWidth) == 188)
@@ -124,6 +124,10 @@ enum Fixtures2 {
         settings.saturation = 1.3
         settings.redHue = 0.6
         settings.redSaturation = 0.7
+        settings.yellowHue = -0.4
+        settings.greenSaturation = 1.4
+        settings.blueHue = 0.5
+        settings.blueSaturation = 0.8
         settings.preSaturation = 1.3
         settings.trueBlack = true
         settings.temp = 0.4

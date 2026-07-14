@@ -32,7 +32,7 @@ public final class RenderPipeline: @unchecked Sendable {
 
     private func colorPopActive(_ params: RenderParams) -> Bool {
         params.vibrance != 1.0 || params.saturation != 1.0
-            || params.redHue != 0 || params.redSaturation != 1.0
+            || params.bandHues != .zero || params.bandSaturations != SIMD4(repeating: 1.0)
     }
     let encodePSO: MTLComputePipelineState
     let histogramPSO: MTLComputePipelineState

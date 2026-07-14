@@ -53,14 +53,17 @@ struct CurveUniforms {
     float saturation;
     // Pre-curve density-deviation gain (1.0 = off).
     float preSaturation;
-    // Reds band (LabColor red* constants; 0 / 1.0 = off).
-    float redHue;
-    float redSaturation;
-    // Pad to a 16-byte multiple (Swift SIMD3<Float> pads to 16 too).
+    // Pad so the band vectors land on a 16-byte boundary (matches Swift).
     float _pad0;
-    float _pad1;
-    float _pad2;
+    // Color-mixer bands, R/Y/G/B lanes (0 / 1.0 = off).
+    float4 bandHues;
+    float4 bandSaturations;
 };
+
+// Color-mixer band constants — must match LabColor.bandCentersDeg /
+// bandHalfWidthsDeg (order: Red, Yellow, Green, Blue).
+constant float BAND_CENTER_DEG[4] = {25.0f, 90.0f, 145.0f, 280.0f};
+constant float BAND_HALFWIDTH_DEG[4] = {45.0f, 45.0f, 50.0f, 60.0f};
 
 // Region-mask constants — must match K.toneRegionSharpness / K.*ToneAnchor
 // in ExposureConstants.swift (GPU/CPU parity tests catch drift).
@@ -228,22 +231,31 @@ kernel void colorPop(
     if (gid.x >= input.get_width() || gid.y >= input.get_height()) { return; }
     float3 result = input.read(gid).rgb;
 
-    // Reds band: chroma-gated hue-targeted mixer (LabColor.applyRedBand;
-    // literals mirror the redBand*/redChromaGate*/redMaxHueShift constants).
-    if (p.redHue != 0.0f || p.redSaturation != 1.0f) {
+    // Color mixer: chroma-gated hue-targeted bands, R/Y/G/B (mirrors
+    // LabColor.applyColorMixer — literals mirror the bandCentersDeg /
+    // bandHalfWidthsDeg / bandChromaGate* / bandMaxHueShiftDeg constants).
+    if (any(p.bandHues != float4(0.0f)) || any(p.bandSaturations != float4(1.0f))) {
         float3 lab = rgb_to_lab(result);
         float chroma = length(lab.yz);
-        float hueDeg = atan2(lab.z, lab.y) * (180.0f / M_PI_F);
         float gate = smoothstep(8.0f, 25.0f, chroma);
-        float dh = fmod(hueDeg - 25.0f + 540.0f, 360.0f) - 180.0f;
-        float t = min(fabs(dh) / 45.0f, 1.0f);
-        float w = gate * 0.5f * (1.0f + cos(M_PI_F * t));
-        if (w > 0.0f) {
-            float newHue = (hueDeg + p.redHue * 30.0f * w) * (M_PI_F / 180.0f);
-            float newChroma = chroma * (1.0f + (p.redSaturation - 1.0f) * w);
-            lab.y = newChroma * cos(newHue);
-            lab.z = newChroma * sin(newHue);
-            result = clamp(lab_to_rgb(lab), float3(0.0f), float3(1.0f));
+        if (gate > 0.0f) {
+            float hueDeg = atan2(lab.z, lab.y) * (180.0f / M_PI_F);
+            float deltaDeg = 0.0f;
+            float chromaScale = 1.0f;
+            for (int i = 0; i < 4; ++i) {
+                float dh = fmod(hueDeg - BAND_CENTER_DEG[i] + 540.0f, 360.0f) - 180.0f;
+                float t = min(fabs(dh) / BAND_HALFWIDTH_DEG[i], 1.0f);
+                float w = gate * 0.5f * (1.0f + cos(M_PI_F * t));
+                deltaDeg += p.bandHues[i] * 30.0f * w;
+                chromaScale *= 1.0f + (p.bandSaturations[i] - 1.0f) * w;
+            }
+            if (deltaDeg != 0.0f || chromaScale != 1.0f) {
+                float newHue = (hueDeg + deltaDeg) * (M_PI_F / 180.0f);
+                float newChroma = chroma * max(chromaScale, 0.0f);
+                lab.y = newChroma * cos(newHue);
+                lab.z = newChroma * sin(newHue);
+                result = clamp(lab_to_rgb(lab), float3(0.0f), float3(1.0f));
+            }
         }
     }
 

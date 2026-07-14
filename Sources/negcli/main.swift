@@ -125,6 +125,12 @@ do {
         if let v = options["--pre-saturation"].flatMap(Double.init) { settings.preSaturation = v }
         if let v = options["--red-hue"].flatMap(Double.init) { settings.redHue = v }
         if let v = options["--red-saturation"].flatMap(Double.init) { settings.redSaturation = v }
+        if let v = options["--yellow-hue"].flatMap(Double.init) { settings.yellowHue = v }
+        if let v = options["--yellow-saturation"].flatMap(Double.init) { settings.yellowSaturation = v }
+        if let v = options["--green-hue"].flatMap(Double.init) { settings.greenHue = v }
+        if let v = options["--green-saturation"].flatMap(Double.init) { settings.greenSaturation = v }
+        if let v = options["--blue-hue"].flatMap(Double.init) { settings.blueHue = v }
+        if let v = options["--blue-saturation"].flatMap(Double.init) { settings.blueSaturation = v }
 
         let start = Date()
         let img = try RawDecoder().decode(

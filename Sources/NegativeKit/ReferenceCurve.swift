@@ -134,13 +134,13 @@ public enum ReferenceCurve {
                     }
                     buf[i + ch] = Float(min(max(t, 0.0), 1.0))
                 }
-                // Color pop on the linear print (reds band, then NegPy lab
+                // Color pop on the linear print (mixer bands, then NegPy lab
                 // stage: vibrance, then saturation), identity at defaults.
-                if params.redHue != 0 || params.redSaturation != 1.0
+                if params.bandHues != .zero || params.bandSaturations != SIMD4(repeating: 1.0)
                     || params.vibrance != 1.0 || params.saturation != 1.0 {
                     var rgb = SIMD3(Double(buf[i]), Double(buf[i + 1]), Double(buf[i + 2]))
-                    rgb = LabColor.applyRedBand(
-                        rgb, hue: params.redHue, saturation: params.redSaturation)
+                    rgb = LabColor.applyColorMixer(
+                        rgb, hues: params.bandHues, saturations: params.bandSaturations)
                     let res = LabColor.applyVibranceSaturation(
                         rgb, vibrance: params.vibrance, saturation: params.saturation)
                     buf[i] = Float(res.x)

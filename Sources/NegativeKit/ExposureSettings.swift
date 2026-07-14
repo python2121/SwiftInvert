@@ -54,12 +54,19 @@ public struct ExposureSettings: Codable, Equatable, Sendable {
     public var vibrance: Double = 1.0
     public var saturation: Double = 1.0
 
-    // Reds band (chroma-gated color mixer, see LabColor.applyRedBand):
-    // hue nudges saturated reds toward orange (+) or magenta (−) and
-    // saturation tames/boosts them — the neutral axis never moves, so these
-    // fix "the reds are too red" without touching white balance.
+    // Color mixer bands (chroma-gated, see LabColor.applyColorMixer): hue
+    // nudges a band's saturated colors toward the neighboring hue (+ = ccw:
+    // red→orange, yellow→green, green→teal, blue→purple) and saturation
+    // tames/boosts them — the neutral axis never moves, so these fix "the
+    // reds are too red" without touching white balance.
     public var redHue: Double = 0
     public var redSaturation: Double = 1.0
+    public var yellowHue: Double = 0
+    public var yellowSaturation: Double = 1.0
+    public var greenHue: Double = 0
+    public var greenSaturation: Double = 1.0
+    public var blueHue: Double = 0
+    public var blueSaturation: Double = 1.0
 
     // Pre-saturation (Negative Lab Pro concept): scales per-pixel density
     // deviations from neutral in normalized log space BEFORE the print curve,
@@ -129,6 +136,12 @@ public struct ExposureSettings: Codable, Equatable, Sendable {
         saturation = d(.saturation, 1.0)
         redHue = d(.redHue, 0)
         redSaturation = d(.redSaturation, 1.0)
+        yellowHue = d(.yellowHue, 0)
+        yellowSaturation = d(.yellowSaturation, 1.0)
+        greenHue = d(.greenHue, 0)
+        greenSaturation = d(.greenSaturation, 1.0)
+        blueHue = d(.blueHue, 0)
+        blueSaturation = d(.blueSaturation, 1.0)
         preSaturation = d(.preSaturation, 1.15)
         temp = d(.temp, 0)
         tint = d(.tint, 0)
@@ -181,9 +194,9 @@ public struct RenderParams: Equatable, Sendable {
     // CIELAB chroma ops on the linear print (1.0 = off).
     public var vibrance: Double = 1.0
     public var saturation: Double = 1.0
-    // Reds band (0 / 1.0 = off).
-    public var redHue: Double = 0
-    public var redSaturation: Double = 1.0
+    // Color-mixer bands, R/Y/G/B order (0 / 1.0 = off).
+    public var bandHues: SIMD4<Double> = .zero
+    public var bandSaturations: SIMD4<Double> = SIMD4(repeating: 1.0)
     /// Pre-curve density-deviation gain (1.0 = off).
     public var preSaturation: Double = 1.0
     /// Black point compensation (paper Dmax → display black).
@@ -199,7 +212,7 @@ public struct RenderParams: Equatable, Sendable {
         toeWidth: Double, shoulderWidth: Double, dMin: Double, vStar: Double,
         shadows: Double = 0, shadowContrast: Double = 0, darkShadows: Double = 0, highlights: Double = 0,
         highlightContrast: Double = 0, vibrance: Double = 1.0, saturation: Double = 1.0,
-        redHue: Double = 0, redSaturation: Double = 1.0,
+        bandHues: SIMD4<Double> = .zero, bandSaturations: SIMD4<Double> = SIMD4(repeating: 1.0),
         preSaturation: Double = 1.0, trueBlack: Bool = false,
         shadowCMY: SIMD3<Double> = .zero, midCMY: SIMD3<Double> = .zero,
         highlightCMY: SIMD3<Double> = .zero
@@ -222,8 +235,8 @@ public struct RenderParams: Equatable, Sendable {
         self.highlightContrast = highlightContrast
         self.vibrance = vibrance
         self.saturation = saturation
-        self.redHue = redHue
-        self.redSaturation = redSaturation
+        self.bandHues = bandHues
+        self.bandSaturations = bandSaturations
         self.preSaturation = preSaturation
         self.trueBlack = trueBlack
         self.shadowCMY = shadowCMY
@@ -409,8 +422,10 @@ public enum ExposureKernel {
             highlightContrast: settings.highlightContrast,
             vibrance: settings.vibrance,
             saturation: settings.saturation,
-            redHue: settings.redHue,
-            redSaturation: settings.redSaturation,
+            bandHues: SIMD4(settings.redHue, settings.yellowHue, settings.greenHue, settings.blueHue),
+            bandSaturations: SIMD4(
+                settings.redSaturation, settings.yellowSaturation,
+                settings.greenSaturation, settings.blueSaturation),
             preSaturation: settings.preSaturation,
             trueBlack: settings.trueBlack,
             // Band sliders ±1 → ±cmy_max_density print-density offsets

@@ -200,12 +200,15 @@ One command buffer, passes in order (`RenderPipeline.render` /
 3. **`colorPop`** (dispatched ONLY when a color-pop control is off-default:
    vibrance/saturation/redSaturation ≠ 1 or redHue ≠ 0) — CIELAB
    (ProPhoto primaries, D50; matrices duplicated in MSL and
-   `LabColor.swift` — keep in sync): the **Reds band** first
-   (`LabColor.applyRedBand`, SwiftInvert-only, no NegPy equivalent —
-   chroma-gated hue-targeted mixer: raised-cosine hue window around
-   object-red × a chroma ramp that zeroes at the neutral axis, so
-   whites/grays/faint casts never move; constants `redBand*` /
-   `redChromaGate*` / `redMaxHueShiftDeg` mirrored as MSL literals), then
+   `LabColor.swift` — keep in sync): the **Color Mixer** first
+   (`LabColor.applyColorMixer`, SwiftInvert-only, no NegPy equivalent —
+   chroma-gated hue-targeted R/Y/G/B bands: per-band raised-cosine hue
+   windows × a shared chroma ramp that zeroes at the neutral axis, so
+   whites/grays/faint casts never move; all weights read the ORIGINAL hue
+   and compose jointly, so overlapping feathers are order-independent;
+   constants `bandCentersDeg`/`bandHalfWidthsDeg`/`bandChromaGate*`/
+   `bandMaxHueShiftDeg` mirrored as MSL literals; UI: segmented band
+   picker + gradient tracks, `ColorMixerSection.swift`), then
    vibrance (muted-chroma boost, /60 range) then saturation (a*,b* scale).
    Separate pass on purpose: inlining
    the Lab code into printCurve cost ~3 ms/frame in register pressure even

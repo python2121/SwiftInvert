@@ -23,18 +23,20 @@ public enum LabColor {
     /// Chroma below which vibrance considers a color "muted" (NegPy: /60).
     public static let vibranceChromaRange = 60.0
 
-    // ── Reds band (chroma-gated, hue-targeted color mixer) ────────────────
-    // Membership = raised-cosine hue window around object-red × a chroma
-    // ramp that reaches zero at the neutral axis — whites/grays and faint
-    // casts are untouched by construction (the complement of the WB sliders,
-    // which move every pixel). SwiftInvert-only; NegPy has no equivalent.
-    // Mirrored as literals in NegPipeline.metal colorPop.
-    public static let redBandCenterDeg = 25.0  // CIELAB hue of "object red"
-    public static let redBandHalfWidthDeg = 45.0  // feather span per side
-    public static let redChromaGateLow = 8.0  // below: fully protected
-    public static let redChromaGateHigh = 25.0  // above: full membership
-    /// Hue rotation at slider ±1 (degrees; + toward orange, − toward magenta).
-    public static let redMaxHueShiftDeg = 30.0
+    // ── Color mixer bands (chroma-gated, hue-targeted) ────────────────────
+    // Membership = raised-cosine hue window around each band center × a
+    // chroma ramp that reaches zero at the neutral axis — whites/grays and
+    // faint casts are untouched by construction (the complement of the WB
+    // sliders, which move every pixel). SwiftInvert-only; NegPy has no
+    // equivalent. Mirrored as literals in NegPipeline.metal colorPop.
+    // Band order everywhere: Red, Yellow, Green, Blue.
+    public static let bandCentersDeg = [25.0, 90.0, 145.0, 280.0]
+    public static let bandHalfWidthsDeg = [45.0, 45.0, 50.0, 60.0]
+    public static let bandChromaGateLow = 8.0  // below: fully protected
+    public static let bandChromaGateHigh = 25.0  // above: full membership
+    /// Hue rotation at slider ±1 (degrees; + rotates toward the next band
+    /// counterclockwise: red→orange, yellow→green, green→teal, blue→purple).
+    public static let bandMaxHueShiftDeg = 30.0
 
     /// Linear ProPhoto RGB → CIELAB (D50), OpenCV float scale (L 0–100).
 
@@ -71,28 +73,32 @@ public enum LabColor {
         return t * t * (3.0 - 2.0 * t)
     }
 
-    /// Chroma-gated red-band membership for one Lab pixel (hue in degrees).
-    static func redBandWeight(chroma: Double, hueDeg: Double) -> Double {
-        let gate = smoothstep(redChromaGateLow, redChromaGateHigh, chroma)
-        let dh = (hueDeg - redBandCenterDeg + 540.0)
-            .truncatingRemainder(dividingBy: 360.0) - 180.0
-        let t = min(abs(dh) / redBandHalfWidthDeg, 1.0)
-        return gate * 0.5 * (1.0 + cos(.pi * t))
-    }
-
-    /// Reds-band hue rotation + chroma scale on one linear pixel, weighted by
-    /// `redBandWeight` so neutrals and non-reds pass through untouched.
-    public static func applyRedBand(
-        _ rgb: SIMD3<Double>, hue: Double, saturation: Double
+    /// Per-band hue rotation + chroma scale on one linear pixel (band order
+    /// R/Y/G/B). All band weights read the ORIGINAL hue and compose jointly,
+    /// so overlapping feathers are order-independent; the shared chroma gate
+    /// keeps neutrals and faint casts untouched.
+    public static func applyColorMixer(
+        _ rgb: SIMD3<Double>, hues: SIMD4<Double>, saturations: SIMD4<Double>
     ) -> SIMD3<Double> {
-        guard hue != 0 || saturation != 1.0 else { return rgb }
+        guard hues != .zero || saturations != SIMD4(repeating: 1.0) else { return rgb }
         var lab = rgbToLab(rgb)
         let chroma = (lab.y * lab.y + lab.z * lab.z).squareRoot()
+        let gate = smoothstep(bandChromaGateLow, bandChromaGateHigh, chroma)
+        guard gate > 0 else { return rgb }
         let hueDeg = atan2(lab.z, lab.y) * 180.0 / .pi
-        let w = redBandWeight(chroma: chroma, hueDeg: hueDeg)
-        guard w > 0 else { return rgb }
-        let newHue = (hueDeg + hue * redMaxHueShiftDeg * w) * .pi / 180.0
-        let newChroma = chroma * (1.0 + (saturation - 1.0) * w)
+        var deltaDeg = 0.0
+        var chromaScale = 1.0
+        for i in 0..<4 {
+            let dh = (hueDeg - bandCentersDeg[i] + 540.0)
+                .truncatingRemainder(dividingBy: 360.0) - 180.0
+            let t = min(abs(dh) / bandHalfWidthsDeg[i], 1.0)
+            let w = gate * 0.5 * (1.0 + cos(.pi * t))
+            deltaDeg += hues[i] * bandMaxHueShiftDeg * w
+            chromaScale *= 1.0 + (saturations[i] - 1.0) * w
+        }
+        if deltaDeg == 0 && chromaScale == 1.0 { return rgb }
+        let newHue = (hueDeg + deltaDeg) * .pi / 180.0
+        let newChroma = chroma * max(chromaScale, 0.0)
         lab.y = newChroma * cos(newHue)
         lab.z = newChroma * sin(newHue)
         return simd_clamp(labToRgb(lab), SIMD3<Double>(), SIMD3(repeating: 1))

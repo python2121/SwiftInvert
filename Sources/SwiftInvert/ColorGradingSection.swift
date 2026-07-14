@@ -75,6 +75,8 @@ struct GradientSlider: View {
     let range: ClosedRange<Double>
     let defaultValue: Double
     let colors: [Color]
+    @Environment(\.controlEditingChanged) private var controlEditingChanged
+    @State private var isDragging = false
 
     private var isChanged: Bool { abs(value - defaultValue) > 1e-9 }
 
@@ -116,8 +118,16 @@ struct GradientSlider: View {
                 .gesture(
                     DragGesture(minimumDistance: 0)
                         .onChanged { g in
+                            if !isDragging {
+                                isDragging = true
+                                controlEditingChanged(true)
+                            }
                             let f = min(max((g.location.x - 7) / (geo.size.width - 14), 0), 1)
                             value = range.lowerBound + Double(f) * (range.upperBound - range.lowerBound)
+                        }
+                        .onEnded { _ in
+                            isDragging = false
+                            controlEditingChanged(false)
                         }
                 )
                 .onTapGesture(count: 2) { value = defaultValue }

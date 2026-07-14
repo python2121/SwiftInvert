@@ -57,51 +57,76 @@ import simd
         #expect(mutedGain > 1.1)
     }
 
-    // ── Reds band (chroma-gated color mixer) ──────────────────────────────
+    // ── Color mixer (chroma-gated R/Y/G/B bands) ──────────────────────────
 
-    @Test func redBandDefaultsAreIdentity() {
-        let px = SIMD3(0.62, 0.21, 0.17)
-        #expect(LabColor.applyRedBand(px, hue: 0, saturation: 1.0) == px)
+    static func mixer(
+        _ rgb: SIMD3<Double>, red: (Double, Double) = (0, 1), yellow: (Double, Double) = (0, 1),
+        green: (Double, Double) = (0, 1), blue: (Double, Double) = (0, 1)
+    ) -> SIMD3<Double> {
+        LabColor.applyColorMixer(
+            rgb,
+            hues: SIMD4(red.0, yellow.0, green.0, blue.0),
+            saturations: SIMD4(red.1, yellow.1, green.1, blue.1))
     }
 
-    @Test func redBandLeavesNeutralsUntouched() {
+    static func chromaHue(_ rgb: SIMD3<Double>) -> (chroma: Double, hueDeg: Double) {
+        let lab = LabColor.rgbToLab(rgb)
+        return ((lab.y * lab.y + lab.z * lab.z).squareRoot(), atan2(lab.z, lab.y) * 180 / .pi)
+    }
+
+    @Test func mixerDefaultsAreIdentity() {
+        let px = SIMD3(0.62, 0.21, 0.17)
+        #expect(Self.mixer(px) == px)
+    }
+
+    @Test func mixerLeavesNeutralsUntouched() {
         // The whole point: grays (and faint casts) never move, any strength.
         for gray in [0.02, 0.18, 0.5, 0.95] {
             let px = SIMD3(repeating: gray)
-            let out = LabColor.applyRedBand(px, hue: 1.0, saturation: 0.0)
+            let out = Self.mixer(px, red: (1, 0), yellow: (-1, 0), green: (1, 2), blue: (-1, 2))
             #expect(simd_length(out - px) < 1e-6)
         }
         // Near-neutral warm cast: chroma below the gate floor → protected.
         let cast = SIMD3(0.52, 0.50, 0.49)
-        let lab = LabColor.rgbToLab(cast)
-        #expect((lab.y * lab.y + lab.z * lab.z).squareRoot() < LabColor.redChromaGateLow)
-        let out = LabColor.applyRedBand(cast, hue: 1.0, saturation: 0.0)
+        #expect(Self.chromaHue(cast).chroma < LabColor.bandChromaGateLow)
+        let out = Self.mixer(cast, red: (1, 0))
         #expect(simd_length(out - cast) < 1e-6)
     }
 
-    @Test func redBandShiftsSaturatedReds() {
+    @Test func mixerShiftsSaturatedReds() {
         let red = SIMD3(0.55, 0.10, 0.08)
-        let labIn = LabColor.rgbToLab(red)
-        let hueIn = atan2(labIn.z, labIn.y)
-        let chromaIn = (labIn.y * labIn.y + labIn.z * labIn.z).squareRoot()
-        #expect(chromaIn > LabColor.redChromaGateHigh)
+        let (chromaIn, hueIn) = Self.chromaHue(red)
+        #expect(chromaIn > LabColor.bandChromaGateHigh)
 
         // + hue rotates toward orange (hue angle increases).
-        let warmed = LabColor.rgbToLab(LabColor.applyRedBand(red, hue: 1.0, saturation: 1.0))
-        #expect(atan2(warmed.z, warmed.y) > hueIn + 0.05)
+        let warmed = Self.chromaHue(Self.mixer(red, red: (1, 1)))
+        #expect(warmed.hueDeg > hueIn + 3)
 
         // Saturation < 1 pulls chroma down without killing it.
-        let tamed = LabColor.rgbToLab(LabColor.applyRedBand(red, hue: 0, saturation: 0.5))
-        let chromaTamed = (tamed.y * tamed.y + tamed.z * tamed.z).squareRoot()
-        #expect(chromaTamed < chromaIn * 0.85)
-        #expect(chromaTamed > chromaIn * 0.3)
+        let tamed = Self.chromaHue(Self.mixer(red, red: (0, 0.5)))
+        #expect(tamed.chroma < chromaIn * 0.85)
+        #expect(tamed.chroma > chromaIn * 0.3)
     }
 
-    @Test func redBandIgnoresOtherHues() {
-        // Saturated blue and green sit far outside the hue window.
-        for px in [SIMD3(0.08, 0.12, 0.60), SIMD3(0.10, 0.55, 0.12)] {
-            let out = LabColor.applyRedBand(px, hue: 1.0, saturation: 0.2)
-            #expect(simd_length(out - px) < 1e-6)
+    @Test func mixerBandsTargetTheirOwnHues() {
+        let red = SIMD3(0.55, 0.10, 0.08)
+        let green = SIMD3(0.10, 0.55, 0.12)
+        let blue = SIMD3(0.08, 0.12, 0.60)
+
+        // The blue band ignores saturated red/green (far outside its window)…
+        for px in [red, green] {
+            #expect(simd_length(Self.mixer(px, blue: (1, 0.2)) - px) < 1e-6)
         }
+        // …but moves saturated blue.
+        let shifted = Self.chromaHue(Self.mixer(blue, blue: (0, 0.5)))
+        #expect(shifted.chroma < Self.chromaHue(blue).chroma * 0.9)
+
+        // The green band moves green but not red.
+        #expect(simd_length(Self.mixer(red, green: (1, 0.2)) - red) < 1e-6)
+        // Wrapped delta: a full + shift can carry the hue across ±180°.
+        let greenShift = Self.chromaHue(Self.mixer(green, green: (1, 1)))
+        let delta = (greenShift.hueDeg - Self.chromaHue(green).hueDeg + 540)
+            .truncatingRemainder(dividingBy: 360) - 180
+        #expect(delta > 3)
     }
 }
