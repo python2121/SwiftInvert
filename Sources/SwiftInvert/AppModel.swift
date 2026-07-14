@@ -442,16 +442,30 @@ final class AppModel {
                 if self.straightenDragValue != nil { snapshot.fineRotation = 0 }
                 let uncropped = self.toolMode != .none
                 let hq = self.hqPreview
+                let midStraightenDrag = self.straightenDragValue != nil
                 guard let session = self.session else { break }
                 do {
-                    if await session.needsPreparation(settings: snapshot, hq: hq) {
+                    // No Analyzing pill for the transient 0° re-base render —
+                    // it flashes mid-gesture and adds to the visual churn.
+                    if await session.needsPreparation(settings: snapshot, hq: hq), !midStraightenDrag {
                         self.isAnalyzing = true
                     }
                     let output = try await session.render(settings: snapshot, uncropped: uncropped, hq: hq)
                     self.isAnalyzing = false
                     if Task.isCancelled { break }
-                    self.displayImage = output.image
-                    self.displayedFineRotation = snapshot.fineRotation
+                    if midStraightenDrag {
+                        // The 0° re-base swaps bitmap, fitted frame (different
+                        // aspect than the inscribed crop), rotation delta and
+                        // cover scale at once — animate so it reads as a
+                        // smooth zoom re-base, not a pop.
+                        withAnimation(.easeOut(duration: 0.18)) {
+                            self.displayImage = output.image
+                            self.displayedFineRotation = snapshot.fineRotation
+                        }
+                    } else {
+                        self.displayImage = output.image
+                        self.displayedFineRotation = snapshot.fineRotation
+                    }
                     self.histogram = output.histogram
                     self.statusMessage = nil
                     NSLog("SwiftInvert: rendered \(self.selection?.lastPathComponent ?? "?") (\(output.image.width)x\(output.image.height))")
