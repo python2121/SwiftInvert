@@ -180,6 +180,31 @@ actor ImageSession {
         return PreparedKey(analysisRect: settings.analysisRect, cropRect: settings.cropRect) != preparedKey
     }
 
+    /// Detached render for the straighten 0° base: same pipeline as render()
+    /// but touching NONE of the cache tower (orientation/prepared/textures),
+    /// so precomputing the base never evicts the committed orientation's
+    /// caches — which would put ~150ms back on the next slider tick.
+    func renderDetached(settings: ExposureSettings) throws -> RenderOutput {
+        if basePreview == nil {
+            basePreview = try RawDecoder().decode(url: url, quality: .preview, maxLongEdge: 1536)
+        }
+        let oriented = basePreview!.oriented(
+            rotationCW: settings.rotation, flipHorizontal: settings.flipHorizontal,
+            fineRotation: settings.fineRotation)
+        let prepared = ExposureKernel.prepare(
+            linearImage: oriented, cropRect: settings.cropRect, analysisRect: settings.analysisRect)
+        let analysis = ExposureKernel.finalize(
+            prepared, whitePointOffset: settings.whitePointOffset,
+            blackPointOffset: settings.blackPointOffset)
+        let params = ExposureKernel.deriveRenderParams(settings, analysis)
+        let image = settings.cropRect.map { oriented.cropped(to: $0) } ?? oriented
+        let source = try pipeline.upload(image)
+        let result = try pipeline.renderDisplay(source: source, params: params)
+        guard let cg = ImageConversion.cgImage(rgba8: result.rgba, width: result.width, height: result.height)
+        else { throw RenderError.resource("CGImage conversion") }
+        return RenderOutput(image: cg, histogram: result.histogram)
+    }
+
     /// `uncropped` shows the full frame (used while a selection tool is active
     /// so the user can drag on the whole image, like NegPy's crop_preview_full).
     func render(settings: ExposureSettings, uncropped: Bool = false, hq: Bool = false) throws -> RenderOutput {

@@ -92,15 +92,53 @@ final class AppModel {
     /// Transient Straighten drag value: while non-nil the detail view previews
     /// the rotation as a display transform (no settings mutation); commit
     /// happens once on release. Starting a drag on an already-rotated image
-    /// kicks ONE re-render at fineRotation 0: the display transform can only
-    /// zoom IN (the baked image lacks pixels beyond its inscribed crop), so
-    /// rotating back toward zero from a baked angle would wrongly zoom in
-    /// too — from a 0° base the cover scale is correct in both directions.
+    /// re-bases the display on a fineRotation-0 render: the display transform
+    /// can only zoom IN (the baked image lacks pixels beyond its inscribed
+    /// crop), so rotating back toward zero from a baked angle would wrongly
+    /// zoom in too — from a 0° base the cover scale is correct both ways.
+    /// The 0° base is PRECOMPUTED (`straightenBase`) so the re-base swaps in
+    /// instantly at the first touch — when target still equals the baked
+    /// angle and the two presentations nearly coincide — instead of landing
+    /// mid-gesture; the render here is only the cache-miss fallback.
     var straightenDragValue: Double? {
         didSet {
-            if oldValue == nil, straightenDragValue != nil, displayedFineRotation != 0 {
+            guard oldValue == nil, straightenDragValue != nil, displayedFineRotation != 0
+            else { return }
+            var zeroed = settings
+            zeroed.fineRotation = 0
+            if toolMode == .none, !showingBaseline, !hqPreview,
+                let base = straightenBase, base.settings == zeroed {
+                displayImage = base.output.image
+                histogram = base.output.histogram
+                displayedFineRotation = 0
+            } else {
                 scheduleRender()
             }
+        }
+    }
+
+    /// Precomputed 0° render (image + histogram) keyed by the exact settings
+    /// it was rendered with; refreshed ~350ms after edits settle and on
+    /// straighten-slider hover, cleared on image switch.
+    private var straightenBase: (settings: ExposureSettings, output: ImageSession.RenderOutput)?
+    private var straightenBaseTask: Task<Void, Never>?
+
+    func prepareStraightenBase(afterMilliseconds delay: Int = 0) {
+        guard selection != nil, settings.fineRotation != 0, toolMode == .none,
+            !showingBaseline, !hqPreview, straightenDragValue == nil
+        else { return }
+        var zeroed = settings
+        zeroed.fineRotation = 0
+        if straightenBase?.settings == zeroed { return }
+        straightenBaseTask?.cancel()
+        straightenBaseTask = Task { [weak self] in
+            if delay > 0 {
+                try? await Task.sleep(for: .milliseconds(delay))
+            }
+            guard !Task.isCancelled, let self, let session = self.session else { return }
+            guard let output = try? await session.renderDetached(settings: zeroed) else { return }
+            guard !Task.isCancelled else { return }
+            self.straightenBase = (zeroed, output)
         }
     }
     /// The fineRotation the current displayImage was BAKED with. The detail
@@ -399,6 +437,8 @@ final class AppModel {
             statusMessage = "Cannot render: Metal pipeline unavailable."
             return
         }
+        straightenBaseTask?.cancel()
+        straightenBase = nil
         session = ImageSession(url: url, pipeline: pipeline)
         // Loading the sidecar mutates settings, which triggers the first render.
         let restored = SidecarStore.load(for: url) ?? ExposureSettings()
@@ -454,10 +494,10 @@ final class AppModel {
                     self.isAnalyzing = false
                     if Task.isCancelled { break }
                     if midStraightenDrag {
-                        // The 0° re-base swaps bitmap, fitted frame (different
-                        // aspect than the inscribed crop), rotation delta and
-                        // cover scale at once — animate so it reads as a
-                        // smooth zoom re-base, not a pop.
+                        // Cache-miss fallback: the 0° re-base swaps bitmap,
+                        // fitted frame aspect, rotation delta and cover scale
+                        // at once — animate so it reads as a smooth zoom
+                        // re-base, not a pop.
                         withAnimation(.easeOut(duration: 0.18)) {
                             self.displayImage = output.image
                             self.displayedFineRotation = snapshot.fineRotation
@@ -465,6 +505,8 @@ final class AppModel {
                     } else {
                         self.displayImage = output.image
                         self.displayedFineRotation = snapshot.fineRotation
+                        // Keep the precomputed 0° base fresh once edits settle.
+                        self.prepareStraightenBase(afterMilliseconds: 350)
                     }
                     self.histogram = output.histogram
                     self.statusMessage = nil

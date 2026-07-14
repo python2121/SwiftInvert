@@ -93,6 +93,9 @@ struct CropRotationSection: View {
             }
             .controlSize(.small)
             .help("Straighten up to ±45°; the frame auto-crops to the largest inscribed rectangle. Grid lines show while dragging.")
+            .onHover { inside in
+                if inside { model.prepareStraightenBase() }
+            }
         }
     }
 
