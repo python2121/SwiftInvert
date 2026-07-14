@@ -224,5 +224,14 @@ struct LibraryCell: View {
             model.exportRequest = AppModel.ExportRequest(urls: urls)
         }
         .disabled(model.isExporting)
+
+        Divider()
+        // Copy always reads the clicked frame; paste targets the whole
+        // multi-selection when the click lands inside it (like export).
+        Button("Copy Adjustments") { model.copyAdjustments(from: url) }
+        Button(urls.count == 1 ? "Paste Adjustments" : "Paste Adjustments to \(urls.count) Images") {
+            model.pasteAdjustments(to: urls)
+        }
+        .disabled(model.copiedAdjustments == nil)
     }
 }

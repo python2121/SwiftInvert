@@ -635,6 +635,27 @@ final class AppModel {
         copiedAdjustments = settings
     }
 
+    /// Context-menu copy from any frame: the open image's live settings, or
+    /// another frame's sidecar (defaults if it has never been edited).
+    func copyAdjustments(from url: URL) {
+        copiedAdjustments = url == selection ? settings : (SidecarStore.load(for: url) ?? ExposureSettings())
+    }
+
+    /// Paste to explicit targets: the open image via the normal history path,
+    /// others by rewriting their sidecars (picked up when opened; thumbnails
+    /// show the raw negative, so nothing to invalidate).
+    func pasteAdjustments(to urls: [URL]) {
+        guard let source = copiedAdjustments else { return }
+        for url in urls {
+            if url == selection {
+                pasteAdjustments()
+            } else {
+                let target = SidecarStore.load(for: url) ?? ExposureSettings()
+                SidecarStore.save(mergedAdjustments(source, keepingGeometryOf: target), for: url)
+            }
+        }
+    }
+
     /// The copied adjustments with `target`'s geometry kept in place —
     /// rotation/flip/straighten/crops (and the analysis region's pinned
     /// angle) are per-frame and never pasted.
@@ -658,20 +679,9 @@ final class AppModel {
     }
 
     /// Edit > Paste Adjustments to Selection: apply to every multi-selected
-    /// frame. The open image goes through the normal path (history entry +
-    /// re-render); the rest get their sidecars rewritten directly and pick
-    /// the settings up when opened (thumbnails show the raw negative, so no
-    /// invalidation is needed).
+    /// frame.
     func pasteAdjustmentsToSelection() {
-        guard let source = copiedAdjustments else { return }
-        for url in files where multiSelection.contains(url) {
-            if url == selection {
-                pasteAdjustments()
-            } else {
-                let target = SidecarStore.load(for: url) ?? ExposureSettings()
-                SidecarStore.save(mergedAdjustments(source, keepingGeometryOf: target), for: url)
-            }
-        }
+        pasteAdjustments(to: files.filter { multiSelection.contains($0) })
     }
 
     /// Open the quality modal for the library multi-selection (context menu).
