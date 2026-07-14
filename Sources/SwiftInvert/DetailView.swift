@@ -236,6 +236,15 @@ struct DetailView: View {
             }
             .clipped()
             .contentShape(Rectangle())
+            // Two-finger trackpad scroll pans when zoomed in (Preview-style);
+            // same constraints as the drag gesture.
+            .background(
+                ScrollWheelCatcher { dx, dy in
+                    guard model.toolMode == .none, zoom > 1 else { return }
+                    pan.width += dx
+                    pan.height += dy
+                    basePan = pan
+                })
             .gesture(zoomAndPanGestures, isEnabled: model.toolMode == .none)
             .onTapGesture(count: 2) {
                 withAnimation(.easeOut(duration: 0.15)) { resetZoom() }
