@@ -29,7 +29,9 @@ struct ContentView: View {
     @Bindable var model: AppModel
     @AppStorage("libraryWidth") private var libraryWidth = 320.0
     @AppStorage("libraryVisible") private var libraryVisible = true
+    @AppStorage("controlsWidth") private var controlsWidth = 260.0
     @State private var dragStartWidth: Double?
+    @State private var controlsDragStartWidth: Double?
 
     var body: some View {
         // Plain three-pane layout: the library is a solid panel like the
@@ -56,8 +58,8 @@ struct ContentView: View {
                         .help("Show library")
                     }
                 }
-            Divider()
-            ControlsSidebar(model: model)
+            controlsSplitter
+            ControlsSidebar(model: model, width: controlsWidth)
         }
         .animation(.easeOut(duration: 0.15), value: libraryVisible)
         .onExitCommand { model.toolMode = .none }
@@ -65,6 +67,27 @@ struct ContentView: View {
             ExportSheet(request: request, model: model)
         }
         .frame(minWidth: 1000, minHeight: 700)
+    }
+
+    /// Draggable divider between the image and the adjustments sidebar
+    /// (width persisted; drag left = wider, mirroring the library splitter).
+    private var controlsSplitter: some View {
+        Divider()
+            .frame(width: 7)
+            .contentShape(Rectangle())
+            .onHover { inside in
+                if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+            }
+            .gesture(
+                DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                    .onChanged { g in
+                        if controlsDragStartWidth == nil { controlsDragStartWidth = controlsWidth }
+                        controlsWidth = (controlsDragStartWidth! - g.translation.width)
+                            .rounded()
+                            .clamped(to: 235...420)
+                    }
+                    .onEnded { _ in controlsDragStartWidth = nil }
+            )
     }
 
     /// Draggable divider between the library and the image (width persisted).

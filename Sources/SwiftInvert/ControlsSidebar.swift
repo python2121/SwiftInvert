@@ -3,6 +3,8 @@ import SwiftUI
 
 struct ControlsSidebar: View {
     @Bindable var model: AppModel
+    /// Pane width, owned by ContentView's splitter (persisted there).
+    var width: Double = 260
 
     @AppStorage("adjustmentsCollapsed") private var adjustmentsCollapsed = false
     @AppStorage("cropRotationCollapsed") private var cropRotationCollapsed = false
@@ -85,7 +87,7 @@ struct ControlsSidebar: View {
             .padding(.bottom, 4)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
-        .frame(width: 235)
+        .frame(width: width)
         .environment(\.controlEditingChanged) { model.setControlEditing($0) }
         .animation(.easeOut(duration: 0.12), value: adjustmentsCollapsed)
     }
