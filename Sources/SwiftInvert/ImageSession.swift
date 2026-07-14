@@ -30,6 +30,17 @@ actor ImageSession {
     private static func meterAngle(_ settings: ExposureSettings) -> Double {
         settings.analysisRect != nil ? settings.analysisRectFineRotation : 0
     }
+
+    /// Unrotated (orientation-only) frame dims — meterPreview can itself be
+    /// rotated when an analysis region pins an angle, so derive from the
+    /// decode dims + the 90° step instead.
+    private func orientedFrameSize(_ settings: ExposureSettings) -> CGSize {
+        let base = basePreview!
+        let swapped = (((settings.rotation % 360) + 360) % 360) % 180 != 0
+        return swapped
+            ? CGSize(width: base.height, height: base.width)
+            : CGSize(width: base.width, height: base.height)
+    }
     private struct OrientKey: Equatable {
         var rotation: Int
         var flipHorizontal: Bool
@@ -73,6 +84,9 @@ actor ImageSession {
     struct RenderOutput: Sendable {
         let image: CGImage
         let histogram: [UInt32]
+        /// Unrotated (orientation-only) frame dimensions in pixels — the
+        /// coordinate base for CropGeometry's rotated-space math.
+        let frameSize: CGSize
     }
 
     init(url: URL, pipeline: RenderPipeline) {
@@ -242,7 +256,8 @@ actor ImageSession {
         let result = try pipeline.renderDisplay(source: source, params: params)
         guard let cg = ImageConversion.cgImage(rgba8: result.rgba, width: result.width, height: result.height)
         else { throw RenderError.resource("CGImage conversion") }
-        return RenderOutput(image: cg, histogram: result.histogram)
+        return RenderOutput(
+            image: cg, histogram: result.histogram, frameSize: orientedFrameSize(settings))
     }
 
     /// `uncropped` shows the full frame (used while a selection tool is active
@@ -260,7 +275,8 @@ actor ImageSession {
         let result = try pipeline.renderDisplay(source: source, params: params)
         guard let cg = ImageConversion.cgImage(rgba8: result.rgba, width: result.width, height: result.height)
         else { throw RenderError.resource("CGImage conversion") }
-        return RenderOutput(image: cg, histogram: result.histogram)
+        return RenderOutput(
+            image: cg, histogram: result.histogram, frameSize: orientedFrameSize(settings))
     }
 
     /// Full-resolution export render (fresh decode, same analysis, crop applied).

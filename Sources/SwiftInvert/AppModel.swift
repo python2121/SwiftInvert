@@ -157,6 +157,25 @@ final class AppModel {
     /// view rotates the display by (target − baked), so the preview holds
     /// through the post-release re-bake instead of snapping back.
     var displayedFineRotation: Double = 0
+    /// Unrotated (orientation-only) frame dims of the current image, from the
+    /// last render — the base for CropGeometry's rotated-space math.
+    var frameSize: CGSize = .zero
+
+    /// Commit a straighten angle, remapping any committed crop so it keeps
+    /// showing the same content (center-preserved, shrunk only if the new
+    /// angle demands it) instead of drifting with the inscribed auto-crop.
+    func commitFineRotation(_ degrees: Double) {
+        var next = settings
+        next.fineRotation = degrees
+        if let crop = settings.cropRect, frameSize != .zero {
+            next.cropRect = CropGeometry.remapCrop(
+                crop,
+                from: settings.fineRotation * .pi / 180,
+                to: degrees * .pi / 180,
+                frame: SIMD2(frameSize.width, frameSize.height))
+        }
+        settings = next
+    }
 
     func rotateClockwise() {
         pendingHistoryLabel = "Rotate 90° CW"
@@ -507,6 +526,7 @@ final class AppModel {
                     let output = try await session.render(settings: snapshot, uncropped: uncropped, hq: hq)
                     self.isAnalyzing = false
                     if Task.isCancelled { break }
+                    self.frameSize = output.frameSize
                     if midStraightenDrag {
                         // Cache-miss fallback: the 0° re-base swaps bitmap,
                         // fitted frame aspect, rotation delta and cover scale

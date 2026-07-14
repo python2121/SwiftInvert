@@ -66,7 +66,7 @@ struct CropRotationSection: View {
                 if abs(displayed) > 1e-9 {
                     Button {
                         model.straightenDragValue = nil
-                        model.settings.fineRotation = 0
+                        model.commitFineRotation(0)
                     } label: {
                         Image(systemName: "xmark.circle.fill")
                             .font(.system(size: 9))
@@ -94,7 +94,7 @@ struct CropRotationSection: View {
                         model.straightenDragValue = model.settings.fineRotation
                     }
                 } else if let value = model.straightenDragValue {
-                    model.settings.fineRotation = (value * 10).rounded() / 10
+                    model.commitFineRotation((value * 10).rounded() / 10)
                     model.straightenDragValue = nil
                 }
             }
