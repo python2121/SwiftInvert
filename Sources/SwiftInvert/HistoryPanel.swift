@@ -43,7 +43,6 @@ struct HistoryPanel: View {
                 Image(systemName: "arrow.uturn.backward")
             }
             .buttonStyle(.borderless)
-            .keyboardShortcut("z", modifiers: .command)
             .disabled(!model.canUndo)
             .help("Undo (⌘Z)")
             Button {
@@ -52,7 +51,6 @@ struct HistoryPanel: View {
                 Image(systemName: "arrow.uturn.forward")
             }
             .buttonStyle(.borderless)
-            .keyboardShortcut("z", modifiers: [.command, .shift])
             .disabled(!model.canRedo)
             .help("Redo (⇧⌘Z)")
         }

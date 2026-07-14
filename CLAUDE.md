@@ -308,6 +308,10 @@ values where needed):
   actions (Rotate/Crop/Reset). New edits truncate the redo tail. Undo flushes
   any in-flight uncommitted change first. UI: HistoryPanel (⌘Z/⇧⌘Z,
   click-to-jump), below the collapsible Adjustments section.
+- **Menu bar** (`SwiftInvertApp` `.commands`): File = Open Folder ⌘O /
+  Export ⌘E / Show in Finder ⇧⌘R; Edit = Undo/Redo (replacing the system
+  group — the ⌘Z shortcuts live HERE, not on HistoryPanel's buttons),
+  Copy/Paste Adjustments ⇧⌘C/⇧⌘V (geometry never pasted), Reset All ⌥⌘R.
 - **Sidecars**: `<basename>.swiftinvert.json` next to the source
   (`SidecarStore`); pre-rename `.negswift.json` read as fallback and removed
   on next save. Missing keys decode to defaults (custom `init(from:)` in

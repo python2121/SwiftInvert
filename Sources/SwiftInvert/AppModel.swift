@@ -528,6 +528,43 @@ final class AppModel {
         exportRequest = ExportRequest(urls: [selection])
     }
 
+    /// File > Export…: the multi-selection when there is one, else the
+    /// current image (mirrors the film-strip context menu).
+    func requestExportFromMenu() {
+        if multiSelection.count > 1 {
+            requestExportSelected()
+        } else {
+            requestExportCurrent()
+        }
+    }
+
+    func revealSelectionInFinder() {
+        guard let selection else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([selection])
+    }
+
+    // ── Copy/paste adjustments (Lightroom-style, Edit menu) ───────────────
+    /// Snapshot for Paste Adjustments; geometry (rotation/flip/straighten/
+    /// crops) stays per-frame and is never pasted.
+    var copiedAdjustments: ExposureSettings?
+
+    func copyAdjustments() {
+        guard selection != nil else { return }
+        copiedAdjustments = settings
+    }
+
+    func pasteAdjustments() {
+        guard let source = copiedAdjustments, selection != nil else { return }
+        var next = source
+        next.rotation = settings.rotation
+        next.flipHorizontal = settings.flipHorizontal
+        next.fineRotation = settings.fineRotation
+        next.cropRect = settings.cropRect
+        next.analysisRect = settings.analysisRect
+        pendingHistoryLabel = "Paste adjustments"
+        settings = next
+    }
+
     /// Open the quality modal for the library multi-selection (context menu).
     func requestExportSelected() {
         let urls = files.filter { multiSelection.contains($0) }

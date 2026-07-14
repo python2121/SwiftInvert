@@ -22,6 +22,45 @@ struct SwiftInvertApp: App {
         WindowGroup("SwiftInvert") {
             ContentView(model: model)
         }
+        .commands {
+            // File: the library is folder-based, so Open Folder replaces New.
+            CommandGroup(replacing: .newItem) {
+                Button("Open Folder…") { model.chooseFolder() }
+                    .keyboardShortcut("o")
+                Divider()
+                Button("Export…") { model.requestExportFromMenu() }
+                    .keyboardShortcut("e")
+                    .disabled(model.selection == nil || model.isExporting)
+                Divider()
+                Button("Show in Finder") { model.revealSelectionInFinder() }
+                    .keyboardShortcut("r", modifiers: [.command, .shift])
+                    .disabled(model.selection == nil)
+            }
+            // Edit: undo/redo drive the per-image edit history (shortcuts
+            // live here, not on the HistoryPanel buttons, so they work
+            // whether or not the panel is visible).
+            CommandGroup(replacing: .undoRedo) {
+                Button("Undo Edit") { model.undo() }
+                    .keyboardShortcut("z")
+                    .disabled(!model.canUndo)
+                Button("Redo Edit") { model.redo() }
+                    .keyboardShortcut("z", modifiers: [.command, .shift])
+                    .disabled(!model.canRedo)
+            }
+            CommandGroup(after: .pasteboard) {
+                Divider()
+                Button("Copy Adjustments") { model.copyAdjustments() }
+                    .keyboardShortcut("c", modifiers: [.command, .shift])
+                    .disabled(model.selection == nil)
+                Button("Paste Adjustments") { model.pasteAdjustments() }
+                    .keyboardShortcut("v", modifiers: [.command, .shift])
+                    .disabled(model.selection == nil || model.copiedAdjustments == nil)
+                Divider()
+                Button("Reset All Adjustments") { model.resetSettings() }
+                    .keyboardShortcut("r", modifiers: [.command, .option])
+                    .disabled(model.selection == nil)
+            }
+        }
     }
 }
 
