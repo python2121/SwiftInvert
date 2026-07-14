@@ -337,7 +337,7 @@ struct LabeledSlider: View {
                 .controlSize(.small)
                 .onTapGesture(count: 2) { value = defaultValue }
         }
-        .help(help.isEmpty ? "Double-click the track to reset" : help + " Double-click resets.")
+        .help(help)
     }
 }
 

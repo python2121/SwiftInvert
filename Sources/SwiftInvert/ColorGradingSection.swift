@@ -142,6 +142,6 @@ struct GradientSlider: View {
             }
             .frame(height: 16)
         }
-        .help(help.isEmpty ? "Double-click the track to reset" : help + " Double-click resets.")
+        .help(help)
     }
 }
