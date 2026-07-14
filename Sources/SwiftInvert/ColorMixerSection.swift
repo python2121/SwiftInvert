@@ -79,7 +79,7 @@ struct ColorMixerSection: View {
                 .labelsHidden()
 
                 GradientSlider(
-                    label: "Hue", value: binding(band.hueKeyPath), range: -1...1,
+                    label: "Hue", value: binding(band.hueKeyPath), range: -1.5...1.5,
                     defaultValue: 0, colors: band.hueColors)
                 GradientSlider(
                     label: "Saturation", value: binding(band.saturationKeyPath), range: 0...2,
