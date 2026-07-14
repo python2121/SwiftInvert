@@ -175,6 +175,21 @@ struct DetailView: View {
         GeometryReader { geo in
             let fitted = fittedRect(
                 imageSize: CGSize(width: image.width, height: image.height), in: geo.size)
+            // Straighten preview state (see the Image below): target angle,
+            // its delta from the baked angle, and — for 0°-base previews —
+            // the inscribed-rect clip window replacing the plain fitted frame.
+            let target = model.straightenDragValue ?? model.settings.fineRotation
+            let delta = target - model.displayedFineRotation
+            let zeroBase = model.displayedFineRotation == 0 && abs(delta) > 1e-9
+            let inscribed = RGBImage.inscribedRectSize(
+                width: Double(image.width), height: Double(image.height),
+                radians: target * .pi / 180)
+            let window = zeroBase
+                ? fittedRect(
+                    imageSize: CGSize(width: inscribed.width, height: inscribed.height),
+                    in: geo.size)
+                : fitted
+            let frameScale = window.width / CGFloat(inscribed.width)
             ZStack {
                 ZStack {
                     // Straighten preview: the display rotates by the difference
@@ -182,13 +197,23 @@ struct DetailView: View {
                     // and the angle the shown image was baked with — live during
                     // the drag, and held through the post-release re-bake so the
                     // image doesn't snap back while analysis re-runs.
-                    let target = model.straightenDragValue ?? model.settings.fineRotation
-                    let delta = target - model.displayedFineRotation
+                    // 0°-base previews get the EXACT inscribed presentation:
+                    // the clip window takes the target angle's inscribed-rect
+                    // aspect, and the full frame is scaled so that rect fills
+                    // it precisely — pixel-identical to a baked render at the
+                    // same angle, so press-swap, drag and re-bake all align
+                    // (a frame-cover scale shows a different magnification
+                    // than the baked inscribed crop). Cover-scale remains for
+                    // the cache-miss fallback (base still baked at an angle).
                     Image(decorative: image, scale: 1.0)
                         .resizable()
                         .interpolation(.high)
-                        .rotationEffect(.degrees(delta))
-                        .scaleEffect(delta == 0 ? 1 : coverScale(image: image, degrees: delta))
+                        .frame(
+                            width: zeroBase ? CGFloat(image.width) * frameScale : nil,
+                            height: zeroBase ? CGFloat(image.height) * frameScale : nil)
+                        .rotationEffect(.degrees(zeroBase ? target : delta))
+                        .scaleEffect(
+                            zeroBase || delta == 0 ? 1 : coverScale(image: image, degrees: delta))
                     // Grid: on while its box is checked OR while straightening —
                     // and it stays axis-aligned (that's what you level against).
                     if model.toolMode == .none, let type = GridLineType(rawValue: gridLineType),
@@ -197,7 +222,7 @@ struct DetailView: View {
                         GridOverlay(type: type)
                     }
                 }
-                .frame(width: fitted.width, height: fitted.height)
+                .frame(width: window.width, height: window.height)
                 .clipped()
                 .scaleEffect(zoom)
                 .offset(pan)
