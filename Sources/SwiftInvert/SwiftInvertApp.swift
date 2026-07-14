@@ -91,7 +91,7 @@ struct SwiftInvertApp: App {
                     .keyboardShortcut("h", modifiers: [.command, .shift])
                     .disabled(model.selection == nil)
                 Divider()
-                Toggle("Crop", isOn: toolBinding(.crop))
+                Toggle("Crop or Straighten", isOn: toolBinding(.crop))
                     .keyboardShortcut("k")
                     .disabled(model.selection == nil)
                 Button("Clear Crop") {

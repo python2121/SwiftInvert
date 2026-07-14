@@ -117,7 +117,7 @@ struct CropRotationSection: View {
                 Button {
                     model.toolMode = model.toolMode == .crop ? .none : .crop
                 } label: {
-                    Label("Crop", systemImage: "crop")
+                    Label("Crop or Straighten", systemImage: "crop")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
@@ -135,7 +135,11 @@ struct CropRotationSection: View {
                 }
             }
 
-            straightenRow
+            // The slider lives inside the unified mode — straightening is
+            // always done behind the crop box.
+            if model.toolMode == .crop {
+                straightenRow
+            }
 
             Toggle("Show grid lines", isOn: $showGridLines)
                 .help("Keep composition guides overlaid on the image (they always show while straightening)")
