@@ -206,7 +206,9 @@ One command buffer, passes in order (`RenderPipeline.render` /
    windows × a shared chroma ramp that zeroes at the neutral axis, so
    whites/grays/faint casts never move; all weights read the ORIGINAL hue
    and compose jointly, so overlapping feathers are order-independent;
-   constants `bandCentersDeg`/`bandHalfWidthsDeg`/`bandChromaGate*`/
+   constants tuned on real scans (blues at Lab hue ~235, gate 6→16 —
+   colorimetric-primary values starve real content, whose colorful pixels
+   sit at chroma 12-30): `bandCentersDeg`/`bandHalfWidthsDeg`/`bandChromaGate*`/
    `bandMaxHueShiftDeg` mirrored as MSL literals; UI: segmented band
    picker + gradient tracks, `ColorMixerSection.swift`), then
    vibrance (muted-chroma boost, /60 range) then saturation (a*,b* scale).

@@ -29,11 +29,15 @@ public enum LabColor {
     // faint casts are untouched by construction (the complement of the WB
     // sliders, which move every pixel). SwiftInvert-only; NegPy has no
     // equivalent. Mirrored as literals in NegPipeline.metal colorPop.
-    // Band order everywhere: Red, Yellow, Green, Blue.
-    public static let bandCentersDeg = [25.0, 90.0, 145.0, 280.0]
-    public static let bandHalfWidthsDeg = [45.0, 45.0, 50.0, 60.0]
-    public static let bandChromaGateLow = 8.0  // below: fully protected
-    public static let bandChromaGateHigh = 25.0  // above: full membership
+    // Band order everywhere: Red, Yellow, Green, Blue. Tuned empirically on
+    // real inverted scans, not colorimetric primaries: colorful blues land at
+    // Lab hue ~200-250 in this pipeline (sky/cyan-blue), and typical colorful
+    // content sits at chroma 12-30 (p90 of whole frames ~15-30), so the gate
+    // must saturate well below the ~60-chroma of an sRGB primary.
+    public static let bandCentersDeg = [25.0, 90.0, 135.0, 235.0]
+    public static let bandHalfWidthsDeg = [45.0, 45.0, 50.0, 65.0]
+    public static let bandChromaGateLow = 6.0  // below: fully protected
+    public static let bandChromaGateHigh = 16.0  // above: full membership
     /// Hue rotation at slider ±1 (degrees; + rotates toward the next band
     /// counterclockwise: red→orange, yellow→green, green→teal, blue→purple).
     public static let bandMaxHueShiftDeg = 30.0

@@ -62,8 +62,8 @@ struct CurveUniforms {
 
 // Color-mixer band constants — must match LabColor.bandCentersDeg /
 // bandHalfWidthsDeg (order: Red, Yellow, Green, Blue).
-constant float BAND_CENTER_DEG[4] = {25.0f, 90.0f, 145.0f, 280.0f};
-constant float BAND_HALFWIDTH_DEG[4] = {45.0f, 45.0f, 50.0f, 60.0f};
+constant float BAND_CENTER_DEG[4] = {25.0f, 90.0f, 135.0f, 235.0f};
+constant float BAND_HALFWIDTH_DEG[4] = {45.0f, 45.0f, 50.0f, 65.0f};
 
 // Region-mask constants — must match K.toneRegionSharpness / K.*ToneAnchor
 // in ExposureConstants.swift (GPU/CPU parity tests catch drift).
@@ -237,7 +237,7 @@ kernel void colorPop(
     if (any(p.bandHues != float4(0.0f)) || any(p.bandSaturations != float4(1.0f))) {
         float3 lab = rgb_to_lab(result);
         float chroma = length(lab.yz);
-        float gate = smoothstep(8.0f, 25.0f, chroma);
+        float gate = smoothstep(6.0f, 16.0f, chroma);
         if (gate > 0.0f) {
             float hueDeg = atan2(lab.z, lab.y) * (180.0f / M_PI_F);
             float deltaDeg = 0.0f;
