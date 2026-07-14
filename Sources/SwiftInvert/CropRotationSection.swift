@@ -87,9 +87,14 @@ struct CropRotationSection: View {
                 in: -45...45
             ) { editing in
                 if editing {
-                    // Seed on mouse-DOWN (before any movement): the 0° base
-                    // swaps in while target still equals the baked angle —
-                    // the one moment the exchange is invisible.
+                    // Mouse-DOWN enters the unified Crop & Straighten mode —
+                    // straightening always happens behind the axis-aligned
+                    // crop box, same as pressing the Crop button. Seeding the
+                    // drag value before any movement swaps the 0° base in
+                    // while target still equals the baked angle.
+                    if model.toolMode != .crop {
+                        model.toolMode = .crop
+                    }
                     if model.straightenDragValue == nil {
                         model.straightenDragValue = model.settings.fineRotation
                     }
@@ -99,7 +104,7 @@ struct CropRotationSection: View {
                 }
             }
             .controlSize(.small)
-            .help("Straighten up to ±45°; the frame auto-crops to the largest inscribed rectangle. Grid lines show while dragging.")
+            .help("Straighten up to ±45° — enters Crop & Straighten: the image rotates behind the crop box, which auto-fits. Exit (Esc or the Crop button) commits.")
             .onHover { inside in
                 if inside { model.prepareStraightenBase() }
             }
