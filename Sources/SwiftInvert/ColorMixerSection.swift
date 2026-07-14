@@ -23,6 +23,9 @@ struct ColorMixerSection: View {
             case .blue: return \.blueHue
             }
         }
+        /// Reset target for the Hue slider (red diverges: +0.5 default).
+        var hueDefault: Double { self == .red ? 0.5 : 0 }
+
         var saturationKeyPath: WritableKeyPath<ExposureSettings, Double> {
             switch self {
             case .red: return \.redSaturation
@@ -81,7 +84,7 @@ struct ColorMixerSection: View {
 
                 GradientSlider(
                     label: "Hue", value: binding(band.hueKeyPath), range: -1.5...1.5,
-                    defaultValue: 0, colors: band.hueColors,
+                    defaultValue: band.hueDefault, colors: band.hueColors,
                     help: "Rotate this band's saturated colors toward the hues shown on the track ends; neutrals and faint casts never move.")
                 GradientSlider(
                     label: "Saturation", value: binding(band.saturationKeyPath), range: 0...2,
