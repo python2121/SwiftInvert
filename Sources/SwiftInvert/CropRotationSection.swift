@@ -117,7 +117,7 @@ struct CropRotationSection: View {
                 }
                 .buttonStyle(.bordered)
                 .tint(model.toolMode == .crop ? Color.accentColor : nil)
-                .help("Draw a crop on the image; the export is cropped and the meters read only the kept area")
+                .help("Crop & straighten: adjust the box while the image rotates behind it; the box auto-fits as the angle changes. Exit (Esc or the button) commits.")
                 if model.settings.cropRect != nil {
                     Button {
                         model.pendingHistoryLabel = "Crop cleared"

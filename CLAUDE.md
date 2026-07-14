@@ -316,6 +316,19 @@ values where needed):
   actions (Rotate/Crop/Reset). New edits truncate the redo tail. Undo flushes
   any in-flight uncommitted change first. UI: HistoryPanel (⌘Z/⇧⌘Z,
   click-to-jump), below the collapsible Adjustments section.
+- **Unified Crop & Straighten** (Lightroom model): `ToolMode.crop` renders
+  the full UNROTATED frame (scheduleRender substitutes fineRotation 0,
+  uncropped) fitted by its rotated bounding box; the image rotates behind an
+  axis-aligned `CropBoxOverlay` (dim surround, thirds, corner handles,
+  clamped move) whose math lives in `NegativeKit/CropGeometry` (rotated-space
+  boxes, fitScale/constrain, content-preserving `remapCrop`; tested). The
+  desired box is DetailView `@State` (`cropBox`, nil = follow committed);
+  exit commits via `commitCrop()` (near-full box ⇒ crop cleared). Straighten
+  commits outside the mode go through `AppModel.commitFineRotation`, which
+  remaps a committed crop so its content doesn't drift with the inscribed
+  auto-crop; `RenderOutput.frameSize` (orientation-only dims) is the
+  coordinate base. The analysis tool keeps the old draw-a-rect
+  `SelectionOverlay`.
 - **Menu bar** (`SwiftInvertApp` `.commands`): File = Open Folder ⌘O /
   Export ⌘E / Show in Finder ⇧⌘R; Edit = Undo/Redo (replacing the system
   group — the ⌘Z shortcuts live HERE, not on HistoryPanel's buttons),

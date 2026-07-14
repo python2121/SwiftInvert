@@ -511,8 +511,13 @@ final class AppModel {
             repeat {
                 self.renderPending = false
                 var snapshot = self.showingBaseline ? self.baselineSettings() : self.settings
-                // Mid-straighten-drag renders bake 0° (see straightenDragValue).
-                if self.straightenDragValue != nil { snapshot.fineRotation = 0 }
+                // Mid-straighten-drag renders bake 0° (see straightenDragValue),
+                // and so does the unified Crop & Straighten mode: the image
+                // rotates behind the axis-aligned crop box as a display
+                // transform over the full unrotated frame.
+                if self.straightenDragValue != nil || self.toolMode == .crop {
+                    snapshot.fineRotation = 0
+                }
                 let uncropped = self.toolMode != .none
                 let hq = self.hqPreview
                 let midStraightenDrag = self.straightenDragValue != nil

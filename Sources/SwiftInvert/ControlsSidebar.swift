@@ -113,7 +113,7 @@ struct ControlsSidebar: View {
                             isSet: model.settings.analysisRect != nil,
                             clear: { model.settings.analysisRect = nil },
                             help: "Draw the region the exposure meter reads (keeps borders from throwing it off); the output image is NOT cropped")
-                        if model.toolMode != .none {
+                        if model.toolMode == .analysisRegion {
                             Text("Drag on the image to select the area.")
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)

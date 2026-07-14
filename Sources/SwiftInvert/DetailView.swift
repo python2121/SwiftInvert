@@ -1,5 +1,6 @@
 import NegativeKit
 import SwiftUI
+import simd
 
 struct DetailView: View {
     @Bindable var model: AppModel
@@ -8,6 +9,9 @@ struct DetailView: View {
     @AppStorage("gridLineType") private var gridLineType = GridLineType.thirds.rawValue
 
     @State private var zoom: CGFloat = 1
+    /// Desired crop box while in Crop & Straighten mode (rotated-space px;
+    /// nil = follow the committed crop). Committed back on mode exit.
+    @State private var cropBox: CropBoxValue?
     @State private var baseZoom: CGFloat = 1
     @State private var pan: CGSize = .zero
     @State private var basePan: CGSize = .zero
@@ -179,17 +183,38 @@ struct DetailView: View {
             // its delta from the baked angle, and — for 0°-base previews —
             // the inscribed-rect clip window replacing the plain fitted frame.
             let target = model.straightenDragValue ?? model.settings.fineRotation
+            let radians = target * .pi / 180
             let delta = target - model.displayedFineRotation
-            let zeroBase = model.displayedFineRotation == 0 && abs(delta) > 1e-9
+            let cropMode = model.toolMode == .crop
+            let zeroBase = !cropMode && model.displayedFineRotation == 0 && abs(delta) > 1e-9
             let inscribed = RGBImage.inscribedRectSize(
-                width: Double(image.width), height: Double(image.height),
-                radians: target * .pi / 180)
-            let window = zeroBase
-                ? fittedRect(
-                    imageSize: CGSize(width: inscribed.width, height: inscribed.height),
-                    in: geo.size)
-                : fitted
+                width: Double(image.width), height: Double(image.height), radians: radians)
+            // Crop mode fits the ROTATED frame's bounding box so the whole
+            // image stays visible while it turns behind the crop box.
+            let framePx: SIMD2<Double> = model.frameSize == .zero
+                ? SIMD2(Double(image.width), Double(image.height))
+                : SIMD2(Double(model.frameSize.width), Double(model.frameSize.height))
+            let bbox = CGSize(
+                width: framePx.x * abs(cos(radians)) + framePx.y * abs(sin(radians)),
+                height: framePx.x * abs(sin(radians)) + framePx.y * abs(cos(radians)))
+            let window =
+                cropMode
+                ? fittedRect(imageSize: bbox, in: geo.size)
+                : (zeroBase
+                    ? fittedRect(
+                        imageSize: CGSize(width: inscribed.width, height: inscribed.height),
+                        in: geo.size)
+                    : fitted)
+            let cropScale = window.width / bbox.width
             let frameScale = window.width / CGFloat(inscribed.width)
+            let imageFrame: CGSize? =
+                cropMode
+                ? CGSize(width: framePx.x * cropScale, height: framePx.y * cropScale)
+                : (zeroBase
+                    ? CGSize(
+                        width: CGFloat(image.width) * frameScale,
+                        height: CGFloat(image.height) * frameScale)
+                    : nil)
             ZStack {
                 ZStack {
                     // Straighten preview: the display rotates by the difference
@@ -208,12 +233,11 @@ struct DetailView: View {
                     Image(decorative: image, scale: 1.0)
                         .resizable()
                         .interpolation(.high)
-                        .frame(
-                            width: zeroBase ? CGFloat(image.width) * frameScale : nil,
-                            height: zeroBase ? CGFloat(image.height) * frameScale : nil)
-                        .rotationEffect(.degrees(zeroBase ? target : delta))
+                        .frame(width: imageFrame?.width, height: imageFrame?.height)
+                        .rotationEffect(.degrees(cropMode || zeroBase ? target : delta))
                         .scaleEffect(
-                            zeroBase || delta == 0 ? 1 : coverScale(image: image, degrees: delta))
+                            cropMode || zeroBase || delta == 0
+                                ? 1 : coverScale(image: image, degrees: delta))
                     // Grid: on while its box is checked OR while straightening —
                     // and it stays axis-aligned (that's what you level against).
                     if model.toolMode == .none, let type = GridLineType(rawValue: gridLineType),
@@ -224,11 +248,18 @@ struct DetailView: View {
                 }
                 .frame(width: window.width, height: window.height)
                 .clipped()
-                .scaleEffect(zoom)
-                .offset(pan)
+                .scaleEffect(cropMode ? 1 : zoom)
+                .offset(cropMode ? .zero : pan)
                 .position(x: geo.size.width / 2, y: geo.size.height / 2)
 
-                if model.toolMode != .none {
+                if cropMode {
+                    CropBoxOverlay(
+                        box: $cropBox, frame: framePx, radians: radians, scale: cropScale,
+                        committed: model.settings.cropRect,
+                        committedRadians: model.settings.fineRotation * .pi / 180)
+                        .frame(width: window.width, height: window.height)
+                        .position(x: geo.size.width / 2, y: geo.size.height / 2)
+                } else if model.toolMode != .none {
                     SelectionOverlay(frame: fitted, existing: existingRect) { rect in
                         model.commitSelection(rect)
                     }
@@ -249,6 +280,25 @@ struct DetailView: View {
             .onTapGesture(count: 2) {
                 withAnimation(.easeOut(duration: 0.15)) { resetZoom() }
             }
+            .onChange(of: model.toolMode) { old, new in
+                if old == .crop { commitCrop() }
+                if new == .crop { cropBox = nil }
+            }
+            // First straighten drag inside crop mode freezes the box on
+            // screen (Lightroom behavior: the box holds, the image turns).
+            .onChange(of: model.straightenDragValue) { _, value in
+                if model.toolMode == .crop, value != nil, cropBox == nil {
+                    cropBox = CropBoxOverlay.defaultBox(
+                        committed: model.settings.cropRect,
+                        committedRadians: model.settings.fineRotation * .pi / 180,
+                        frame: SIMD2(Double(model.frameSize.width), Double(model.frameSize.height)),
+                        radians: (model.straightenDragValue ?? model.settings.fineRotation) * .pi / 180)
+                }
+            }
+            // Clear Crop (menu/sidebar) while in the mode resets the box.
+            .onChange(of: model.settings.cropRect) { _, rect in
+                if model.toolMode == .crop, rect == nil { cropBox = nil }
+            }
             .overlay(alignment: .top) {
                 if model.showingBaseline {
                     Text("Original conversion")
@@ -259,6 +309,37 @@ struct DetailView: View {
                         .foregroundStyle(.white)
                         .padding(.top, 10)
                 }
+            }
+        }
+    }
+
+    /// Commit the crop box on leaving Crop & Straighten mode: constrain the
+    /// desired box to the committed angle, convert to a NormalizedRect over
+    /// the inscribed rect, and treat a (nearly) full-frame box as "no crop".
+    private func commitCrop() {
+        defer { cropBox = nil }
+        guard let desired = cropBox, model.frameSize != .zero else { return }
+        let framePx = SIMD2(Double(model.frameSize.width), Double(model.frameSize.height))
+        let radians = model.settings.fineRotation * .pi / 180
+        let (center, halfExtents) = CropGeometry.constrain(
+            center: desired.center, halfExtents: desired.halfExtents, radians: radians,
+            frame: framePx)
+        let inscribed = CropGeometry.inscribedSize(frame: framePx, radians: radians)
+        let isFullFrame =
+            simd_length(center) < 0.005 * inscribed.x
+            && abs(halfExtents.x * 2 - inscribed.x) < 0.01 * inscribed.x
+            && abs(halfExtents.y * 2 - inscribed.y) < 0.01 * inscribed.y
+        if isFullFrame {
+            if model.settings.cropRect != nil {
+                model.pendingHistoryLabel = "Crop cleared"
+                model.settings.cropRect = nil
+            }
+        } else {
+            let rect = CropGeometry.normalizedRect(
+                center: center, halfExtents: halfExtents, frame: framePx, radians: radians)
+            if model.settings.cropRect != rect {
+                model.pendingHistoryLabel = "Crop"
+                model.settings.cropRect = rect
             }
         }
     }
