@@ -34,26 +34,32 @@ struct ColorGradingSection: View {
             VStack(alignment: .leading, spacing: 10) {
                 GradientSlider(
                     label: "Temp", value: $model.settings.temp, range: -1...1,
-                    defaultValue: 0, colors: Self.tempColors)
+                    defaultValue: 0, colors: Self.tempColors,
+                    help: "Overall white balance along blue ↔ yellow (right = warmer). Moves every pixel, neutrals included.")
                 GradientSlider(
                     label: "Tint", value: $model.settings.tint, range: -1...1,
-                    defaultValue: 0, colors: Self.tintColors)
+                    defaultValue: 0, colors: Self.tintColors,
+                    help: "Overall white balance along green ↔ magenta. Moves every pixel, neutrals included.")
 
                 Picker("", selection: $band) {
                     ForEach(Band.allCases) { Text($0.rawValue).tag($0) }
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
+                .help("Which tonal region the three color-balance sliders below act on")
 
                 GradientSlider(
                     label: "R ↔ C", value: bandBinding(0), range: -1...1,
-                    defaultValue: 0, colors: Self.rcColors)
+                    defaultValue: 0, colors: Self.rcColors,
+                    help: "Balance red ↔ cyan in the selected tonal region (enlarger filtration).")
                 GradientSlider(
                     label: "G ↔ M", value: bandBinding(1), range: -1...1,
-                    defaultValue: 0, colors: Self.gmColors)
+                    defaultValue: 0, colors: Self.gmColors,
+                    help: "Balance green ↔ magenta in the selected tonal region (enlarger filtration).")
                 GradientSlider(
                     label: "B ↔ Y", value: bandBinding(2), range: -1...1,
-                    defaultValue: 0, colors: Self.byColors)
+                    defaultValue: 0, colors: Self.byColors,
+                    help: "Balance blue ↔ yellow in the selected tonal region (enlarger filtration).")
             }
             .padding(6)
         }
@@ -75,6 +81,8 @@ struct GradientSlider: View {
     let range: ClosedRange<Double>
     let defaultValue: Double
     let colors: [Color]
+    /// Hover tooltip describing what the control does.
+    var help: String = ""
     @Environment(\.controlEditingChanged) private var controlEditingChanged
     @State private var isDragging = false
 
@@ -134,5 +142,6 @@ struct GradientSlider: View {
             }
             .frame(height: 16)
         }
+        .help(help.isEmpty ? "Double-click the track to reset" : help + " Double-click resets.")
     }
 }

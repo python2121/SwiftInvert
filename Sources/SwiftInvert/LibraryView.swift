@@ -58,6 +58,7 @@ struct LibraryView: View {
                 Text("Choose a folder — subfolders become collapsible film strips.")
             } actions: {
                 Button("Choose Folder…") { model.chooseFolder() }
+                    .help("Pick the folder of RAW negatives to browse")
             }
         } else if let tree = model.folderTree {
             ScrollView {
@@ -140,6 +141,7 @@ struct FolderSection: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .help("Collapse or expand this folder (\(node.totalCount) images)")
     }
 }
 

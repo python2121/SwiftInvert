@@ -52,6 +52,7 @@ struct CropRotationSection: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .help("Collapse or expand the Crop & Rotation section")
         .padding(.horizontal, 12)
     }
 
@@ -91,6 +92,7 @@ struct CropRotationSection: View {
                 }
             }
             .controlSize(.small)
+            .help("Straighten up to ±45°; the frame auto-crops to the largest inscribed rectangle. Grid lines show while dragging.")
         }
     }
 
@@ -105,6 +107,7 @@ struct CropRotationSection: View {
                 }
                 .buttonStyle(.bordered)
                 .tint(model.toolMode == .crop ? Color.accentColor : nil)
+                .help("Draw a crop on the image; the export is cropped and the meters read only the kept area")
                 if model.settings.cropRect != nil {
                     Button {
                         model.pendingHistoryLabel = "Crop cleared"
@@ -120,6 +123,7 @@ struct CropRotationSection: View {
             straightenRow
 
             Toggle("Show grid lines", isOn: $showGridLines)
+                .help("Keep composition guides overlaid on the image (they always show while straightening)")
             if showGridLines {
                 Picker("", selection: $gridLineType) {
                     ForEach(GridLineType.allCases) { type in
@@ -127,6 +131,7 @@ struct CropRotationSection: View {
                     }
                 }
                 .labelsHidden()
+                .help("Guide style drawn over the image")
             }
         }
         .padding(.horizontal, 12)

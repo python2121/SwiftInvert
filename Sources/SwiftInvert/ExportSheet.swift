@@ -24,15 +24,19 @@ struct ExportSheet: View {
                 ForEach(ExportFormat.allCases) { Text($0.label).tag($0) }
             }
             .pickerStyle(.segmented)
+            .help("Output file format: JPEG for sharing, 16-bit TIFF for further editing")
 
             Picker("Color space", selection: $options.colorSpace) {
                 ForEach(ExportColorSpace.allCases) { Text($0.label).tag($0) }
             }
+            .help("Color space converted to at export (profile embedded); sRGB is the safe choice for web and sharing")
 
             if options.format == .jpeg {
                 HStack {
                     Text("Quality")
+                        .help("JPEG compression quality — higher = larger file, fewer artifacts")
                     Slider(value: $options.jpegQuality, in: 0.5...1.0)
+                        .help("JPEG compression quality — higher = larger file, fewer artifacts")
                     Text(String(format: "%.0f%%", options.jpegQuality * 100))
                         .font(.caption.monospacedDigit())
                         .frame(width: 40, alignment: .trailing)
@@ -40,12 +44,14 @@ struct ExportSheet: View {
             }
 
             Toggle("Resize to fit long edge", isOn: $options.resize)
+                .help("Downscale the export so its longer side fits the pixel size below; off = full resolution")
             if options.resize {
                 HStack {
                     Text("Long edge")
                     TextField(
                         "px", value: $options.maxLongEdge, format: .number.grouping(.never))
                         .frame(width: 70)
+                        .help("Maximum long-edge size in pixels")
                     Text("px").foregroundStyle(.secondary)
                     Stepper("", value: $options.maxLongEdge, in: 256...20000, step: 500)
                         .labelsHidden()
@@ -63,6 +69,7 @@ struct ExportSheet: View {
                 }
                 .labelsHidden()
                 .fixedSize()
+                .help("Save each export beside its source file, or collect them all in one chosen folder")
             }
             if options.useCustomDestination {
                 HStack {
@@ -74,6 +81,7 @@ struct ExportSheet: View {
                         .help(options.customDestinationPath ?? "")
                     Spacer()
                     Button("Choose…") { chooseDestination() }
+                        .help("Pick the destination folder")
                 }
             }
 
@@ -85,8 +93,10 @@ struct ExportSheet: View {
                 Spacer()
                 Button("Cancel") { model.exportRequest = nil }
                     .keyboardShortcut(.cancelAction)
+                    .help("Close without exporting")
                 Button("Export") { model.performExport(urls: request.urls, options: options) }
                     .keyboardShortcut(.defaultAction)
+                    .help("Render at full resolution and write the files")
                     .buttonStyle(.borderedProminent)
                     .disabled(options.useCustomDestination && options.customDestinationPath == nil)
             }

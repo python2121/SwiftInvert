@@ -77,13 +77,16 @@ struct ColorMixerSection: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
+                .help("Which color family the Hue/Saturation sliders below target")
 
                 GradientSlider(
                     label: "Hue", value: binding(band.hueKeyPath), range: -1.5...1.5,
-                    defaultValue: 0, colors: band.hueColors)
+                    defaultValue: 0, colors: band.hueColors,
+                    help: "Rotate this band's saturated colors toward the hues shown on the track ends; neutrals and faint casts never move.")
                 GradientSlider(
                     label: "Saturation", value: binding(band.saturationKeyPath), range: 0...2,
-                    defaultValue: 1.0, colors: band.saturationColors)
+                    defaultValue: 1.0, colors: band.saturationColors,
+                    help: "Tame or boost this band's saturated colors; neutrals and faint casts never move.")
             }
             .padding(6)
         }

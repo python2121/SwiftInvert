@@ -35,6 +35,7 @@ struct HistoryPanel: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .help("Collapse or expand the History section")
             Spacer()
             Button {
                 model.undo()

@@ -20,6 +20,7 @@ struct SectionResizeHandle: View {
         }
         .frame(height: 11)
         .contentShape(Rectangle())
+        .help("Drag to resize the History list")
         .onHover { inside in
             if inside { NSCursor.resizeUpDown.push() } else { NSCursor.pop() }
         }

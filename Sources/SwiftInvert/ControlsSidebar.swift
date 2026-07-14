@@ -31,6 +31,7 @@ struct ControlsSidebar: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .help("Collapse or expand the Adjustments section")
                     Spacer()
                     Button("Reset All") { model.resetSettings() }
                         .controlSize(.small)
@@ -110,7 +111,8 @@ struct ControlsSidebar: View {
                         toolRow(
                             "Crop for Analysis", mode: .analysisRegion,
                             isSet: model.settings.analysisRect != nil,
-                            clear: { model.settings.analysisRect = nil })
+                            clear: { model.settings.analysisRect = nil },
+                            help: "Draw the region the exposure meter reads (keeps borders from throwing it off); the output image is NOT cropped")
                         if model.toolMode != .none {
                             Text("Drag on the image to select the area.")
                                 .font(.caption2)
@@ -130,15 +132,19 @@ struct ControlsSidebar: View {
                 GroupBox("Print") {
                     VStack(alignment: .leading, spacing: 10) {
                         Toggle("Auto exposure", isOn: $model.settings.autoExposure)
+                            .help("Set print exposure automatically from the frame's metered mid-tone anchor")
                         // Right = brighter (all brightness sliders share that
                         // direction). Internally NegPy's print density: 2 − b.
                         LabeledSlider(
                             label: "Brightness", value: brightnessBinding, range: -3...4,
-                            format: "%.2f", defaultValue: 1.0)
+                            format: "%.2f", defaultValue: 1.0,
+                            help: "Print exposure: right = brighter print, like less time under the enlarger.")
                         Toggle("Auto contrast", isOn: $model.settings.autoNormalizeContrast)
+                            .help("Adapt contrast to the frame's measured density range so flat and punchy negatives both print normally (auto grade)")
                         LabeledSlider(
                             label: "Grade (ISO R)", value: $model.settings.grade, range: 50...180,
-                            format: "%.0f", defaultValue: 115)
+                            format: "%.0f", defaultValue: 115,
+                            help: "Paper contrast grade: 50 = hard (contrasty), 180 = soft (flat); 115 ≈ grade 2.")
                     }
                     .padding(6)
                 }
@@ -147,25 +153,32 @@ struct ControlsSidebar: View {
                     VStack(alignment: .leading, spacing: 10) {
                         LabeledSlider(
                             label: "Exposure (stops)", value: $model.settings.exposureStops,
-                            range: -2...2, format: "%+.2f", defaultValue: 0)
+                            range: -2...2, format: "%+.2f", defaultValue: 0,
+                            help: "Global exposure in photographic stops: + brightens everything, histogram shifts right.")
                         LabeledSlider(
                             label: "Contrast", value: $model.settings.overallContrast,
-                            range: -1...2, format: "%.2f", defaultValue: 0)
+                            range: -1...2, format: "%.2f", defaultValue: 0,
+                            help: "Rotate the whole tone curve: + steepens, − flattens; overall brightness stays anchored.")
                         LabeledSlider(
                             label: "Shadows", value: $model.settings.shadows, range: -2...2,
-                            format: "%.2f", defaultValue: 0)
+                            format: "%.2f", defaultValue: 0,
+                            help: "Lift (+) or deepen (−) the shadows without moving mid-tones or highlights.")
                         LabeledSlider(
                             label: "Shadow contrast", value: $model.settings.shadowContrast,
-                            range: -3...6, format: "%.2f", defaultValue: 0)
+                            range: -3...6, format: "%.2f", defaultValue: 0,
+                            help: "Expand (+) or compress (−) tonal separation within the shadows.")
                         LabeledSlider(
                             label: "Dark shadows", value: $model.settings.darkShadows,
-                            range: -2...2, format: "%.2f", defaultValue: 0)
+                            range: -2...2, format: "%.2f", defaultValue: 0,
+                            help: "Like Shadows but anchored deeper — targets only the darkest tones.")
                         LabeledSlider(
                             label: "Highlights", value: $model.settings.highlights, range: -1...1,
-                            format: "%.2f", defaultValue: 0)
+                            format: "%.2f", defaultValue: 0,
+                            help: "Bring highlights down (−) to recover texture, or up (+), without moving mid-tones.")
                         LabeledSlider(
                             label: "Highlight contrast", value: $model.settings.highlightContrast,
-                            range: -1...1, format: "%.2f", defaultValue: 0)
+                            range: -1...1, format: "%.2f", defaultValue: 0,
+                            help: "Expand (+) or compress (−) tonal separation within the highlights.")
                     }
                     .padding(6)
                 }
@@ -176,19 +189,23 @@ struct ControlsSidebar: View {
                         // settings/sidecars; Temp/Tint below are the WB controls).
                         LabeledSlider(
                             label: "Pre-saturation", value: $model.settings.preSaturation,
-                            range: 0.5...2.0, format: "%.2f", defaultValue: 1.15)
+                            range: 0.5...2.0, format: "%.2f", defaultValue: 1.15,
+                            help: "Restore color separation lost to per-channel normalization, before the print curve — richer hues, not just stronger chroma.")
                         // >1 overcorrects past the measured neutral axis; the
                         // kernel's cast clamps bound it at any strength.
                         LabeledSlider(
                             label: "Cast strength", value: $model.settings.castRemovalStrength,
-                            range: 0...2, format: "%.2f", defaultValue: 0.5)
+                            range: 0...2, format: "%.2f", defaultValue: 0.5,
+                            help: "How strongly the measured color cast on the neutral axis is removed; above 1 overcorrects past neutral.")
                         Divider()
                         LabeledSlider(
                             label: "Vibrance", value: $model.settings.vibrance,
-                            range: 0...2, format: "%.2f", defaultValue: 1.0)
+                            range: 0...2, format: "%.2f", defaultValue: 1.0,
+                            help: "Boost muted colors more than already-saturated ones.")
                         LabeledSlider(
                             label: "Saturation", value: $model.settings.saturation,
-                            range: 0...2, format: "%.2f", defaultValue: 1.0)
+                            range: 0...2, format: "%.2f", defaultValue: 1.0,
+                            help: "Scale all color intensity equally.")
                     }
                     .padding(6)
                 }
@@ -201,24 +218,29 @@ struct ControlsSidebar: View {
                     VStack(alignment: .leading, spacing: 10) {
                         LabeledSlider(
                             label: "Toe", value: $model.settings.toe, range: -1...1,
-                            format: "%.2f", defaultValue: 0)
+                            format: "%.2f", defaultValue: 0,
+                            help: "Shadow roll-off into paper black: + softer and lifted, − harder clip.")
                         LabeledSlider(
                             label: "Shoulder", value: $model.settings.shoulder, range: -1...1,
-                            format: "%.2f", defaultValue: 0)
+                            format: "%.2f", defaultValue: 0,
+                            help: "Highlight roll-off into paper white: + softer, − harder.")
                         Toggle("True black", isOn: $model.settings.trueBlack)
                             .help("Map paper Dmax to display black (black point compensation)")
                         LabeledSlider(
                             label: "White point", value: $model.settings.whitePointOffset,
-                            range: -0.3...0.3, format: "%.3f", defaultValue: 0)
+                            range: -0.3...0.3, format: "%.3f", defaultValue: 0,
+                            help: "Offset the metered white point (same as dragging the histogram's right handle).")
                         LabeledSlider(
                             label: "Black point", value: $model.settings.blackPointOffset,
-                            range: -0.3...0.3, format: "%.3f", defaultValue: 0)
+                            range: -0.3...0.3, format: "%.3f", defaultValue: 0,
+                            help: "Offset the metered black point (same as dragging the histogram's left handle).")
                     }
                     .padding(6)
                 }
 
                 Button("Export…") { model.requestExportCurrent() }
                     .disabled(model.isExporting || model.selection == nil)
+                    .help("Export this image (same options as the multi-select batch export)")
 
                 if let status = model.statusMessage {
                     Text(status).font(.caption).foregroundStyle(.secondary)
@@ -238,7 +260,8 @@ struct ControlsSidebar: View {
     /// One pre-process tool row: activate-tool button + clear button when set.
     @ViewBuilder
     private func toolRow(
-        _ label: String, mode: AppModel.ToolMode, isSet: Bool, clear: @escaping () -> Void
+        _ label: String, mode: AppModel.ToolMode, isSet: Bool, clear: @escaping () -> Void,
+        help: String = ""
     ) -> some View {
         HStack(spacing: 6) {
             Button {
@@ -249,6 +272,7 @@ struct ControlsSidebar: View {
             }
             .buttonStyle(.bordered)
             .tint(model.toolMode == mode ? Color.accentColor : nil)
+            .help(help)
             if isSet {
                 Button {
                     clear()
@@ -283,6 +307,8 @@ struct LabeledSlider: View {
     let range: ClosedRange<Double>
     let format: String
     let defaultValue: Double
+    /// Hover tooltip describing what the control does.
+    var help: String = ""
     @Environment(\.controlEditingChanged) private var controlEditingChanged
 
     private var isChanged: Bool { abs(value - defaultValue) > 1e-9 }
@@ -311,6 +337,7 @@ struct LabeledSlider: View {
                 .controlSize(.small)
                 .onTapGesture(count: 2) { value = defaultValue }
         }
+        .help(help.isEmpty ? "Double-click the track to reset" : help + " Double-click resets.")
     }
 }
 
