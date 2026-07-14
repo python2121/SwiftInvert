@@ -83,8 +83,34 @@ struct ExportOptions: Codable, Equatable {
 extension ExportFormat: Codable {}
 
 enum Exporter {
-    /// Write the encoded (ROMM TRC) buffer with the ROMM RGB profile embedded.
-    static func write(_ encoded: RGBImage, to url: URL, options: ExportOptions) throws {
+    /// Capture metadata copied from the source RAW into the export: the EXIF
+    /// block (exposure, date, lens), GPS, and camera make/model. Geometry-
+    /// dependent fields are dropped — orientation is baked into the pixels
+    /// and the RAW's pixel dimensions would lie about the output.
+    private static func sourceMetadata(_ source: URL?)
+        -> (exif: [CFString: Any], tiff: [CFString: Any], gps: [CFString: Any]?)
+    {
+        guard let source,
+            let src = CGImageSourceCreateWithURL(source as CFURL, nil),
+            let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any]
+        else { return ([:], [:], nil) }
+        var exif = props[kCGImagePropertyExifDictionary] as? [CFString: Any] ?? [:]
+        exif[kCGImagePropertyExifPixelXDimension] = nil
+        exif[kCGImagePropertyExifPixelYDimension] = nil
+        let sourceTIFF = props[kCGImagePropertyTIFFDictionary] as? [CFString: Any] ?? [:]
+        var tiff: [CFString: Any] = [:]
+        for key in [kCGImagePropertyTIFFMake, kCGImagePropertyTIFFModel, kCGImagePropertyTIFFDateTime] {
+            tiff[key] = sourceTIFF[key]
+        }
+        tiff[kCGImagePropertyTIFFSoftware] = "SwiftInvert"
+        return (exif, tiff, props[kCGImagePropertyGPSDictionary] as? [CFString: Any])
+    }
+
+    /// Write the encoded (ROMM TRC) buffer with the ROMM RGB profile embedded
+    /// and the source RAW's capture metadata carried over.
+    static func write(
+        _ encoded: RGBImage, to url: URL, options: ExportOptions, source: URL? = nil
+    ) throws {
         var image = encoded
         if options.resize, options.maxLongEdge >= 16 {
             image = image.downsampled(maxLongEdge: options.maxLongEdge)
@@ -103,6 +129,7 @@ enum Exporter {
             cg = ColorIO.cgImage(fromEncoded: image, bitsPerComponent: outputBits)
         }
         let type: UTType
+        var (exif, tiff, gps) = sourceMetadata(source)
         var destOptions: [CFString: Any] = [:]
         switch options.format {
         case .jpeg:
@@ -110,7 +137,14 @@ enum Exporter {
             destOptions[kCGImageDestinationLossyCompressionQuality] = options.jpegQuality
         case .tiff16:
             type = .tiff
+            // LZW: the lossless option ImageIO reliably writes (NegPy moved
+            // to Deflate, but ImageIO's Deflate support is undocumented).
+            tiff[kCGImagePropertyTIFFCompression] = 5
         }
+        destOptions[kCGImagePropertyOrientation] = CGImagePropertyOrientation.up.rawValue
+        if !exif.isEmpty { destOptions[kCGImagePropertyExifDictionary] = exif }
+        destOptions[kCGImagePropertyTIFFDictionary] = tiff
+        if let gps { destOptions[kCGImagePropertyGPSDictionary] = gps }
         guard let cg,
             let dest = CGImageDestinationCreateWithURL(url as CFURL, type.identifier as CFString, 1, nil)
         else { throw ExportError.encodeFailed }

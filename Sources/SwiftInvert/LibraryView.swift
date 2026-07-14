@@ -61,11 +61,20 @@ struct LibraryView: View {
                     .help("Pick the folder of RAW negatives to browse")
             }
         } else if let tree = model.folderTree {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 6) {
-                    FolderSection(model: model, node: tree, depth: 0, isRoot: true, columns: columns)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 6) {
+                        FolderSection(model: model, node: tree, depth: 0, isRoot: true, columns: columns)
+                    }
+                    .padding(8)
                 }
-                .padding(8)
+                // Keyboard navigation must keep the selected cell in view
+                // (cells take their ForEach identity, the file URL).
+                .onChange(of: model.selection) { _, selection in
+                    if let selection {
+                        proxy.scrollTo(selection)
+                    }
+                }
             }
         } else if model.isScanning {
             VStack {

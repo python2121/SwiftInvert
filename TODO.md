@@ -7,7 +7,7 @@ negadoctor, and standard macOS app conventions.
 
 ## macOS-native nice-to-haves
 
-- [ ] **Arrow-key frame navigation** (←/→ walks the film strip, honoring
+- [x] **Arrow-key frame navigation** (←/→ walks the film strip, honoring
   folder order) — S, the single biggest workflow hole.
 - [ ] **Rating/culling**: pick ★/reject flags with keyboard (1–5, X, U),
   filter bar in the library — M. Pairs with arrow-key navigation for a
@@ -33,11 +33,11 @@ negadoctor, and standard macOS app conventions.
 
 ## Image pipeline / conversion low-hanging fruit
 
-- [ ] **TIFF compression** (Adobe Deflate + horizontal predictor; NegPy
+- [x] **TIFF compression** (Adobe Deflate + horizontal predictor; NegPy
   `fb4b7a7`) — S. Exports are currently uncompressed; ~2-3× smaller files.
-- [ ] **Carry EXIF into exports** (capture date, camera/lens, exposure —
+- [x] **Carry EXIF into exports** (capture date, camera/lens, exposure —
   ImageIO metadata copy from the RAW) — S/M. Exports are currently bare.
-- [ ] **Batch apply: "Paste Adjustments to Selection"** — S. Copy/paste
+- [x] **Batch apply: "Paste Adjustments to Selection"** — S. Copy/paste
   exists; applying to a multi-selection is the missing 20 lines with
   outsized value.
 - [ ] **Preset management** (save/apply named setting bundles; NLP v3

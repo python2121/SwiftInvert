@@ -72,6 +72,15 @@ struct SwiftInvertApp: App {
             // Image: orientation + the two draw-on-image tools (checkmarked
             // while active; Escape also exits them).
             CommandMenu("Image") {
+                // Bare-key menu equivalents intercept before responders, so
+                // disable while the export sheet (with its text field) is up.
+                Button("Previous Image") { model.selectAdjacent(-1) }
+                    .keyboardShortcut(.leftArrow, modifiers: [])
+                    .disabled(model.files.isEmpty || model.exportRequest != nil)
+                Button("Next Image") { model.selectAdjacent(1) }
+                    .keyboardShortcut(.rightArrow, modifiers: [])
+                    .disabled(model.files.isEmpty || model.exportRequest != nil)
+                Divider()
                 Button("Rotate Left") { model.rotateCounterclockwise() }
                     .keyboardShortcut("[")
                     .disabled(model.selection == nil)
@@ -108,6 +117,9 @@ struct SwiftInvertApp: App {
                 Button("Paste Adjustments") { model.pasteAdjustments() }
                     .keyboardShortcut("v", modifiers: [.command, .shift])
                     .disabled(model.selection == nil || model.copiedAdjustments == nil)
+                Button("Paste Adjustments to Selection") { model.pasteAdjustmentsToSelection() }
+                    .keyboardShortcut("v", modifiers: [.command, .shift, .option])
+                    .disabled(model.multiSelection.isEmpty || model.copiedAdjustments == nil)
                 Divider()
                 Button("Reset All Adjustments") { model.resetSettings() }
                     .keyboardShortcut("r", modifiers: [.command, .option])

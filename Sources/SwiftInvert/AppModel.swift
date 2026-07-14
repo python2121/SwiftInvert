@@ -43,6 +43,18 @@ final class AppModel {
     /// Library multi-selection (⌘-click). Always contains `selection` when set.
     var multiSelection: Set<URL> = []
 
+    /// Arrow-key navigation in film-strip (discovery) order.
+    func selectAdjacent(_ offset: Int) {
+        guard !files.isEmpty else { return }
+        guard let current = selection, let index = files.firstIndex(of: current) else {
+            select(files[0], additive: false)
+            return
+        }
+        let next = min(max(index + offset, 0), files.count - 1)
+        guard next != index else { return }
+        select(files[next], additive: false)
+    }
+
     func select(_ url: URL, additive: Bool) {
         if additive {
             if multiSelection.contains(url) && multiSelection.count > 1 {
@@ -623,16 +635,43 @@ final class AppModel {
         copiedAdjustments = settings
     }
 
+    /// The copied adjustments with `target`'s geometry kept in place —
+    /// rotation/flip/straighten/crops (and the analysis region's pinned
+    /// angle) are per-frame and never pasted.
+    private func mergedAdjustments(
+        _ source: ExposureSettings, keepingGeometryOf target: ExposureSettings
+    ) -> ExposureSettings {
+        var next = source
+        next.rotation = target.rotation
+        next.flipHorizontal = target.flipHorizontal
+        next.fineRotation = target.fineRotation
+        next.cropRect = target.cropRect
+        next.analysisRect = target.analysisRect
+        next.analysisRectFineRotation = target.analysisRectFineRotation
+        return next
+    }
+
     func pasteAdjustments() {
         guard let source = copiedAdjustments, selection != nil else { return }
-        var next = source
-        next.rotation = settings.rotation
-        next.flipHorizontal = settings.flipHorizontal
-        next.fineRotation = settings.fineRotation
-        next.cropRect = settings.cropRect
-        next.analysisRect = settings.analysisRect
         pendingHistoryLabel = "Paste adjustments"
-        settings = next
+        settings = mergedAdjustments(source, keepingGeometryOf: settings)
+    }
+
+    /// Edit > Paste Adjustments to Selection: apply to every multi-selected
+    /// frame. The open image goes through the normal path (history entry +
+    /// re-render); the rest get their sidecars rewritten directly and pick
+    /// the settings up when opened (thumbnails show the raw negative, so no
+    /// invalidation is needed).
+    func pasteAdjustmentsToSelection() {
+        guard let source = copiedAdjustments else { return }
+        for url in files where multiSelection.contains(url) {
+            if url == selection {
+                pasteAdjustments()
+            } else {
+                let target = SidecarStore.load(for: url) ?? ExposureSettings()
+                SidecarStore.save(mergedAdjustments(source, keepingGeometryOf: target), for: url)
+            }
+        }
     }
 
     /// Open the quality modal for the library multi-selection (context menu).
@@ -669,7 +708,9 @@ final class AppModel {
                 do {
                     let encoded = try await session.exportRender(settings: fileSettings)
                     if Task.isCancelled { break }
-                    try Exporter.write(encoded, to: options.destinationURL(for: url), options: options)
+                    try Exporter.write(
+                        encoded, to: options.destinationURL(for: url), options: options,
+                        source: url)
                     completed += 1
                 } catch {
                     failures += 1
