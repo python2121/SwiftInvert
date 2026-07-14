@@ -86,7 +86,14 @@ struct CropRotationSection: View {
                     set: { model.straightenDragValue = $0 }),
                 in: -45...45
             ) { editing in
-                if !editing, let value = model.straightenDragValue {
+                if editing {
+                    // Seed on mouse-DOWN (before any movement): the 0° base
+                    // swaps in while target still equals the baked angle —
+                    // the one moment the exchange is invisible.
+                    if model.straightenDragValue == nil {
+                        model.straightenDragValue = model.settings.fineRotation
+                    }
+                } else if let value = model.straightenDragValue {
                     model.settings.fineRotation = (value * 10).rounded() / 10
                     model.straightenDragValue = nil
                 }
