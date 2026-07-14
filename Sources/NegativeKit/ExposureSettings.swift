@@ -103,6 +103,11 @@ public struct ExposureSettings: Codable, Equatable, Sendable {
     // analysisRect scopes ONLY the metering (buffer disabled inside it);
     // cropRect crops the output AND scopes the metering (buffer applied inside).
     public var analysisRect: NormalizedRect?
+    /// The fineRotation at the moment analysisRect was drawn: a region drawn
+    /// on a rotated image is metered on the image at THAT angle (the user
+    /// pointed at rotated content); with no manual region, metering stays on
+    /// the unrotated orientation (fine-rotation invariant).
+    public var analysisRectFineRotation: Double = 0
     public var cropRect: NormalizedRect?
 
     public init() {}
@@ -155,6 +160,7 @@ public struct ExposureSettings: Codable, Equatable, Sendable {
         flipHorizontal = b(.flipHorizontal, false)
         fineRotation = d(.fineRotation, 0)
         analysisRect = try? c.decode(NormalizedRect.self, forKey: .analysisRect)
+        analysisRectFineRotation = d(.analysisRectFineRotation, 0)
         cropRect = try? c.decode(NormalizedRect.self, forKey: .cropRect)
     }
 }

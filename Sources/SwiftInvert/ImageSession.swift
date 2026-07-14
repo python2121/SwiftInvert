@@ -21,8 +21,15 @@ actor ImageSession {
     private struct MeterKey: Equatable {
         var rotation: Int
         var flipHorizontal: Bool
+        /// 0 unless a manual analysis region exists — then the angle it was
+        /// drawn at, so the meters read the content the user pointed at.
+        var meterAngle: Double
     }
     private var meterKey: MeterKey?
+
+    private static func meterAngle(_ settings: ExposureSettings) -> Double {
+        settings.analysisRect != nil ? settings.analysisRectFineRotation : 0
+    }
     private struct OrientKey: Equatable {
         var rotation: Int
         var flipHorizontal: Bool
@@ -80,12 +87,16 @@ actor ImageSession {
         if basePreview == nil {
             basePreview = try RawDecoder().decode(url: url, quality: .preview, maxLongEdge: 1536)
         }
-        // Analysis ignores fine rotation (see meterPreview); 90° steps and
-        // flips reshuffle pixels without changing the content set.
-        let mKey = MeterKey(rotation: settings.rotation, flipHorizontal: settings.flipHorizontal)
+        // Analysis ignores the CURRENT fine rotation (see meterPreview); 90°
+        // steps and flips reshuffle pixels without changing the content set.
+        // A manual analysis region pins the meter to the angle it was drawn at.
+        let mKey = MeterKey(
+            rotation: settings.rotation, flipHorizontal: settings.flipHorizontal,
+            meterAngle: Self.meterAngle(settings))
         if meterPreview == nil || mKey != meterKey {
             meterPreview = basePreview!.oriented(
-                rotationCW: settings.rotation, flipHorizontal: settings.flipHorizontal)
+                rotationCW: settings.rotation, flipHorizontal: settings.flipHorizontal,
+                fineRotation: mKey.meterAngle)
             meterKey = mKey
             prepared = nil
             preparedKey = nil
@@ -194,7 +205,9 @@ actor ImageSession {
         }
         guard preview != nil, prepared != nil, meterPreview != nil else { return true }
         // Fine-rotation-only changes just re-orient (fast) — no meter re-run.
-        if MeterKey(rotation: settings.rotation, flipHorizontal: settings.flipHorizontal) != meterKey {
+        if MeterKey(
+            rotation: settings.rotation, flipHorizontal: settings.flipHorizontal,
+            meterAngle: Self.meterAngle(settings)) != meterKey {
             return true
         }
         return PreparedKey(analysisRect: settings.analysisRect, cropRect: settings.cropRect) != preparedKey
@@ -208,9 +221,11 @@ actor ImageSession {
         if basePreview == nil {
             basePreview = try RawDecoder().decode(url: url, quality: .preview, maxLongEdge: 1536)
         }
-        // Same metering rule as prepare(): analysis never sees fine rotation.
+        // Same metering rule as prepare(): the current fine rotation never
+        // re-meters; a manual region pins the meter to its drawn angle.
         let meterImage = basePreview!.oriented(
-            rotationCW: settings.rotation, flipHorizontal: settings.flipHorizontal)
+            rotationCW: settings.rotation, flipHorizontal: settings.flipHorizontal,
+            fineRotation: Self.meterAngle(settings))
         let oriented = abs(settings.fineRotation) > 0.005
             ? basePreview!.oriented(
                 rotationCW: settings.rotation, flipHorizontal: settings.flipHorizontal,

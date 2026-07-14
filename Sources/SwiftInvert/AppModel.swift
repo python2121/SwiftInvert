@@ -186,6 +186,8 @@ final class AppModel {
         case .analysisRegion:
             pendingHistoryLabel = "Analysis region"
             settings.analysisRect = rect
+            // Drawn on the (possibly straightened) display: meter at this angle.
+            settings.analysisRectFineRotation = settings.fineRotation
         case .crop:
             pendingHistoryLabel = "Crop"
             settings.cropRect = rect

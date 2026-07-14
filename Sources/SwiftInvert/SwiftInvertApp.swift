@@ -69,6 +69,7 @@ struct ContentView: View {
     @AppStorage("libraryWidth") private var libraryWidth = 320.0
     @AppStorage("libraryVisible") private var libraryVisible = true
     @State private var dragStartWidth: Double?
+    @State private var escapeMonitor: Any?
 
     var body: some View {
         // Plain three-pane layout: the library is a solid panel like the
@@ -100,6 +101,23 @@ struct ContentView: View {
         }
         .animation(.easeOut(duration: 0.15), value: libraryVisible)
         .onExitCommand { model.toolMode = .none }
+        // onExitCommand needs focus; a local monitor catches Escape anywhere
+        // in the window. Pass-through unless a tool mode is active, so sheets
+        // and text fields keep their own Escape behavior.
+        .onAppear {
+            guard escapeMonitor == nil else { return }
+            escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+                guard event.keyCode == 53 else { return event }
+                // Monitors fire on the main thread; only a Bool crosses the
+                // isolation boundary (NSEvent is not Sendable).
+                let consumed = MainActor.assumeIsolated { () -> Bool in
+                    guard model.toolMode != .none else { return false }
+                    model.toolMode = .none
+                    return true
+                }
+                return consumed ? nil : event
+            }
+        }
         .sheet(item: $model.exportRequest) { request in
             ExportSheet(request: request, model: model)
         }
