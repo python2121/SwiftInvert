@@ -193,6 +193,21 @@ struct ControlsSidebar: View {
                     .padding(6)
                 }
 
+                GroupBox("Color Mixer") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        // Chroma-gated: only pixels saturated enough to read
+                        // as "red" move; the neutral axis (whites, grays,
+                        // faint casts) is untouched by construction.
+                        LabeledSlider(
+                            label: "Red hue", value: $model.settings.redHue,
+                            range: -1...1, format: "%+.2f", defaultValue: 0)
+                        LabeledSlider(
+                            label: "Red saturation", value: $model.settings.redSaturation,
+                            range: 0...2, format: "%.2f", defaultValue: 1.0)
+                    }
+                    .padding(6)
+                }
+
                 ColorGradingSection(model: model)
 
                 GroupBox("Tone") {

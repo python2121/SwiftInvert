@@ -23,6 +23,19 @@ public enum LabColor {
     /// Chroma below which vibrance considers a color "muted" (NegPy: /60).
     public static let vibranceChromaRange = 60.0
 
+    // ── Reds band (chroma-gated, hue-targeted color mixer) ────────────────
+    // Membership = raised-cosine hue window around object-red × a chroma
+    // ramp that reaches zero at the neutral axis — whites/grays and faint
+    // casts are untouched by construction (the complement of the WB sliders,
+    // which move every pixel). SwiftInvert-only; NegPy has no equivalent.
+    // Mirrored as literals in NegPipeline.metal colorPop.
+    public static let redBandCenterDeg = 25.0  // CIELAB hue of "object red"
+    public static let redBandHalfWidthDeg = 45.0  // feather span per side
+    public static let redChromaGateLow = 8.0  // below: fully protected
+    public static let redChromaGateHigh = 25.0  // above: full membership
+    /// Hue rotation at slider ±1 (degrees; + toward orange, − toward magenta).
+    public static let redMaxHueShiftDeg = 30.0
+
     /// Linear ProPhoto RGB → CIELAB (D50), OpenCV float scale (L 0–100).
 
     public static func rgbToLab(_ rgb: SIMD3<Double>) -> SIMD3<Double> {
@@ -51,6 +64,38 @@ public enum LabColor {
         let lin = SIMD3(
             simd_dot(toRGB.0, xyz), simd_dot(toRGB.1, xyz), simd_dot(toRGB.2, xyz))
         return simd_max(lin, SIMD3<Double>())
+    }
+
+    static func smoothstep(_ e0: Double, _ e1: Double, _ x: Double) -> Double {
+        let t = min(max((x - e0) / (e1 - e0), 0.0), 1.0)
+        return t * t * (3.0 - 2.0 * t)
+    }
+
+    /// Chroma-gated red-band membership for one Lab pixel (hue in degrees).
+    static func redBandWeight(chroma: Double, hueDeg: Double) -> Double {
+        let gate = smoothstep(redChromaGateLow, redChromaGateHigh, chroma)
+        let dh = (hueDeg - redBandCenterDeg + 540.0)
+            .truncatingRemainder(dividingBy: 360.0) - 180.0
+        let t = min(abs(dh) / redBandHalfWidthDeg, 1.0)
+        return gate * 0.5 * (1.0 + cos(.pi * t))
+    }
+
+    /// Reds-band hue rotation + chroma scale on one linear pixel, weighted by
+    /// `redBandWeight` so neutrals and non-reds pass through untouched.
+    public static func applyRedBand(
+        _ rgb: SIMD3<Double>, hue: Double, saturation: Double
+    ) -> SIMD3<Double> {
+        guard hue != 0 || saturation != 1.0 else { return rgb }
+        var lab = rgbToLab(rgb)
+        let chroma = (lab.y * lab.y + lab.z * lab.z).squareRoot()
+        let hueDeg = atan2(lab.z, lab.y) * 180.0 / .pi
+        let w = redBandWeight(chroma: chroma, hueDeg: hueDeg)
+        guard w > 0 else { return rgb }
+        let newHue = (hueDeg + hue * redMaxHueShiftDeg * w) * .pi / 180.0
+        let newChroma = chroma * (1.0 + (saturation - 1.0) * w)
+        lab.y = newChroma * cos(newHue)
+        lab.z = newChroma * sin(newHue)
+        return simd_clamp(labToRgb(lab), SIMD3<Double>(), SIMD3(repeating: 1))
     }
 
     /// Vibrance then saturation on one linear pixel (LabProcessor order):

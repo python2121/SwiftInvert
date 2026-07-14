@@ -23,6 +23,8 @@ func historyLabel(from a: ExposureSettings, to b: ExposureSettings) -> String {
     add("Pre-saturation", a.preSaturation != b.preSaturation, num(b.preSaturation))
     add("Vibrance", a.vibrance != b.vibrance, num(b.vibrance))
     add("Saturation", a.saturation != b.saturation, num(b.saturation))
+    add("Red hue", a.redHue != b.redHue, num(b.redHue, "%+.2f"))
+    add("Red saturation", a.redSaturation != b.redSaturation, num(b.redSaturation))
     add("Cast strength", a.castRemovalStrength != b.castRemovalStrength, num(b.castRemovalStrength))
     add("Temp", a.temp != b.temp, num(b.temp))
     add("Tint", a.tint != b.tint, num(b.tint))

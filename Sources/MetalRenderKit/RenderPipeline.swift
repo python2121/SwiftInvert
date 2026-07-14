@@ -29,6 +29,11 @@ public final class RenderPipeline: @unchecked Sendable {
     let normalizePSO: MTLComputePipelineState
     let curvePSO: MTLComputePipelineState
     let colorPopPSO: MTLComputePipelineState
+
+    private func colorPopActive(_ params: RenderParams) -> Bool {
+        params.vibrance != 1.0 || params.saturation != 1.0
+            || params.redHue != 0 || params.redSaturation != 1.0
+    }
     let encodePSO: MTLComputePipelineState
     let histogramPSO: MTLComputePipelineState
 
@@ -205,7 +210,7 @@ public final class RenderPipeline: @unchecked Sendable {
         // Color pop is a separate pass, dispatched only when active; it writes
         // into `normalized` (already consumed) which then becomes the content.
         var content = linear
-        if params.vibrance != 1.0 || params.saturation != 1.0 {
+        if colorPopActive(params) {
             enc.setTexture(linear, index: 0)
             enc.setTexture(normalized, index: 1)
             enc.setBytes(&curveU, length: MemoryLayout<CurveUniforms>.stride, index: 0)
@@ -310,7 +315,7 @@ public final class RenderPipeline: @unchecked Sendable {
         dispatch(enc, curvePSO, width: w, height: h)
 
         var content = linear
-        if params.vibrance != 1.0 || params.saturation != 1.0 {
+        if colorPopActive(params) {
             enc.setTexture(linear, index: 0)
             enc.setTexture(normalized, index: 1)
             enc.setBytes(&curveU, length: MemoryLayout<CurveUniforms>.stride, index: 0)

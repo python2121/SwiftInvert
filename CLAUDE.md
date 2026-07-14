@@ -197,10 +197,17 @@ One command buffer, passes in order (`RenderPipeline.render` /
       `b = 10^−dMax` referenced to the *physical* d_max so toe lifts survive
       (negative toe raises the clip point); clamp [0,1] → **linear
       reflectance** out.
-3. **`colorPop`** (dispatched ONLY when vibrance/saturation ≠ 1) — CIELAB
+3. **`colorPop`** (dispatched ONLY when a color-pop control is off-default:
+   vibrance/saturation/redSaturation ≠ 1 or redHue ≠ 0) — CIELAB
    (ProPhoto primaries, D50; matrices duplicated in MSL and
-   `LabColor.swift` — keep in sync) vibrance (muted-chroma boost, /60
-   range) then saturation (a*,b* scale). Separate pass on purpose: inlining
+   `LabColor.swift` — keep in sync): the **Reds band** first
+   (`LabColor.applyRedBand`, SwiftInvert-only, no NegPy equivalent —
+   chroma-gated hue-targeted mixer: raised-cosine hue window around
+   object-red × a chroma ramp that zeroes at the neutral axis, so
+   whites/grays/faint casts never move; constants `redBand*` /
+   `redChromaGate*` / `redMaxHueShiftDeg` mirrored as MSL literals), then
+   vibrance (muted-chroma boost, /60 range) then saturation (a*,b* scale).
+   Separate pass on purpose: inlining
    the Lab code into printCurve cost ~3 ms/frame in register pressure even
    when branched off. Writes into the (already consumed) `normalized`
    texture, which becomes the content texture.

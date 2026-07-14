@@ -54,6 +54,13 @@ public struct ExposureSettings: Codable, Equatable, Sendable {
     public var vibrance: Double = 1.0
     public var saturation: Double = 1.0
 
+    // Reds band (chroma-gated color mixer, see LabColor.applyRedBand):
+    // hue nudges saturated reds toward orange (+) or magenta (−) and
+    // saturation tames/boosts them — the neutral axis never moves, so these
+    // fix "the reds are too red" without touching white balance.
+    public var redHue: Double = 0
+    public var redSaturation: Double = 1.0
+
     // Pre-saturation (Negative Lab Pro concept): scales per-pixel density
     // deviations from neutral in normalized log space BEFORE the print curve,
     // restoring the inter-channel separation the per-channel normalization
@@ -120,6 +127,8 @@ public struct ExposureSettings: Codable, Equatable, Sendable {
         overallContrast = d(.overallContrast, 0)
         vibrance = d(.vibrance, 1.0)
         saturation = d(.saturation, 1.0)
+        redHue = d(.redHue, 0)
+        redSaturation = d(.redSaturation, 1.0)
         preSaturation = d(.preSaturation, 1.15)
         temp = d(.temp, 0)
         tint = d(.tint, 0)
@@ -172,6 +181,9 @@ public struct RenderParams: Equatable, Sendable {
     // CIELAB chroma ops on the linear print (1.0 = off).
     public var vibrance: Double = 1.0
     public var saturation: Double = 1.0
+    // Reds band (0 / 1.0 = off).
+    public var redHue: Double = 0
+    public var redSaturation: Double = 1.0
     /// Pre-curve density-deviation gain (1.0 = off).
     public var preSaturation: Double = 1.0
     /// Black point compensation (paper Dmax → display black).
@@ -187,6 +199,7 @@ public struct RenderParams: Equatable, Sendable {
         toeWidth: Double, shoulderWidth: Double, dMin: Double, vStar: Double,
         shadows: Double = 0, shadowContrast: Double = 0, darkShadows: Double = 0, highlights: Double = 0,
         highlightContrast: Double = 0, vibrance: Double = 1.0, saturation: Double = 1.0,
+        redHue: Double = 0, redSaturation: Double = 1.0,
         preSaturation: Double = 1.0, trueBlack: Bool = false,
         shadowCMY: SIMD3<Double> = .zero, midCMY: SIMD3<Double> = .zero,
         highlightCMY: SIMD3<Double> = .zero
@@ -209,6 +222,8 @@ public struct RenderParams: Equatable, Sendable {
         self.highlightContrast = highlightContrast
         self.vibrance = vibrance
         self.saturation = saturation
+        self.redHue = redHue
+        self.redSaturation = redSaturation
         self.preSaturation = preSaturation
         self.trueBlack = trueBlack
         self.shadowCMY = shadowCMY
@@ -394,6 +409,8 @@ public enum ExposureKernel {
             highlightContrast: settings.highlightContrast,
             vibrance: settings.vibrance,
             saturation: settings.saturation,
+            redHue: settings.redHue,
+            redSaturation: settings.redSaturation,
             preSaturation: settings.preSaturation,
             trueBlack: settings.trueBlack,
             // Band sliders ±1 → ±cmy_max_density print-density offsets
