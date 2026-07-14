@@ -171,12 +171,18 @@ struct ContentView: View {
         // and text fields keep their own Escape behavior.
         .onAppear {
             guard escapeMonitor == nil else { return }
+            // Escape backs out of a tool mode; Return/Enter accepts (both
+            // commit — crop commits on mode exit either way).
             escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-                guard event.keyCode == 53 else { return event }
+                guard event.keyCode == 53 || event.keyCode == 36 || event.keyCode == 76 else {
+                    return event
+                }
                 // Monitors fire on the main thread; only a Bool crosses the
                 // isolation boundary (NSEvent is not Sendable).
                 let consumed = MainActor.assumeIsolated { () -> Bool in
-                    guard model.toolMode != .none else { return false }
+                    // The export sheet owns Return (its default button) and
+                    // Escape (Cancel) while it's up.
+                    guard model.toolMode != .none, model.exportRequest == nil else { return false }
                     model.toolMode = .none
                     return true
                 }
