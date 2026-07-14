@@ -1,9 +1,15 @@
+<p align="center">
+  <img src="Assets/icon_1024.png" width="128" alt="SwiftInvert app icon">
+</p>
+
 # SwiftInvert
 
 A native macOS film-negative converter — a Swift + SwiftUI + Metal rewrite of
 [NegPy](../NegPy)'s C-41 conversion, no Python at runtime. Browse a folder of
 camera-scanned negatives, invert with NegPy-quality auto-exposure metering,
 refine with darkroom-style controls, and batch-export.
+
+![SwiftInvert converting a C-41 negative](Assets/screenshot.png)
 
 ## Build & run
 
