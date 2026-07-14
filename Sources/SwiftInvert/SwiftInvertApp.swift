@@ -4,6 +4,9 @@ import SwiftUI
 @main
 struct SwiftInvertApp: App {
     @State private var model = AppModel()
+    // Same keys the in-window controls use, so menu toggles stay in sync.
+    @AppStorage("libraryVisible") private var libraryVisible = true
+    @AppStorage("showGridLines") private var showGridLines = false
 
     init() {
         // Running unbundled via `swift run` needs an explicit activation policy
@@ -16,6 +19,12 @@ struct SwiftInvertApp: App {
             NSApplication.shared.applicationIconImage = icon
         }
         DispatchQueue.main.async { NSApplication.shared.activate(ignoringOtherApps: true) }
+    }
+
+    private func toolBinding(_ mode: AppModel.ToolMode) -> Binding<Bool> {
+        Binding(
+            get: { model.toolMode == mode },
+            set: { model.toolMode = $0 ? mode : .none })
     }
 
     var body: some Scene {
@@ -46,6 +55,50 @@ struct SwiftInvertApp: App {
                 Button("Redo Edit") { model.redo() }
                     .keyboardShortcut("z", modifiers: [.command, .shift])
                     .disabled(!model.canRedo)
+            }
+            // View: panel and display toggles.
+            CommandGroup(after: .sidebar) {
+                Divider()
+                Toggle("Show Library", isOn: $libraryVisible)
+                    .keyboardShortcut("l", modifiers: [.command, .shift])
+                Toggle("Show Grid Lines", isOn: $showGridLines)
+                    .keyboardShortcut("g", modifiers: [.command, .shift])
+                Toggle("HQ Preview", isOn: Binding(
+                    get: { model.hqPreview },
+                    set: { model.hqPreview = $0 }))
+                    .keyboardShortcut("p", modifiers: [.command, .shift])
+                    .disabled(model.selection == nil)
+            }
+            // Image: orientation + the two draw-on-image tools (checkmarked
+            // while active; Escape also exits them).
+            CommandMenu("Image") {
+                Button("Rotate Left") { model.rotateCounterclockwise() }
+                    .keyboardShortcut("[")
+                    .disabled(model.selection == nil)
+                Button("Rotate Right") { model.rotateClockwise() }
+                    .keyboardShortcut("]")
+                    .disabled(model.selection == nil)
+                Button("Flip Horizontal") { model.flipHorizontal() }
+                    .keyboardShortcut("h", modifiers: [.command, .shift])
+                    .disabled(model.selection == nil)
+                Divider()
+                Toggle("Crop", isOn: toolBinding(.crop))
+                    .keyboardShortcut("k")
+                    .disabled(model.selection == nil)
+                Button("Clear Crop") {
+                    model.pendingHistoryLabel = "Crop cleared"
+                    model.settings.cropRect = nil
+                }
+                .disabled(model.settings.cropRect == nil)
+                Divider()
+                Toggle("Crop for Analysis", isOn: toolBinding(.analysisRegion))
+                    .keyboardShortcut("k", modifiers: [.command, .shift])
+                    .disabled(model.selection == nil)
+                Button("Clear Analysis Region") {
+                    model.pendingHistoryLabel = "Analysis region cleared"
+                    model.settings.analysisRect = nil
+                }
+                .disabled(model.settings.analysisRect == nil)
             }
             CommandGroup(after: .pasteboard) {
                 Divider()

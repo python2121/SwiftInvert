@@ -319,7 +319,11 @@ values where needed):
 - **Menu bar** (`SwiftInvertApp` `.commands`): File = Open Folder ⌘O /
   Export ⌘E / Show in Finder ⇧⌘R; Edit = Undo/Redo (replacing the system
   group — the ⌘Z shortcuts live HERE, not on HistoryPanel's buttons),
-  Copy/Paste Adjustments ⇧⌘C/⇧⌘V (geometry never pasted), Reset All ⌥⌘R.
+  Copy/Paste Adjustments ⇧⌘C/⇧⌘V (geometry never pasted), Reset All ⌥⌘R;
+  View = Show Library ⇧⌘L / Show Grid Lines ⇧⌘G / HQ Preview ⇧⌘P
+  (@AppStorage keys shared with the in-window controls); Image = Rotate
+  Left/Right ⌘[/⌘] / Flip ⇧⌘H / Crop ⌘K / Crop for Analysis ⇧⌘K +
+  clear items (tool toggles checkmark while active; Escape exits).
 - **Sidecars**: `<basename>.swiftinvert.json` next to the source
   (`SidecarStore`); pre-rename `.negswift.json` read as fallback and removed
   on next save. Missing keys decode to defaults (custom `init(from:)` in
