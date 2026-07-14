@@ -14,13 +14,14 @@ refine with darkroom-style controls, and batch-export.
 ## Build & run
 
 ```bash
-brew install libraw    # one-time; the only dependency
+brew install libraw    # build-time only — the packaged app bundles LibRaw
 ./build.sh && open dist/SwiftInvert.app
 ```
 
 Or `make install` to build and copy it to `/Applications`. The bundle is
-self-contained (the LibRaw dylibs are copied in), so the installed app keeps
-working across brew upgrades. Requires macOS 14+ and a Swift 6 toolchain —
+self-contained (the LibRaw dylibs are copied into it with rewritten load
+paths), so the built app runs on Macs without Homebrew and survives brew
+upgrades; Homebrew is needed only to compile. Requires macOS 14+ and a Swift 6 toolchain —
 Command Line Tools are enough, no Xcode; Metal shaders compile at runtime.
 
 ## Features
