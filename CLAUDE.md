@@ -93,6 +93,14 @@ the proxy, matching export), freed by the first non-HQ render.
 
 ### 2. Analysis (`NegativeKit`, CPU, on the ≤1536px preview)
 
+**Fine-rotation invariant:** analysis runs on the orientation-only image
+(90° steps + flip — `ImageSession.meterPreview`), never the fine-rotated
+one: the inscribed auto-crop changes with the straighten angle, and
+re-metering it would drift the conversion as the user rotates (it also
+made the 0° straighten base's look differ from the committed re-bake).
+Rendering/export still bake the angle; `exportRender` shares `prepare()`,
+so preview and export agree.
+
 Split into two tiers so white/black-point drags stay fast
 (`ExposureKernel.prepare` ≈150 ms once per image/crop; `finalize` ≈25 ms):
 

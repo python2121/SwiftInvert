@@ -12,7 +12,17 @@ actor ImageSession {
     let url: URL
     private let pipeline: RenderPipeline
     private var basePreview: RGBImage?  // as decoded (EXIF baked, no user orientation)
-    private var preview: RGBImage?  // user-oriented
+    private var preview: RGBImage?  // user-oriented incl. fine rotation (render input)
+    /// Orientation-only preview (90° steps + flip, NO fine rotation) — the
+    /// analysis input. Metering must be invariant to straightening: the
+    /// inscribed auto-crop changes with the angle, and re-metering it would
+    /// drift the whole conversion as the user rotates.
+    private var meterPreview: RGBImage?
+    private struct MeterKey: Equatable {
+        var rotation: Int
+        var flipHorizontal: Bool
+    }
+    private var meterKey: MeterKey?
     private struct OrientKey: Equatable {
         var rotation: Int
         var flipHorizontal: Bool
@@ -70,26 +80,37 @@ actor ImageSession {
         if basePreview == nil {
             basePreview = try RawDecoder().decode(url: url, quality: .preview, maxLongEdge: 1536)
         }
-        let oKey = OrientKey(
-            rotation: settings.rotation, flipHorizontal: settings.flipHorizontal,
-            fineRotation: settings.fineRotation)
-        if preview == nil || oKey != orientKey {
-            preview = basePreview!.oriented(
-                rotationCW: settings.rotation, flipHorizontal: settings.flipHorizontal,
-                fineRotation: settings.fineRotation)
-            orientKey = oKey
-            // Everything downstream is in oriented space.
-            fullTexture = nil
-            croppedTexture = nil
-            croppedTextureRect = nil
+        // Analysis ignores fine rotation (see meterPreview); 90° steps and
+        // flips reshuffle pixels without changing the content set.
+        let mKey = MeterKey(rotation: settings.rotation, flipHorizontal: settings.flipHorizontal)
+        if meterPreview == nil || mKey != meterKey {
+            meterPreview = basePreview!.oriented(
+                rotationCW: settings.rotation, flipHorizontal: settings.flipHorizontal)
+            meterKey = mKey
             prepared = nil
             preparedKey = nil
             analysis = nil
         }
+        let oKey = OrientKey(
+            rotation: settings.rotation, flipHorizontal: settings.flipHorizontal,
+            fineRotation: settings.fineRotation)
+        if preview == nil || oKey != orientKey {
+            // COW: at 0° the render input IS the meter image, no copy.
+            preview = abs(settings.fineRotation) > 0.005
+                ? basePreview!.oriented(
+                    rotationCW: settings.rotation, flipHorizontal: settings.flipHorizontal,
+                    fineRotation: settings.fineRotation)
+                : meterPreview
+            orientKey = oKey
+            // Textures are in (fine-)oriented space; analysis is not.
+            fullTexture = nil
+            croppedTexture = nil
+            croppedTextureRect = nil
+        }
         let pKey = PreparedKey(analysisRect: settings.analysisRect, cropRect: settings.cropRect)
         if prepared == nil || pKey != preparedKey {
             prepared = ExposureKernel.prepare(
-                linearImage: preview!,
+                linearImage: meterPreview!,
                 cropRect: settings.cropRect,
                 analysisRect: settings.analysisRect)
             preparedKey = pKey
@@ -171,10 +192,9 @@ actor ImageSession {
                 fineRotation: settings.fineRotation)
             if hqBase == nil || hqOriented == nil || oKey != hqOrientKey { return true }
         }
-        guard preview != nil, prepared != nil else { return true }
-        if OrientKey(
-            rotation: settings.rotation, flipHorizontal: settings.flipHorizontal,
-            fineRotation: settings.fineRotation) != orientKey {
+        guard preview != nil, prepared != nil, meterPreview != nil else { return true }
+        // Fine-rotation-only changes just re-orient (fast) — no meter re-run.
+        if MeterKey(rotation: settings.rotation, flipHorizontal: settings.flipHorizontal) != meterKey {
             return true
         }
         return PreparedKey(analysisRect: settings.analysisRect, cropRect: settings.cropRect) != preparedKey
@@ -188,11 +208,16 @@ actor ImageSession {
         if basePreview == nil {
             basePreview = try RawDecoder().decode(url: url, quality: .preview, maxLongEdge: 1536)
         }
-        let oriented = basePreview!.oriented(
-            rotationCW: settings.rotation, flipHorizontal: settings.flipHorizontal,
-            fineRotation: settings.fineRotation)
+        // Same metering rule as prepare(): analysis never sees fine rotation.
+        let meterImage = basePreview!.oriented(
+            rotationCW: settings.rotation, flipHorizontal: settings.flipHorizontal)
+        let oriented = abs(settings.fineRotation) > 0.005
+            ? basePreview!.oriented(
+                rotationCW: settings.rotation, flipHorizontal: settings.flipHorizontal,
+                fineRotation: settings.fineRotation)
+            : meterImage
         let prepared = ExposureKernel.prepare(
-            linearImage: oriented, cropRect: settings.cropRect, analysisRect: settings.analysisRect)
+            linearImage: meterImage, cropRect: settings.cropRect, analysisRect: settings.analysisRect)
         let analysis = ExposureKernel.finalize(
             prepared, whitePointOffset: settings.whitePointOffset,
             blackPointOffset: settings.blackPointOffset)
