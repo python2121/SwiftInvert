@@ -9,10 +9,10 @@ and appending a history entry.
 ## Last reviewed
 
 ```
-commit:   f279337  ("docs: consolidate 0.37.0 dust and analysis changelog entries (#486)")
-reviewed: 2026-07-13
+commit:   0500404  ("docs: add 0.37.2 changelog entry (#494)")
+reviewed: 2026-07-14
 fixtures: Tests/Fixtures/ dumped from cac6396 (still valid — no kernel/constant
-          changes in cac6396..f279337)
+          changes in cac6396..0500404)
 ```
 
 ## How to run a review
@@ -38,6 +38,44 @@ updates this file. The manual procedure, for reference:
 6. Update the **Last reviewed** marker and append to the history below.
 
 ## Review history
+
+### 2026-07-14 — through `0500404` (0.37.1–0.37.2, 7 commits)
+
+**Kernel status: untouched.** No commits in the range touch
+`features/exposure/`, `features/process/`, `kernel/image/`, or the
+characterization goldens — no fixture re-dump, no constants drift,
+`dump_fixtures.py` signatures unaffected.
+
+**Ported:** nothing (nothing required).
+
+**Not applicable (this range):**
+- `2ecaebb` GPU readback-vs-destroy race fix (per-texture lock in their wgpu
+  `GPUTexture`; densitometer hover on the UI thread raced engine cleanup on
+  file switch). SwiftInvert's architecture already precludes this class of
+  bug: `RenderPipeline.render` is serialized by an internal lock and returns
+  read-back buffers, never live textures. Note for the future: if we port
+  the spot densitometer (flagged 2026-07-13), keep hover readouts on those
+  read-back buffers, not on GPU probes.
+- `c728874` more ASCII-encode EXIF crash fixes — their metadata writer.
+- `2a62c6a` camera-scanning follow-ups (RGB-only Scanlights, live-view
+  polish, crash logging) — feature we don't ship.
+- `3961b4d` UX polish (drag-to-heal, Enter confirms crop, cursor/tooltip
+  tweaks) — heal is out of scope; "Enter confirms crop" is a small UX idea
+  we could copy independently of upstream.
+- `a033b92`, `80041ca`, `0500404` — changelog/lint churn.
+
+**To port (proposed, not yet implemented — carried over from 2026-07-13,
+re-confirmed still open):**
+- TIFF export compression (`fb4b7a7`, upstream default Deflate+predictor):
+  our `Exporter.swift` still writes uncompressed TIFF. Best-value small
+  item; verify ImageIO Deflate support, else LZW.
+- `77c8113` spot densitometer + `density_histogram` metric + zone strip —
+  useful darkroom tool we lack; moderate effort (new GPU metric + UI), no
+  parity impact.
+- "Negative character" diagnostic (flat/contrasty vs `default_grade_range()`)
+  — cheap, blocked on us having a stats read-out surface.
+- Fine rotation + Straighten tool (`7f4b7a7`) — geometry feature, not
+  pipeline; still open as a feature candidate.
 
 ### 2026-07-13 — through `f279337` (0.37.0 release, 25 commits)
 

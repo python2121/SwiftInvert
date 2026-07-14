@@ -90,9 +90,19 @@ final class AppModel {
     // MARK: - Orientation & canvas
 
     /// Transient Straighten drag value: while non-nil the detail view previews
-    /// the rotation as a display transform (no pipeline re-render, no settings
-    /// mutation); commit happens once on release.
-    var straightenDragValue: Double?
+    /// the rotation as a display transform (no settings mutation); commit
+    /// happens once on release. Starting a drag on an already-rotated image
+    /// kicks ONE re-render at fineRotation 0: the display transform can only
+    /// zoom IN (the baked image lacks pixels beyond its inscribed crop), so
+    /// rotating back toward zero from a baked angle would wrongly zoom in
+    /// too — from a 0° base the cover scale is correct in both directions.
+    var straightenDragValue: Double? {
+        didSet {
+            if oldValue == nil, straightenDragValue != nil, displayedFineRotation != 0 {
+                scheduleRender()
+            }
+        }
+    }
     /// The fineRotation the current displayImage was BAKED with. The detail
     /// view rotates the display by (target − baked), so the preview holds
     /// through the post-release re-bake instead of snapping back.
@@ -427,7 +437,9 @@ final class AppModel {
             guard let self else { return }
             repeat {
                 self.renderPending = false
-                let snapshot = self.showingBaseline ? self.baselineSettings() : self.settings
+                var snapshot = self.showingBaseline ? self.baselineSettings() : self.settings
+                // Mid-straighten-drag renders bake 0° (see straightenDragValue).
+                if self.straightenDragValue != nil { snapshot.fineRotation = 0 }
                 let uncropped = self.toolMode != .none
                 let hq = self.hqPreview
                 guard let session = self.session else { break }
