@@ -15,6 +15,10 @@ struct DetailView: View {
     @State private var baseZoom: CGFloat = 1
     @State private var pan: CGSize = .zero
     @State private var basePan: CGSize = .zero
+    /// Spot-densitometer hover state. Held here but never READ from this
+    /// body — only `DensitometerReadout` reads it, so metering the pointer
+    /// doesn't re-render the canvas.
+    @State private var densitometer = DensitometerState()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -22,6 +26,8 @@ struct DetailView: View {
             Divider()
             controlBar
         }
+        // Grab the rendered bytes once per render; the probe reads them.
+        .onChange(of: model.displayImage) { _, new in densitometer.adopt(new) }
     }
 
     private var canvas: some View {
@@ -132,6 +138,12 @@ struct DetailView: View {
 
             Spacer()
 
+            if model.selection != nil {
+                DensitometerReadout(state: densitometer)
+            }
+
+            Spacer()
+
             Text("Canvas").font(.caption).foregroundStyle(.secondary)
             ForEach(AppModel.CanvasColor.allCases) { option in
                 Button {
@@ -187,6 +199,13 @@ struct DetailView: View {
             let delta = target - model.displayedFineRotation
             let cropMode = model.toolMode == .crop
             let zeroBase = !cropMode && model.displayedFineRotation == 0 && abs(delta) > 1e-9
+            // Meter only the plain presentation: the tool modes and the
+            // straighten preview show transient geometry (uncropped frames,
+            // 0°-base re-bakes) whose pixels aren't the ones an edit is being
+            // judged against.
+            let probeActive =
+                !cropMode && !zeroBase && model.toolMode == .none
+                && model.straightenDragValue == nil
             let inscribed = RGBImage.inscribedRectSize(
                 width: Double(image.width), height: Double(image.height), radians: radians)
             // Crop mode fits the ROTATED frame's bounding box so the whole
@@ -234,6 +253,19 @@ struct DetailView: View {
                         .resizable()
                         .interpolation(.high)
                         .frame(width: imageFrame?.width, height: imageFrame?.height)
+                        // Above the frame, below the transforms: local coords
+                        // here span the displayed bitmap exactly, and SwiftUI
+                        // inverse-maps the enclosing zoom/pan itself — so the
+                        // probe stays correct at any magnification without
+                        // duplicating the geometry (hover isn't a gesture, so
+                        // this doesn't touch pan/magnify/double-tap).
+                        .onContinuousHover(coordinateSpace: .local) { phase in
+                            guard probeActive, case .active(let p) = phase else {
+                                densitometer.clear()
+                                return
+                            }
+                            densitometer.probe(u: p.x / window.width, v: p.y / window.height)
+                        }
                         .rotationEffect(.degrees(cropMode || zeroBase ? target : delta))
                         .scaleEffect(
                             cropMode || zeroBase || delta == 0

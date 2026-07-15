@@ -87,6 +87,10 @@ actor ImageSession {
         /// Unrotated (orientation-only) frame dimensions in pixels — the
         /// coordinate base for CropGeometry's rotated-space math.
         let frameSize: CGSize
+        /// Pre-offset luminance density range of the negative (NegPy's
+        /// `norm_density_range`) — the Negative-character diagnostic's input.
+        /// Carried on the render because the analysis lives in the actor.
+        let densityRange: Double
     }
 
     init(url: URL, pipeline: RenderPipeline) {
@@ -207,6 +211,14 @@ actor ImageSession {
         hqCroppedRect = nil
     }
 
+    /// Drop the full-resolution tier while keeping the proxy tower warm.
+    /// Called on sessions the LRU retains but isn't showing: the proxy caches
+    /// are tens of MB (worth holding for an instant return), the HQ decode is
+    /// hundreds (not worth holding for a frame nobody is looking at).
+    func releaseHQ() {
+        clearHQ()
+    }
+
     /// True when the next render must decode or run the heavy prepared stage
     /// (drives the "Analyzing…" indicator; offset-only finalizes are fast and
     /// don't flash it).
@@ -257,7 +269,8 @@ actor ImageSession {
         guard let cg = ImageConversion.cgImage(rgba8: result.rgba, width: result.width, height: result.height)
         else { throw RenderError.resource("CGImage conversion") }
         return RenderOutput(
-            image: cg, histogram: result.histogram, frameSize: orientedFrameSize(settings))
+            image: cg, histogram: result.histogram, frameSize: orientedFrameSize(settings),
+            densityRange: analysis.baseBounds.luminanceDensityRange)
     }
 
     /// `uncropped` shows the full frame (used while a selection tool is active
@@ -276,7 +289,8 @@ actor ImageSession {
         guard let cg = ImageConversion.cgImage(rgba8: result.rgba, width: result.width, height: result.height)
         else { throw RenderError.resource("CGImage conversion") }
         return RenderOutput(
-            image: cg, histogram: result.histogram, frameSize: orientedFrameSize(settings))
+            image: cg, histogram: result.histogram, frameSize: orientedFrameSize(settings),
+            densityRange: analysis.baseBounds.luminanceDensityRange)
     }
 
     /// Full-resolution export render (fresh decode, same analysis, crop applied).

@@ -9,10 +9,11 @@ and appending a history entry.
 ## Last reviewed
 
 ```
-commit:   0500404  ("docs: add 0.37.2 changelog entry (#494)")
-reviewed: 2026-07-14
+commit:   ecec2bb  ("fix: pin and reset panel layout restore panels to their
+                     original docked position and size (#509)")
+reviewed: 2026-07-15
 fixtures: Tests/Fixtures/ dumped from cac6396 (still valid — no kernel/constant
-          changes in cac6396..0500404)
+          changes in cac6396..ecec2bb)
 ```
 
 ## How to run a review
@@ -38,6 +39,122 @@ updates this file. The manual procedure, for reference:
 6. Update the **Last reviewed** marker and append to the history below.
 
 ## Review history
+
+### 2026-07-15 — through `ecec2bb` (0.37.2 → 0.38.0, 7 commits)
+
+**Kernel status: untouched.** Zero commits in the range touch
+`features/exposure/`, `features/process/`, `kernel/image/`, or the
+characterization goldens — the path-filtered log is empty and
+`git diff --stat` over those trees returns nothing. No renames in the range
+(`--diff-filter=R` empty; all tracked pipeline files still present at the
+tip), so this is a genuine null, not a path-filter miss. No fixture re-dump,
+no constants drift, `dump_fixtures.py` signatures unaffected. 0.38.0 is
+entirely triage/UI/workflow work.
+
+**Ported:** nothing (nothing required).
+
+**Closed since the last review** (were in "To port", now shipped here
+independently of upstream):
+- Fine rotation + Straighten (`7f4b7a7`) — shipped as our unified Crop &
+  Straighten mode (`CropGeometry`, `commitFineRotation`), a Lightroom-model
+  design rather than upstream's reference-line tool.
+- "Enter confirms crop" (`3961b4d`) — shipped (`fa5c890`), plus Escape-cancel.
+
+**Correction to this entry (same day):** the TIFF-compression item below was
+first logged as "confirmed still absent". **That was wrong.** TIFF compression
+has been implemented since `a499904` — `Exporter.swift` sets
+`kCGImagePropertyTIFFCompression = 5` (LZW), and its comment already records
+the deliberate LZW-over-Deflate decision (ImageIO's Deflate support is
+undocumented). The false "confirmed" came from a verification grep truncated by
+`head -12`, forty lines before the relevant code. **Item closed, not open.**
+Lesson for future reviews: never `head`-truncate an absence check — absence is
+exactly what truncation fabricates.
+
+**Closed (was carried over as "To port"; already shipped here):**
+- TIFF export compression (`fb4b7a7`) — done at `a499904` (LZW). Upstream's
+  Deflate+predictor is a deliberate skip, not a gap: ImageIO won't reliably
+  write Deflate TIFF. Do not re-raise without new evidence.
+
+**Ported (2026-07-15, same day as the review):**
+- `77c8113` **spot densitometer + zone strip** → `NegativeKit/Densitometry.swift`
+  (`zone(ofEncoded:)`, `printDensity(ofEncoded:)`, `read(encodedRGB:)`,
+  `zoneRoman`), `SwiftInvert/Densitometer.swift` +
+  `DensitometerReadout.swift`, wired to a canvas hover in `DetailView` with the
+  read-out in the control bar. NegPy-exact semantics, including luma-on-encoded
+  before the OETF decode.
+  **Divergence from upstream, deliberate:** the probe reads the displayed rgba8
+  bitmap (already ROMM-encoded) instead of a GPU metric — upstream needs
+  `density_hist.wgsl` to feed their H&D chart; we have no chart, so a 120-bin
+  GPU pass would have no consumer. `density_histogram` therefore **not ported**;
+  revisit only if we ever build the H&D chart.
+  **Also skipped:** the ΔD-above-base per-channel figure — it needs the source
+  linear pixel + bounds, i.e. an actor round-trip into `ImageSession` per
+  pointer move, for the negative-diagnostic half of the read-out. D + zone is
+  the darkroom core; ΔD is a candidate if the round-trip proves cheap.
+- **Negative character** diagnostic → `Densitometry.character(densityRange:)`
+  (NegPy's 0.80/1.25 gates and wording), shown under the Grade slider — the
+  slider it's about. Reads `analysis.baseBounds.luminanceDensityRange`, verified
+  to be the same `norm_density_range` upstream feeds both its curve and this
+  diagnostic.
+- Both are pure measurement (no render path), so the parity fixtures are
+  untouched and no re-dump was needed. 92 tests pass, including a new
+  `DensitometryTests` suite of closed-form oracles.
+- Verified on real scans via a new `negcli meter` command: on three CR3s the
+  brightest tone reads D 0.06 on every frame — exactly `K.dMin`, the paper white
+  the pipeline targets — and the character gates fire correctly (0.902 → normal,
+  0.710 / 0.494 → flat).
+- **Unverified:** the hover interaction itself. Synthetic mouse events need
+  accessibility permission the unbundled binary lacks (the app never takes
+  focus), and the *known-working* histogram hover doesn't respond to them
+  either — so the harness, not the code, is what failed. Needs a human pointer.
+
+**New candidate (perf/architecture, not pipeline) — half ported, half declined:**
+- `938fe9e` "halve preview-load memory; instant frame switching".
+  **Ported: multi-frame retention** — `AppModel.sessionLRU` keeps the 2 most
+  recent `ImageSession`s (upstream's `preview_cache_max_full_res_entries`
+  budget: active frame + the one navigated from), with `releaseHQ()` stripping
+  the full-res tier from the frame that isn't on screen. Retention alone
+  suffices here because every cache tier is already keyed.
+  **Declined: upstream's `RenderMemo`** — it memoizes the last displayed render
+  because their re-render is expensive. With the tower warm ours is
+  derive+GPU (~5 ms), so a memo of the CGImage would add a staleness surface
+  (their key has to track HQ flag, working space, GPU engine, soft-proof ICCs,
+  monitor profile) to save 5 ms. Not worth it.
+  **Declined: copy elision** — their win was deleting numpy defensive `.copy()`
+  calls. Swift arrays are COW, so we never had that class of waste; the one
+  place it would matter is already explicit (`preview = meterPreview` at 0°,
+  commented "COW: at 0° the render input IS the meter image, no copy"). No
+  change made.
+  Original analysis of both ideas, retained for context:
+  1. **Multi-frame retention.** Upstream gives full-res cache entries a slot
+     budget (default 2: active frame + the one navigated from) so navigate-back
+     is instant, and memoizes each frame's last displayed render in a new
+     `RenderMemo` keyed by config + every display-path input, painting from it
+     immediately while the authoritative render refreshes underneath. We hold
+     exactly **one** `ImageSession` (`AppModel.swift:506` reassigns a single
+     optional), so navigating back drops the entire cache tower — decode,
+     oriented preview, `Prepared` (~150 ms), textures — and rebuilds from
+     scratch. A 2-slot session LRU would be the bigger win for us than the memo
+     itself, since we discard more than they do. Wants a memory-budget check
+     first (our HQ path already caches a full-res decode per session).
+  2. **Copy elision under a read-only contract.** They removed three redundant
+     full-size buffer copies (peak RSS 2880→1609 MB on a 56 MP load) by letting
+     cache and caller alias one buffer. Less directly applicable — our
+     `RGBImage` copies are value-semantic and our contract already forbids
+     handing out live textures — but worth a look at the HQ decode path if HQ
+     memory ever becomes a complaint.
+
+**Not applicable (this range):**
+- `976851c` UI refinements; `ecec2bb` panel pin/reset docking; `979b592`
+  adaptive canvas-toolbar overflow — their Qt dock/panel layer.
+- `13b9434` heal/scratch edits never persisted — retouch, not shipped here.
+- `2079d7c` docs (their CLAUDE.md slim-down); `0ca292d` CI self-assign workflow.
+- 0.38.0 changelog headliners we don't ship: Keep/Reject contact-sheet triage,
+  unreadable-file badges, roll-wide undo, canvas-tool Esc grammar, colour/
+  Filtration renaming. One idea worth noting even though the feature is out of
+  scope: their **two-stage Esc** (first clears in-progress points, second puts
+  the tool down) — our Escape already cancels Crop & Straighten wholesale,
+  which is the right behaviour for a mode with no in-progress point list.
 
 ### 2026-07-14 — through `0500404` (0.37.1–0.37.2, 7 commits)
 

@@ -58,7 +58,10 @@ negcli ──► RawDecodeKit + NegativeKit + MetalRenderKit
   conversion, used by export).
 - **RawDecodeKit** — LibRaw wrapper + embedded-thumbnail extraction.
 - **SwiftInvert** — SwiftUI app (`AppModel`, `ImageSession`, views).
-- **negcli** — headless driver; `bench` measures slider-latency and analysis.
+- **negcli** — headless driver; `bench` measures slider-latency and analysis;
+  `meter` prints the darkroom read-outs (negative character + spot-densitometer
+  probes) for a real RAW, which is how the read-out math gets exercised on
+  actual scans (the fixtures can't cover a hover).
 
 ## The image pipeline
 
@@ -144,6 +147,13 @@ shadow → no neutral axis (shadow-ref fallback used downstream).
 orientation) → `Prepared` (per rects) → `ExposureAnalysis` (per rects +
 offsets) → GPU source textures (per crop). The "Analyzing…" indicator shows
 only when `prepare` will run.
+
+`AppModel.sessionLRU` retains the **2** most recent sessions (active + the one
+navigated from), so arrowing back to a frame doesn't rebuild the whole tower.
+Retention alone is safe *because* every tier is keyed — a returning session
+re-validates against the current settings and cannot serve stale pixels. Only
+the on-screen frame may hold the HQ tier (`releaseHQ()` strips it from the
+others); the proxy caches are tens of MB, the HQ decode is hundreds.
 
 ### 3. Parameter derivation (`ExposureKernel.deriveRenderParams`, µs per tick)
 
@@ -306,6 +316,19 @@ values where needed):
   (`showingBaseline` renders stock settings with current geometry), export
   batch task with progress/cancel.
 - **`ImageSession`** (actor): the per-image cache tower (see §2) + render.
+- **Darkroom read-outs** (`Densitometry` in NegativeKit — pure measurement, no
+  render path, so no parity surface): the **spot densitometer** (hover the
+  canvas → D + zone in the control bar, with an 11-cell `ZoneStrip`) and the
+  **Negative character** row under the Grade slider ("0.90 · normal"), which is
+  the measured pre-offset density range vs `CurveLogic.defaultGradeRange`.
+  Both mirror NegPy (`densitometer.py`, `stats._negative_row`), including its
+  quirk of taking luma on the ENCODED triplet before decoding. The probe reads
+  the **displayed rgba8 bitmap** (ROMM-encoded, so the bytes already are the
+  working-space values) rather than a GPU metric — `DensitometerState` caches
+  the provider bytes once per render and is a separate `@Observable` so pointer
+  moves invalidate only the read-out label, never the canvas. NegPy's 120-bin
+  `density_histogram` is deliberately NOT ported: it exists to feed their H&D
+  chart, which we don't ship.
 - **Edit history**: per-image undo/redo in AppModel (`historyEntries`/`historyIndex`,
   session-scoped per URL). Slider/handle drags commit on RELEASE (drag =
   preview: `setControlEditing` via the `controlEditingChanged` environment

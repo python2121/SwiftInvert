@@ -145,6 +145,10 @@ struct ControlsSidebar: View {
                             label: "Grade (ISO R)", value: $model.settings.grade, range: 50...180,
                             format: "%.0f", defaultValue: 115,
                             help: "Paper contrast grade: 50 = hard (contrasty), 180 = soft (flat); 115 ≈ grade 2.")
+                        // Sits under Grade because that's the slider it's about:
+                        // it names the negative's own contrast and the grade
+                        // that usually suits it.
+                        NegativeCharacterRow(densityRange: model.densityRange)
                     }
                     .padding(6)
                 }

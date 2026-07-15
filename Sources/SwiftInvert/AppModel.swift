@@ -11,7 +11,12 @@ import UniformTypeIdentifiers
 @Observable
 final class AppModel {
     var folderURL: URL? {
-        didSet { UserDefaults.standard.set(folderURL?.path, forKey: "libraryFolder") }
+        didSet {
+            UserDefaults.standard.set(folderURL?.path, forKey: "libraryFolder")
+            // Retained sessions belong to the old library — holding their
+            // decodes would strand tens of MB per frame nobody can navigate to.
+            if oldValue != folderURL { sessionLRU.removeAll() }
+        }
     }
     /// Flat, depth-first file list (drives selection ranges and index numbers).
     var files: [URL] = []
@@ -191,6 +196,10 @@ final class AppModel {
     /// Unrotated (orientation-only) frame dims of the current image, from the
     /// last render — the base for CropGeometry's rotated-space math.
     var frameSize: CGSize = .zero
+    /// Measured pre-offset density range of the current negative, from the last
+    /// render — input to the Negative-character read-out beside the Grade
+    /// slider. 0 until the first render lands.
+    var densityRange: Double = 0
 
     /// Commit a straighten angle, remapping any committed crop so it keeps
     /// showing the same content (center-preserved, shrunk only if the new
@@ -261,6 +270,23 @@ final class AppModel {
     let thumbnails = ThumbnailStore()
     private var pipeline: RenderPipeline?
     private var session: ImageSession?
+    /// Recently-visited sessions, oldest first, including the active one.
+    ///
+    /// Dropping a session on navigation threw away its whole cache tower —
+    /// decode, oriented preview, the ~150 ms `prepare`, the uploaded textures —
+    /// so arrowing back to a frame you were just on paid the full cost again to
+    /// reproduce pixels that were on screen seconds ago. Retention is enough on
+    /// its own here: every tier is keyed (`MeterKey`/`OrientKey`/`PreparedKey`/
+    /// `AnalysisKey`), so a returning session re-validates against the current
+    /// settings and can't serve stale pixels. NegPy needs a `RenderMemo` of the
+    /// last displayed frame on top of its cache for the same effect; with the
+    /// tower warm our re-render is derive+GPU (~5 ms), so the memo would buy
+    /// nothing.
+    ///
+    /// Budget 2 (matching NegPy's `preview_cache_max_full_res_entries`): the
+    /// active frame plus the one navigated from, which is the A/B compare move.
+    private var sessionLRU: [(url: URL, session: ImageSession)] = []
+    private static let sessionLRULimit = 2
     private var renderTask: Task<Void, Never>?
     private var renderPending = false
     private var saveTask: Task<Void, Never>?
@@ -495,6 +521,7 @@ final class AppModel {
         showingBaseline = false
         displayImage = nil
         histogram = nil
+        densityRange = 0
         if let url = selection, !multiSelection.contains(url) { multiSelection = [url] }
         guard let url = selection else { return }
         guard let pipeline else {
@@ -503,7 +530,7 @@ final class AppModel {
         }
         straightenBaseTask?.cancel()
         straightenBase = nil
-        session = ImageSession(url: url, pipeline: pipeline)
+        session = retainedSession(for: url, pipeline: pipeline)
         // Loading the sidecar mutates settings, which triggers the first render.
         let restored = SidecarStore.load(for: url) ?? ExposureSettings()
         isRestoringSettings = true
@@ -514,6 +541,28 @@ final class AppModel {
         }
         isRestoringSettings = false
         loadHistory(for: url)
+    }
+
+    /// The session for `url`, reusing a retained one when we've been here
+    /// recently (see `sessionLRU`). The returning session's cache tower is
+    /// re-validated by its own keys, so nothing here has to reason about
+    /// whether the settings moved while we were away.
+    private func retainedSession(for url: URL, pipeline: RenderPipeline) -> ImageSession {
+        let found: ImageSession
+        if let i = sessionLRU.firstIndex(where: { $0.url == url }) {
+            found = sessionLRU.remove(at: i).session  // re-append: most recent last
+        } else {
+            found = ImageSession(url: url, pipeline: pipeline)
+        }
+        sessionLRU.append((url, found))
+        while sessionLRU.count > Self.sessionLRULimit { sessionLRU.removeFirst() }
+        // Only the frame on screen may hold the full-res tier; a retained
+        // session keeping its HQ decode would cost hundreds of MB for pixels
+        // nobody is looking at.
+        for entry in sessionLRU where entry.url != url {
+            Task { await entry.session.releaseHQ() }
+        }
+        return found
     }
 
     private func settingsChanged() {
@@ -563,6 +612,7 @@ final class AppModel {
                     self.isAnalyzing = false
                     if Task.isCancelled { break }
                     self.frameSize = output.frameSize
+                    self.densityRange = output.densityRange
                     if midStraightenDrag {
                         // Cache-miss fallback: the 0° re-base swaps bitmap,
                         // fitted frame aspect, rotation delta and cover scale

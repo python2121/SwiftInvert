@@ -22,6 +22,10 @@ func usage() -> Never {
               Full C-41 conversion (analysis + Metal render), 16-bit ROMM TIFF.
           negcli bench <raw-file> [--frames N]
               Slider-latency benchmark: decode+analyze once, re-render N times.
+          negcli meter <raw-file> [--at u,v] [--grade G] [--density D]
+              Darkroom read-outs: negative character (measured density range vs
+              the grade's expectation) and spot densitometer probes — D and zone
+              at normalized coords (repeatable; defaults to a centre/corner set).
         """
     )
     exit(2)
@@ -152,6 +156,73 @@ do {
         print(
             "bounds floors \(params.finalBounds.floors)  anchor \(String(format: "%.3f", analysis.anchor))"
                 + "  cast confidence \(analysis.neutralConfidence.map { String(format: "%.2f", $0) } ?? "n/a")")
+    case "meter":
+        guard let input = positional.first else { usage() }
+        var settings = ExposureSettings()
+        if let v = options["--density"].flatMap(Double.init) { settings.density = v }
+        if let v = options["--grade"].flatMap(Double.init) { settings.grade = v }
+
+        let img = try RawDecoder().decode(
+            url: URL(fileURLWithPath: input), quality: .preview, maxLongEdge: 1536)
+        let analysis = ExposureKernel.analyze(linearImage: img)
+        let params = ExposureKernel.deriveRenderParams(settings, analysis)
+        let pipeline = try RenderPipeline()
+        let (encoded, _) = try pipeline.render(image: img, params: params)
+
+        // Negative character reads the pre-offset range — the same value the
+        // curve's grade logic reads (NegPy's norm_density_range).
+        let range = analysis.baseBounds.luminanceDensityRange
+        let character = Densitometry.character(densityRange: range)
+        print(
+            "negative: density range \(String(format: "%.3f", range))"
+                + "  default grade range \(String(format: "%.3f", CurveLogic.defaultGradeRange))"
+                + "  → \(character?.label ?? "—")")
+
+        func read(atX x: Int, y: Int) -> Densitometry.Reading {
+            let i = (y * encoded.width + x) * 3
+            return Densitometry.read(
+                encodedRGB: SIMD3(
+                    Double(encoded.pixels[i]), Double(encoded.pixels[i + 1]),
+                    Double(encoded.pixels[i + 2])))
+        }
+
+        let points: [(Double, Double)] =
+            options["--at"].map { spec in
+                spec.split(separator: ";").compactMap { pair -> (Double, Double)? in
+                    let c = pair.split(separator: ",").compactMap { Double($0) }
+                    return c.count == 2 ? (c[0], c[1]) : nil
+                }
+            } ?? [(0.5, 0.5), (0.25, 0.25), (0.75, 0.75)]
+
+        for (u, v) in points {
+            let x = min(max(Int(u * Double(encoded.width)), 0), encoded.width - 1)
+            let y = min(max(Int(v * Double(encoded.height)), 0), encoded.height - 1)
+            let r = read(atX: x, y: y)
+            print(
+                String(
+                    format: "  probe (%.2f, %.2f)  D %.2f  Zone %@  rgb %.3f/%.3f/%.3f",
+                    u, v, r.printDensity, Densitometry.zoneRoman(r.zone), r.rgb.x, r.rgb.y, r.rgb.z))
+        }
+
+        // The read-out's span on real tones — a sanity check that the ruler
+        // lands where the print actually lives.
+        var minLuma = Double.infinity
+        var maxLuma = -Double.infinity
+        for i in stride(from: 0, to: encoded.pixels.count, by: 3) {
+            let l = Densitometry.luma(
+                SIMD3(
+                    Double(encoded.pixels[i]), Double(encoded.pixels[i + 1]),
+                    Double(encoded.pixels[i + 2])))
+            minLuma = min(minLuma, l)
+            maxLuma = max(maxLuma, l)
+        }
+        print(
+            String(
+                format: "  frame: darkest D %.2f (Zone %@)   brightest D %.2f (Zone %@)",
+                Densitometry.printDensity(ofEncoded: minLuma),
+                Densitometry.zoneRoman(Densitometry.zone(ofEncoded: minLuma)),
+                Densitometry.printDensity(ofEncoded: maxLuma),
+                Densitometry.zoneRoman(Densitometry.zone(ofEncoded: maxLuma))))
     case "bench":
         guard let input = positional.first else { usage() }
         let frames = options["--frames"].flatMap(Int.init) ?? 30
