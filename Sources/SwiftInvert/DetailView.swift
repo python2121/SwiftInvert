@@ -281,7 +281,14 @@ struct DetailView: View {
                 withAnimation(.easeOut(duration: 0.15)) { resetZoom() }
             }
             .onChange(of: model.toolMode) { old, new in
-                if old == .crop { commitCrop() }
+                if old == .crop {
+                    if model.cropModeCancelled {
+                        model.cropModeCancelled = false
+                        cropBox = nil
+                    } else {
+                        commitCrop()
+                    }
+                }
                 if new == .crop { cropBox = nil }
             }
             // First straighten drag inside crop mode freezes the box on

@@ -96,7 +96,38 @@ final class AppModel {
     /// shows the uncropped frame and drag draws the selection rect.
     enum ToolMode { case none, analysisRegion, crop }
     var toolMode: ToolMode = .none {
-        didSet { if oldValue != toolMode { scheduleRender() } }
+        didSet {
+            guard oldValue != toolMode else { return }
+            if toolMode == .crop {
+                // Snapshot for Escape-cancel: mid-mode straighten commits
+                // mutate settings live, so cancel restores this pair.
+                cropModeBackup = (settings.fineRotation, settings.cropRect)
+            }
+            scheduleRender()
+        }
+    }
+
+    private var cropModeBackup: (fineRotation: Double, cropRect: NormalizedRect?)?
+    /// Set by cancelCropMode so DetailView's mode-exit handler skips the
+    /// crop-box commit (it resets the flag).
+    var cropModeCancelled = false
+
+    /// Escape in Crop & Straighten: restore the angle and crop to their
+    /// values at mode entry, then exit without committing the box.
+    func cancelCropMode() {
+        guard toolMode == .crop else { return }
+        straightenDragValue = nil
+        if let backup = cropModeBackup,
+            backup.fineRotation != settings.fineRotation || backup.cropRect != settings.cropRect
+        {
+            var restored = settings
+            restored.fineRotation = backup.fineRotation
+            restored.cropRect = backup.cropRect
+            pendingHistoryLabel = "Cancel crop"
+            settings = restored
+        }
+        cropModeCancelled = true
+        toolMode = .none
     }
 
     // MARK: - Orientation & canvas

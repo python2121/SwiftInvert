@@ -104,7 +104,7 @@ struct CropRotationSection: View {
                 }
             }
             .controlSize(.small)
-            .help("Straighten up to ±45° — enters Crop & Straighten: the image rotates behind the crop box, which auto-fits. Exit (Esc or the Crop button) commits.")
+            .help("Straighten up to ±45°: the image rotates behind the crop box, which auto-fits. Return or the button commits; Esc cancels.")
             .onHover { inside in
                 if inside { model.prepareStraightenBase() }
             }
@@ -122,7 +122,7 @@ struct CropRotationSection: View {
                 }
                 .buttonStyle(.bordered)
                 .tint(model.toolMode == .crop ? Color.accentColor : nil)
-                .help("Crop & straighten: adjust the box while the image rotates behind it; the box auto-fits as the angle changes. Exit (Esc or the button) commits.")
+                .help("Crop & straighten: adjust the box while the image rotates behind it; the box auto-fits as the angle changes. Return or the button commits; Esc cancels.")
                 if model.settings.cropRect != nil {
                     Button {
                         model.pendingHistoryLabel = "Crop cleared"
