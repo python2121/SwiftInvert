@@ -12,7 +12,7 @@ import simd
 /// normalized over that inscribed rect.
 public enum CropGeometry {
     /// Clockwise rotation in y-down coordinates (display map: screen = R(θ)·frame).
-    static func rotate(_ p: SIMD2<Double>, by radians: Double) -> SIMD2<Double> {
+    public static func rotate(_ p: SIMD2<Double>, by radians: Double) -> SIMD2<Double> {
         let c = cos(radians)
         let s = sin(radians)
         return SIMD2(c * p.x - s * p.y, s * p.x + c * p.y)

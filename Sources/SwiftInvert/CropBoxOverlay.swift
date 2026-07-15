@@ -61,9 +61,22 @@ struct CropBoxOverlay: View {
                 height: CGFloat(eff.halfExtents.y * 2) * scale)
 
             ZStack(alignment: .topLeading) {
-                // Dim outside the box (even-odd).
+                // Dim the IMAGE outside the box — the rotated frame quad, not
+                // the whole window, so the empty corners stay pure canvas
+                // color instead of reading as a dark square around the image.
                 Path { p in
-                    p.addRect(CGRect(origin: .zero, size: geo.size))
+                    let quad = [
+                        SIMD2(-frame.x / 2, -frame.y / 2), SIMD2(frame.x / 2, -frame.y / 2),
+                        SIMD2(frame.x / 2, frame.y / 2), SIMD2(-frame.x / 2, frame.y / 2),
+                    ].map { corner in
+                        let r = CropGeometry.rotate(corner, by: radians)
+                        return CGPoint(
+                            x: winCenter.x + CGFloat(r.x) * scale,
+                            y: winCenter.y + CGFloat(r.y) * scale)
+                    }
+                    p.move(to: quad[0])
+                    for point in quad.dropFirst() { p.addLine(to: point) }
+                    p.closeSubpath()
                     p.addRect(boxRect)
                 }
                 .fill(Color.black.opacity(0.45), style: FillStyle(eoFill: true))
