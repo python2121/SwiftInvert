@@ -134,7 +134,10 @@ struct ContentView: View {
     @AppStorage("libraryWidth") private var libraryWidth = 320.0
     @AppStorage("libraryVisible") private var libraryVisible = true
     @State private var dragStartWidth: Double?
-    @State private var escapeMonitor: Any?
+    /// Local keyDown monitor: Escape/Return for the tool modes, ↑/↓ for frame
+    /// navigation (menu items hold the ←/→ equivalents; an item takes only
+    /// one shortcut, so the vertical pair lives here).
+    @State private var keyMonitor: Any?
 
     var body: some View {
         // Plain three-pane layout: the library is a solid panel like the
@@ -170,20 +173,31 @@ struct ContentView: View {
         // in the window. Pass-through unless a tool mode is active, so sheets
         // and text fields keep their own Escape behavior.
         .onAppear {
-            guard escapeMonitor == nil else { return }
+            guard keyMonitor == nil else { return }
             // Escape CANCELS a tool mode (crop: angle + box restored to
-            // mode-entry values); Return/Enter accepts.
-            escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-                guard event.keyCode == 53 || event.keyCode == 36 || event.keyCode == 76 else {
-                    return event
-                }
+            // mode-entry values); Return/Enter accepts. ↑/↓ walk the film
+            // strip like the ←/→ menu equivalents (↑ = previous, ↓ = next —
+            // the strip is a vertical column, so both axes should read).
+            keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
                 let isEscape = event.keyCode == 53
+                let isAccept = event.keyCode == 36 || event.keyCode == 76
+                let isUp = event.keyCode == 126
+                let isDown = event.keyCode == 125
+                guard isEscape || isAccept || isUp || isDown else { return event }
                 // Monitors fire on the main thread; only Sendable values
                 // cross the isolation boundary (NSEvent is not).
                 let consumed = MainActor.assumeIsolated { () -> Bool in
-                    // The export sheet owns Return (its default button) and
-                    // Escape (Cancel) while it's up.
-                    guard model.toolMode != .none, model.exportRequest == nil else { return false }
+                    // The export sheet owns all of these while it's up
+                    // (Return = default button, Escape = Cancel, arrows =
+                    // its text fields).
+                    guard model.exportRequest == nil else { return false }
+                    if isUp || isDown {
+                        // Same enablement as the Previous/Next menu items.
+                        guard !model.files.isEmpty else { return false }
+                        model.selectAdjacent(isUp ? -1 : 1)
+                        return true
+                    }
+                    guard model.toolMode != .none else { return false }
                     if isEscape, model.toolMode == .crop {
                         model.cancelCropMode()
                     } else {

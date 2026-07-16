@@ -376,9 +376,14 @@ values where needed):
   group — the ⌘Z shortcuts live HERE, not on HistoryPanel's buttons),
   Copy/Paste Adjustments ⇧⌘C/⇧⌘V (geometry never pasted), Reset All ⌥⌘R;
   View = Show Library ⇧⌘L / Show Grid Lines ⇧⌘G / HQ Preview ⇧⌘P
-  (@AppStorage keys shared with the in-window controls); Image = Rotate
-  Left/Right ⌘[/⌘] / Flip ⇧⌘H / Crop ⌘K / Crop for Analysis ⇧⌘K +
-  clear items (tool toggles checkmark while active; Escape exits).
+  (@AppStorage keys shared with the in-window controls); Image =
+  Previous/Next Image ←/→ / Rotate Left/Right ⌘[/⌘] / Flip ⇧⌘H /
+  Crop ⌘K / Crop for Analysis ⇧⌘K + clear items (tool toggles checkmark
+  while active; Escape exits). Frame navigation also answers ↑/↓ (↑ =
+  previous, ↓ = next) via the window's keyDown monitor in
+  `SwiftInvertApp` — a menu item takes exactly one key equivalent, so the
+  vertical pair can't live on the menu; the monitor mirrors the menu
+  items' enablement (no files / export sheet up ⇒ pass through).
 - **Sidecars**: `<basename>.swiftinvert.json` next to the source
   (`SidecarStore`); pre-rename `.negswift.json` read as fallback and removed
   on next save. Missing keys decode to defaults (custom `init(from:)` in
