@@ -63,9 +63,9 @@ public enum K {
     // (mirrors NegPy 0.36).
     public static let toeGradeStrength = 0.15 * 0.35 / 0.90
     public static let shoulderGradeStrength = 0.12
-    // Auto grade.
-    public static let autoGradeTarget = 0.5
-    public static let autoGradeStrength = 0.4
+    // Auto grade (NegPy 0.38 retune: punchier target, less scene adaptation).
+    public static let autoGradeTarget = 0.55
+    public static let autoGradeStrength = 0.3
     public static let autoGradeNominalRatio = 2.0
     // Textural-range percentile margin.
     public static let texturalRangeClip = 10.0

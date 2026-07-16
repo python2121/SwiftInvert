@@ -9,13 +9,12 @@ and appending a history entry.
 ## Last reviewed
 
 ```
-commit:   6b841a1  ("tweak exposure & regenerate goldens")
-reviewed: 2026-07-15
-fixtures: Tests/Fixtures/ dumped from cac6396 — still matches what SwiftInvert
-          currently implements (K.autoGradeTarget 0.5 / Strength 0.4), but
-          upstream moved those constants and the paper_dmin/true_black defaults
-          at 0f063cc..6b841a1. Re-dump from ≥6b841a1 REQUIRED when the pending
-          constants port lands (see 2026-07-15 second entry, "To port").
+commit:   4a669ed  ("fix: override export_fmt/export_color_space from session
+          in all_saved scope (#527) (#534)")
+reviewed: 2026-07-16
+fixtures: Tests/Fixtures/ dumped from 6b841a1 (2026-07-15: Auto Grade constants
+          + paper_dmin/true_black default flips ported; the dump manifest now
+          records true_black per config and both parity harnesses read it).
 ```
 
 ## How to run a review
@@ -42,6 +41,44 @@ updates this file. The manual procedure, for reference:
 
 ## Review history
 
+### 2026-07-16 — through `4a669ed` (0.38.0 → unreleased, 9 commits)
+
+**Kernel status: untouched.** Zero commits in the range touch
+`features/exposure/`, `features/process/`, `kernel/image/`, or the
+characterization goldens — the path-filtered log is empty, `git diff --stat`
+over those trees returns nothing, and there are no renames in the range
+(`--diff-filter=R` empty). A genuine null for the inversion pipeline: no
+fixture re-dump, no constants drift, `dump_fixtures.py` signatures
+unaffected. The one shared-kernel-adjacent hunk was checked by hand:
+`lab.wgsl` changed only a stale comment ("Adobe RGB" → ProPhoto/D50 — the
+code fix was `07e3f8f`, reviewed 2026-07-15), and the `lab/logic.py` rewrite
+is entirely the CLAHE function; vibrance/saturation (mirrored by our
+`colorPop`) are untouched.
+
+**Ported:** nothing (nothing required).
+
+**Not applicable (this range):**
+- `232f26d` unify CPU/GPU CLAHE into one Lab-L algorithm (+ new
+  `test_gpu_curve_parity` CLAHE case, PIPELINE.md now documents CLAHE as its
+  own stage before Retouching) — local-contrast lab stage we don't ship.
+  If we ever add local contrast, port THIS version (fixed 8×8 tile grid,
+  256 bins, integer-count clip + even redistribution, smoothstep-bilinear
+  CDF blend on CIELAB L*, CPU/GPU pinned to ~1e-6).
+- `c714a24` Feat/finish — Finish panel: edge burn (true exposure burn in
+  stops, radial↔rectangular roundness), filed-carrier black rebate, print
+  mats — print-finishing stage, out of scope. The **edge burn** design
+  (stops-domain `I·2^(−s·m)`, card-burn roundness) is the note-worthy idea
+  if a vignette tool is ever wanted.
+- `78b74ef` roll-aware Auto Crop All + consensus detection (~500 lines in
+  `geometry/batch_autocrop.py` + big `geometry/logic.py` growth) — camera-scan
+  auto-crop detection; we have no auto-crop detection feature.
+- `16bcee8` DNG/JXL export via imagecodecs 16-bit CMS — their export CMS
+  stack; we export JPEG/TIFF through ImageIO/ColorSync.
+- `4a669ed` export_fmt/color_space override in all_saved scope — their
+  export-preset session plumbing.
+- `2682a0a` camera-scanning calibration fix; `69a2934` status toasts / crop
+  busy overlay; `ca18ecb` overflow-menu fix; `86e73ba` changelog — UI/capture.
+
 ### 2026-07-15 (second review) — through `6b841a1` (0.38.0 tail, 9 commits)
 
 **Kernel status: DEFAULT LOOK MOVED UPSTREAM.** Three commits (`0f063cc`,
@@ -65,23 +102,26 @@ back to 0.5, 6b841a1 settled it):
   `stats._negative_row` uses the same `default_grade_range()`, so porting the
   constant keeps that diagnostic in lockstep automatically.
 
-**Ported:** nothing yet (review only).
-
-**To port (proposed, not yet implemented):**
-1. `K.autoGradeTarget` 0.5 → 0.55, `K.autoGradeStrength` 0.4 → 0.3. Small; K
-   update only, no kernel/MSL change. Needs fixture re-dump from ≥`6b841a1`
-   (`dump_fixtures.py` signatures verified unaffected — only constants/defaults
-   moved, and the script already records `paper_dmin` in its manifest) +
-   `make test`.
-2. `ExposureSettings.paperDmin` default true → false (mirror upstream's
-   default-look change). **Caveat:** the sidecar decoder fills missing keys
-   from the default (`paperDmin = b(.paperDmin, true)`), so flipping it changes
-   the look of existing edits that never touched the toggle — exactly the
-   trade upstream accepted when regenerating goldens. Decide consciously;
-   if declined, record it as a new deliberate divergence instead.
-3. Housekeeping with #1/#2: update CLAUDE.md ("Kernel constants are synced
-   with NegPy 0.36" sentence, drop the trueBlack divergence bullet), advance
-   the `fixtures:` line above.
+**Ported (2026-07-15, same day as the review):**
+1. `K.autoGradeTarget` 0.5 → 0.55, `K.autoGradeStrength` 0.3
+   (`ExposureConstants.swift` — CPU-only, no MSL duplicate). Shifts
+   `CurveLogic.defaultGradeRange` 1.0 → 1.1, which the Negative-character
+   read-out tracks automatically (verified via `negcli meter` on a real CR3:
+   "density range 0.958  default grade range 1.100 → normal").
+2. `ExposureSettings.paperDmin` default true → false, including the sidecar
+   decoder fallback (user's call: no existing edits worth preserving, so no
+   split-default dance). `negcli meter` confirms the paper floor is gone —
+   brightest tone reads D 0.00 (was 0.06 = K.dMin).
+3. trueBlack: no code change (already our default); the CLAUDE.md divergence
+   bullet is retired — it's upstream's default now too.
+4. Fixtures re-dumped from `6b841a1`. `dump_fixtures.py` now records
+   `true_black` in the per-config manifest (it already recorded `paper_dmin`),
+   and both parity harnesses (`AnalysisParityTests.settingsFrom`,
+   `GPUParityTests.settings`) read it instead of hard-coding the old NegPy
+   default — future default flips on either side can't silently skew parity.
+   Drift-catcher mutation lists (`SidecarCodecTests`, `HistoryLabelTests`)
+   updated for the new paperDmin default. All 132 tests pass; `negcli bench`
+   unchanged (4.4 ms/frame, prepare 157 ms, finalize 25 ms).
 
 **Deliberately skipped:**
 - Lab sharpen default 0.25 → 0.5 + the `lab.wgsl` sharpen rework (`0f063cc`:

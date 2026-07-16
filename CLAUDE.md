@@ -306,9 +306,13 @@ For "what changed in NegPy?" requests, run the **`/negpy-review` skill**
 (`.claude/skills/negpy-review/`) — it fetches upstream, triages the diff
 around the inversion pipeline, and maintains UPSTREAM.md.
 
-Kernel constants are synced with **NegPy 0.36** (`toe_height` 0.90 with the
+Kernel constants are synced with **NegPy 0.38** (`6b841a1`: Auto Grade retune
+`auto_grade_target` 0.55 / `auto_grade_strength` 0.3, defaults `paper_dmin`
+off + `true_black` on — plus the 0.36 set: `toe_height` 0.90 with the
 `toe_grade_strength` rescale, True Black, always-confidence cast removal);
-fixtures were re-dumped from that revision. NegPy's per-layer R/G/B trims,
+fixtures were re-dumped from that revision (the manifest records `paper_dmin`
+and `true_black` per config; the parity harnesses read both, so default flips
+on either side can't silently skew parity). NegPy's per-layer R/G/B trims,
 Split Grade and Zone Density (their convergent take on our tone controls)
 are NOT ported — our tone controls + 3-band grading cover the achromatic
 cases; per-channel crossover trims are a candidate future feature.
@@ -318,9 +322,18 @@ values where needed):
 - `preSaturation` default **1.15** (NegPy has no equivalent; parity tests set 1.0),
 - `redHue` default **+0.5** (Color Mixer, SwiftInvert-only: C-41 reds skew
   magenta out of the box, +0.5 = 15° toward orange; parity tests pin 0),
-- `trueBlack` default **on** (NegPy ships it off; parity tests set false),
 - default analysis buffer **0.10** vs NegPy 0.05 (tests pass 0.05 explicitly),
-- NegPy's default lab sharpen (0.25) is not implemented,
+- **Film-base sampling** (`settings.filmBaseSample`, SwiftInvert-only): a
+  sampled rebate patch (per-channel log medians, `ExposureKernel.
+  measureFilmBase`) replaces the colour-axis CEILING offsets in
+  `BoundsAnalysis.analyze` — ground truth for the orange mask instead of the
+  gray-world percentile estimate. Ceiling-only on purpose (the mask lives in
+  the unexposed couplers → strongest at the thin end; base offsets at the
+  floors would overcorrect highlights); the ceiling level stays luma-anchored
+  (median channel pinned), so only color moves. nil = bit-identical to NegPy's
+  path (fixtures unaffected). The VALUE is stored, not the rect: channel
+  medians are orientation-invariant and paste across a roll,
+- NegPy's default lab sharpen (0.5 since 0.38) is not implemented,
 - SwiftInvert-only controls: exposure stops, tone controls
   (shadows/highlights ± contrasts), overall contrast, temp/tint, 3-band
   color grading, pre-saturation — all identity-at-default so the NegPy

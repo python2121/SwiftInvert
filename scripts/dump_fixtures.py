@@ -177,7 +177,7 @@ def run_pipeline(img: np.ndarray, exposure: ExposureConfig, out_dir: Path, dump_
             "cast_removal_strength": exposure.cast_removal_strength,
             "toe": exposure.toe, "toe_width": exposure.toe_width,
             "shoulder": exposure.shoulder, "shoulder_width": exposure.shoulder_width,
-            "paper_dmin": exposure.paper_dmin,
+            "paper_dmin": exposure.paper_dmin, "true_black": exposure.true_black,
         },
         "bounds": {
             "base_floors": jsonable(base_bounds.floors), "base_ceils": jsonable(base_bounds.ceils),

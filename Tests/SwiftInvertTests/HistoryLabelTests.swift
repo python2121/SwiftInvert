@@ -26,7 +26,7 @@ import Testing
         ("toeWidth", { $0.toeWidth = 3.0 }),
         ("shoulder", { $0.shoulder = -0.3 }),
         ("shoulderWidth", { $0.shoulderWidth = 2.0 }),
-        ("paperDmin", { $0.paperDmin = false }),
+        ("paperDmin", { $0.paperDmin = true }),
         ("trueBlack", { $0.trueBlack = false }),
         ("exposureStops", { $0.exposureStops = 0.5 }),
         ("shadows", { $0.shadows = 0.7 }),

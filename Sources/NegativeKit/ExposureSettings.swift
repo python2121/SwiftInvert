@@ -27,11 +27,12 @@ public struct ExposureSettings: Codable, Equatable, Sendable {
     public var toeWidth: Double = 2.5
     public var shoulder: Double = 0
     public var shoulderWidth: Double = 2.5
-    /// Paper white floor on (NegPy paper_dmin, d_min = 0.06).
-    public var paperDmin: Bool = true
+    /// Paper white floor (NegPy paper_dmin, d_min = 0.06). Default OFF since
+    /// NegPy 0.38: highlights print to pure white; the paper base is opt-in.
+    public var paperDmin: Bool = false
     /// True Black: black point compensation — paper Dmax maps to display black
     /// (relative-colorimetric style; without it paper black floats at ~0.5%).
-    /// Default ON (SwiftInvert divergence: NegPy ships it off).
+    /// Default ON (NegPy 0.38 converged on this after shipping it off in 0.36).
     public var trueBlack: Bool = true
 
     // Regional tone controls (see K.toneRegionSharpness block). Lightroom sign
@@ -131,7 +132,7 @@ public struct ExposureSettings: Codable, Equatable, Sendable {
         toeWidth = d(.toeWidth, 2.5)
         shoulder = d(.shoulder, 0)
         shoulderWidth = d(.shoulderWidth, 2.5)
-        paperDmin = b(.paperDmin, true)
+        paperDmin = b(.paperDmin, false)
         trueBlack = b(.trueBlack, true)
         exposureStops = d(.exposureStops, 0)
         shadows = d(.shadows, 0)

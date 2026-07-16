@@ -49,8 +49,8 @@
   "anchor_meter_strength": 0.2,
   "toe_grade_strength": 0.05833333333333333,
   "shoulder_grade_strength": 0.12,
-  "auto_grade_target": 0.5,
-  "auto_grade_strength": 0.4,
+  "auto_grade_target": 0.55,
+  "auto_grade_strength": 0.3,
   "auto_grade_nominal_ratio": 2.0,
   "textural_range_clip": 10.0,
   "flat_log_gain": 0.65,
@@ -336,25 +336,25 @@
    "auto": true,
    "floor_ceil": 1.3,
    "textural": 0.7,
-   "out": 0.9714285714285715
+   "out": 1.0764285714285715
   },
   {
    "auto": true,
    "floor_ceil": 1.3,
    "textural": null,
-   "out": 1.0
+   "out": 1.1
   },
   {
    "auto": true,
    "floor_ceil": 2.0,
    "textural": 0.4,
-   "out": 1.6
+   "out": 1.595
   },
   {
    "auto": true,
    "floor_ceil": 0.9,
    "textural": 0.8,
-   "out": 0.825
+   "out": 0.9556250000000001
   }
  ],
  "grade_coupled_shape": [

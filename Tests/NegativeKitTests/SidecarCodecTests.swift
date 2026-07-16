@@ -28,7 +28,7 @@ import Testing
         s.toeWidth = 3.0
         s.shoulder = -0.3
         s.shoulderWidth = 2.0
-        s.paperDmin = false
+        s.paperDmin = true
         s.trueBlack = false
         s.exposureStops = 0.5
         s.shadows = 0.7
