@@ -9,11 +9,13 @@ and appending a history entry.
 ## Last reviewed
 
 ```
-commit:   ecec2bb  ("fix: pin and reset panel layout restore panels to their
-                     original docked position and size (#509)")
+commit:   6b841a1  ("tweak exposure & regenerate goldens")
 reviewed: 2026-07-15
-fixtures: Tests/Fixtures/ dumped from cac6396 (still valid — no kernel/constant
-          changes in cac6396..ecec2bb)
+fixtures: Tests/Fixtures/ dumped from cac6396 — still matches what SwiftInvert
+          currently implements (K.autoGradeTarget 0.5 / Strength 0.4), but
+          upstream moved those constants and the paper_dmin/true_black defaults
+          at 0f063cc..6b841a1. Re-dump from ≥6b841a1 REQUIRED when the pending
+          constants port lands (see 2026-07-15 second entry, "To port").
 ```
 
 ## How to run a review
@@ -39,6 +41,74 @@ updates this file. The manual procedure, for reference:
 6. Update the **Last reviewed** marker and append to the history below.
 
 ## Review history
+
+### 2026-07-15 (second review) — through `6b841a1` (0.38.0 tail, 9 commits)
+
+**Kernel status: DEFAULT LOOK MOVED UPSTREAM.** Three commits (`0f063cc`,
+`67b5a8c`, `6b841a1`) changed `exposure/models.py` and regenerated both
+characterization goldens — the highest-priority signal this log tracks.
+Net change at the tip (0f063cc bounced `auto_grade_target` to 0.6, 67b5a8c
+back to 0.5, 6b841a1 settled it):
+
+- `paper_dmin` default **True → False** (paper white d_min 0.06 → 0; highlights
+  print brighter — goldens moved 0.86 → 0.94 in the lights).
+- `true_black` default **False → True** — **upstream converged on OUR recorded
+  divergence.** No code change here; the CLAUDE.md divergence entry ("trueBlack
+  default on; NegPy ships it off") is now stale and should be dropped when the
+  port lands.
+- `EXPOSURE_CONSTANTS["auto_grade_target"]` **0.5 → 0.55**,
+  `["auto_grade_strength"]` **0.4 → 0.3** — Auto Grade targets slightly higher
+  contrast and adapts less to scene range. Maps to `K.autoGradeTarget` /
+  `K.autoGradeStrength` (`ExposureConstants.swift:67-68`), CPU-only (no MSL
+  duplicate). Also shifts `CurveLogic.defaultGradeRange` 1.0 → 1.1, the
+  denominator of the Negative-character read-out — upstream's
+  `stats._negative_row` uses the same `default_grade_range()`, so porting the
+  constant keeps that diagnostic in lockstep automatically.
+
+**Ported:** nothing yet (review only).
+
+**To port (proposed, not yet implemented):**
+1. `K.autoGradeTarget` 0.5 → 0.55, `K.autoGradeStrength` 0.4 → 0.3. Small; K
+   update only, no kernel/MSL change. Needs fixture re-dump from ≥`6b841a1`
+   (`dump_fixtures.py` signatures verified unaffected — only constants/defaults
+   moved, and the script already records `paper_dmin` in its manifest) +
+   `make test`.
+2. `ExposureSettings.paperDmin` default true → false (mirror upstream's
+   default-look change). **Caveat:** the sidecar decoder fills missing keys
+   from the default (`paperDmin = b(.paperDmin, true)`), so flipping it changes
+   the look of existing edits that never touched the toggle — exactly the
+   trade upstream accepted when regenerating goldens. Decide consciously;
+   if declined, record it as a new deliberate divergence instead.
+3. Housekeeping with #1/#2: update CLAUDE.md ("Kernel constants are synced
+   with NegPy 0.36" sentence, drop the trueBlack divergence bullet), advance
+   the `fixtures:` line above.
+
+**Deliberately skipped:**
+- Lab sharpen default 0.25 → 0.5 + the `lab.wgsl` sharpen rework (`0f063cc`:
+  real CIELAB L*-space unsharp mask with reflect-101 borders, sigma tracking
+  scale_factor, smoothstep noise gate — replacing the old gamma-luma RGB-ratio
+  scale). We don't ship sharpen (recorded divergence). **Divergence baseline
+  moved:** if sharpen is ever implemented, port THIS Lab-space version, not
+  anything older.
+
+**Not applicable (this range):**
+- `f309982` cast-removal strength sticks across frames, `6e55a4a` True Black
+  sticks across frames — their Qt session's frame-to-frame settings carry-over;
+  we have per-image sidecars + Copy/Paste Adjustments, no carry-over model.
+- `07e3f8f` colour-manage from the working space, not Adobe RGB — their
+  `AppState.workspace_color_space` was left at "Adobe RGB" when the working
+  space moved to ProPhoto, skewing preview/export/thumbnails together.
+  SwiftInvert has no such field: display tags `rommrgb` directly, export draws
+  ROMM into an sRGB context; `ColorIOTests` oracles were generated directly
+  from NegPy's bundled ProPhoto ICC (not through their AppState path), so they
+  are unaffected. Their deleted `detect_color_space_from_raw` was never ported.
+- `936ff88` untagged scanner-TIFF loading (sRGB → linear scanner data),
+  `34e9efe` TIFF export via imagecodecs 16-bit CMS — scanner-TIFF input and
+  their export CMS stack; we're camera-RAW only and export through
+  ImageIO/ColorSync.
+- `3a0175c` Feat/heal — retouch (out of scope); its `rawpy_loader.py` hunk is
+  the VueScan/Adobe SubIFD **LinearRaw scanner-DNG** path, also out of scope
+  (camera DNGs go through LibRaw unaffected).
 
 ### 2026-07-15 — through `ecec2bb` (0.37.2 → 0.38.0, 7 commits)
 
