@@ -207,4 +207,23 @@ enum Fixtures2 {
         #expect(l1 <= n / 25, "histogram L1 diff \(l1) of \(n * 4) samples")
         #expect(result.histogram.reduce(0) { $0 + Int($1) } == n * 4, "total count")
     }
+
+    /// Smoke test for the whole-image convenience overload — the entry point
+    /// `exportRender` uses. It's a thin upload+render wrapper, so this pins
+    /// the contract (dims, encoded range, full histogram), not the math.
+    @Test func exportEntryPointRendersWholeImage() throws {
+        let pipeline = try #require(GPU.pipeline, "Metal unavailable")
+        let pixels = try Fixtures2.floats("synthetic64/input.bin")
+        let input = RGBImage(pixels: pixels, width: 64, height: 64)
+        let analysis = ExposureKernel.analyze(linearImage: input, analysisBuffer: 0.05)
+        let params = ExposureKernel.deriveRenderParams(ExposureSettings(), analysis)
+
+        let (encoded, histogram) = try pipeline.render(image: input, params: params)
+        #expect(encoded.width == 64 && encoded.height == 64)
+        let inRange = encoded.pixels.allSatisfy { $0 >= 0 && $0 <= 1 }
+        #expect(inRange)
+        #expect(histogram.count == 1024)
+        let total = histogram.reduce(0) { $0 + Int($1) }
+        #expect(total == 64 * 64 * 4)
+    }
 }

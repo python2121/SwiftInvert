@@ -52,7 +52,12 @@ func historyLabel(from a: ExposureSettings, to b: ExposureSettings) -> String {
     add("Fine rotation", a.fineRotation != b.fineRotation, num(b.fineRotation, "%.1f°"))
     add("Flip", a.flipHorizontal != b.flipHorizontal)
     add(b.cropRect == nil ? "Crop cleared" : "Crop", a.cropRect != b.cropRect)
-    add(b.analysisRect == nil ? "Analysis region cleared" : "Analysis region", a.analysisRect != b.analysisRect)
+    // analysisRectFineRotation is the angle the region was drawn at — it only
+    // ever changes as part of a region edit, so it shares the label.
+    add(
+        b.analysisRect == nil ? "Analysis region cleared" : "Analysis region",
+        a.analysisRect != b.analysisRect
+            || a.analysisRectFineRotation != b.analysisRectFineRotation)
 
     switch changes.count {
     case 0: return "Edit"

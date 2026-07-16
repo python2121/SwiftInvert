@@ -40,4 +40,17 @@ import Testing
         }
         _ = bpr
     }
+
+    /// The 8-bit branch (JPEG exports take it) was previously untested: pin
+    /// the shape and that the bytes are the straight 0.5-rounded quantization.
+    @Test func eightBitEncodedImage() throws {
+        var img = RGBImage(width: 2, height: 1)
+        for ch in 0..<3 { img[0, 0, ch] = 0.5 }
+        for ch in 0..<3 { img[0, 1, ch] = 1.0 }
+        let out = try #require(ColorIO.cgImage(fromEncoded: img, bitsPerComponent: 8))
+        #expect(out.bitsPerComponent == 8 && out.bitsPerPixel == 24)
+        #expect(out.colorSpace?.name == CGColorSpace.rommrgb)
+        let data = try #require(out.dataProvider?.data as Data?)
+        #expect(data[0] == 128 && data[3] == 255)  // 0.5*255+0.5 → 128; 1.0 → 255
+    }
 }

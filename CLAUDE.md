@@ -280,6 +280,25 @@ verifies every stage boundary:
 - GPU vs fixtures and GPU vs CPU reference at NegPy's own gates (mean<0.01,
   max<0.04); the rgba8 display path within 1.5/255 of the float path.
 
+Beyond parity, the suite covers the seams the fixtures reach only
+transitively, plus the app layer:
+- `SidecarCodecTests` + `HistoryLabelTests` are **drift-catchers**: each pins
+  `ExposureSettings`' stored-property count (45) and exercises every field —
+  adding a settings field fails both until the decoder, `HistoryLabels`, and
+  the tests' mutation lists all get their line (see the control checklist).
+- `ImagePipelineSeamTests`: the prepare/finalize cache split (a reused
+  `Prepared` must equal fresh analysis; offsets may only move the neutral
+  axis) and `RGBImage.downsampled` (dims/identity/mean preservation).
+- **`SwiftInvertTests`** — the app-target suite. SwiftPM tests the `@main`
+  executable directly (`@testable import SwiftInvert` — works since Swift
+  5.5, verified under the Makefile's CLT flags): `SidecarStore` file behavior
+  (legacy `.negswift.json` fallback + delete-on-save),
+  `ExportOptions.destinationURL`, `DensitometerState` probe mapping,
+  `ImageConversion` shapes. Views/AppModel/ImageSession stay UI-verified —
+  and pointer paths need a HUMAN pointer: synthetic mouse events never reach
+  the unbundled binary (no TCC grant, won't take focus), so verify hover
+  logic headlessly (`negcli meter` pattern) and hand off the gesture.
+
 **Upstream review log: see `UPSTREAM.md`** — it records the last NegPy
 commit reviewed (the baseline for "what changed upstream?" requests) and
 the port/skip decisions per review. Update it after every upstream review.
@@ -379,8 +398,11 @@ values where needed):
 ## Adding a new adjustment control (checklist)
 
 1. `ExposureSettings`: field + default, **plus a line in the custom
-   decoder** (sidecar back-compat) — and `RenderParams` + its init if the
-   kernel needs it.
+   decoder** (sidecar back-compat), **plus `historyLabel`**
+   (HistoryLabels.swift) — and `RenderParams` + its init if the kernel
+   needs it. Two tripwires enforce this: `SidecarCodecTests` and
+   `HistoryLabelTests` both pin the stored-property count (45) and mutate
+   every field, so `make test` fails until all the lists have their line.
 2. `deriveRenderParams`: map settings → params (fold into existing params
    where the algebra allows — see overall contrast/exposure — before adding
    uniforms).
