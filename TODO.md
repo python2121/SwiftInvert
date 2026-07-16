@@ -56,10 +56,13 @@ negadoctor, and standard macOS app conventions.
 - [ ] **Clipping "blinkies"** overlay on the image (shadow/highlight clip
   masks; the histogram indicators already compute this) — S.
 - [ ] **Crop aspect-ratio presets** (original, 2:3, 4:5, 5:7, 1:1, free) — S/M.
-- [ ] **Spot densitometer + density histogram** (NegPy 0.37 `77c8113`,
-  flagged in UPSTREAM.md) — M. Hover readout of negative density/zone.
-- [ ] **"Negative character" stat** (measured density range vs default →
-  "flat ≈N−1 / contrasty ≈N+1" diagnostic; NegPy `stats.py`) — S.
+- [x] **Spot densitometer** (NegPy 0.37 `77c8113`) — hover the canvas → D +
+  zone in the control bar, with a zone strip; `negcli meter` is the headless
+  twin. The `density_histogram` GPU metric was deliberately NOT ported (it
+  feeds NegPy's H&D chart, which we don't ship — see Deferred below).
+- [x] **"Negative character" stat** (measured density range vs default →
+  "flat ≈N−1 / contrasty ≈N+1" diagnostic; NegPy `stats.py`) — shown under
+  the Grade slider.
 - [ ] **Midtone gamma (Snap) slider** (deliberately-skipped NegPy port;
   cheap to add) — S.
 - [ ] **Export sharpening** (unsharp after downscale) — S/M. We ship no
@@ -75,6 +78,11 @@ negadoctor, and standard macOS app conventions.
 - Per-channel R/G/B trims, Split Grade, Zone Density (NegPy's convergent
   equivalents of our tone controls — revisit only if per-channel crossover
   correction is needed).
+- NegPy's `density_histogram` (120-bin GPU metric) and the H&D chart it
+  feeds; the densitometer's ΔD-above-base per-channel figure (needs an
+  actor round-trip per pointer move). Revisit only with an H&D chart.
+- NegPy's `RenderMemo` (memoized last-displayed render): our warm-tower
+  re-render is ~5 ms, so it buys nothing here (see UPSTREAM.md 2026-07-15).
 - Dust/scratch removal (NegPy retouch is a large subsystem), C-41 denoise,
   crosstalk profile editor, LUT film looks, camera-scanning/tethering,
   RGB narrowband scanning, contact sheets, flat/log export intent.

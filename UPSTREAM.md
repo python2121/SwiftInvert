@@ -103,10 +103,12 @@ exactly what truncation fabricates.
   brightest tone reads D 0.06 on every frame — exactly `K.dMin`, the paper white
   the pipeline targets — and the character gates fire correctly (0.902 → normal,
   0.710 / 0.494 → flat).
-- **Unverified:** the hover interaction itself. Synthetic mouse events need
-  accessibility permission the unbundled binary lacks (the app never takes
-  focus), and the *known-working* histogram hover doesn't respond to them
-  either — so the harness, not the code, is what failed. Needs a human pointer.
+- ~~**Unverified:** the hover interaction itself~~ — **verified by hand
+  2026-07-15**: hovering the canvas meters correctly. (The original gap:
+  synthetic mouse events can't reach the unbundled binary — no accessibility
+  permission, app won't take focus from a shell — and the known-working
+  histogram hover ignored them too, proving the harness was what failed.
+  Lesson kept: GUI hover paths in this app need a human pointer to verify.)
 
 **New candidate (perf/architecture, not pipeline) — half ported, half declined:**
 - `938fe9e` "halve preview-load memory; instant frame switching".

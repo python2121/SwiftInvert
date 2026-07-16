@@ -36,13 +36,16 @@ Command Line Tools are enough, no Xcode; Metal shaders compile at runtime.
   (R/Y/G/B hue + saturation that never moves neutrals), vibrance/saturation
 - Crop, rotate/flip, live straighten with composition guides; per-image
   undo/redo history; copy/paste adjustments; HQ full-resolution preview
+- Darkroom read-outs: a spot densitometer (hover → print density + zone,
+  with a zone strip) and a negative-character diagnostic (flat/normal/
+  contrasty vs the paper grade's expectation)
 
 ## Development
 
 ```bash
 swift run -c release SwiftInvert   # run from source (debug decode is ~10x slower)
 make test                   # parity tests against NegPy-dumped fixtures (not bare `swift test`)
-.build/release/negcli       # headless pipeline driver (decode/thumb/render/bench)
+.build/release/negcli       # headless pipeline driver (decode/thumb/render/bench/meter)
 ```
 
 ## Architecture

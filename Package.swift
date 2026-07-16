@@ -42,5 +42,12 @@ let package = Package(
             dependencies: ["MetalRenderKit", "NegativeKit"],
             swiftSettings: v5
         ),
+        // App-layer logic (SwiftPM can test @main executables since 5.5):
+        // history labels, sidecar IO, export options, densitometer probe.
+        .testTarget(
+            name: "SwiftInvertTests",
+            dependencies: ["SwiftInvert", "NegativeKit"],
+            swiftSettings: v5
+        ),
     ]
 )

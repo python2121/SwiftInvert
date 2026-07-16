@@ -21,7 +21,7 @@ B&W/E6, papers, crosstalk, retouch, or toning.
 swift build                 # debug build
 swift run -c release SwiftInvert   # the app (release: debug decode is ~10x slower)
 make test                   # Swift Testing suite — MUST use make, not bare `swift test`
-swift build -c release && .build/release/negcli   # headless CLI (decode/thumb/render/bench)
+swift build -c release && .build/release/negcli   # headless CLI (decode/thumb/render/bench/meter)
 make app                    # package self-contained dist/SwiftInvert.app (bundles Homebrew dylibs)
 make install                # copy the bundle to /Applications
 
@@ -246,7 +246,7 @@ returns **read-back buffers, never live textures** — intermediate textures
 are cached per size (≤4 MP; export sizes are not retained) and a later render
 overwrites them. Violating this segfaulted the concurrent test runner once.
 Uniform structs are mirrored byte-for-byte in `ShaderTypes.swift`;
-`LayoutTests` pins strides (Norm 48, Curve 224) and key offsets — update both
+`LayoutTests` pins strides (Norm 48, Curve 256) and key offsets — update both
 sides plus the asserts together.
 
 ### 5. Color management
