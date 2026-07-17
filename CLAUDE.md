@@ -333,7 +333,7 @@ values where needed):
   (median channel pinned), so only color moves. nil = bit-identical to NegPy's
   path (fixtures unaffected). The VALUE is stored, not the rect: channel
   medians are orientation-invariant and paste across a roll,
-- NegPy's default lab sharpen (0.5 since 0.38) is not implemented,
+- NegPy's default lab sharpen (0.25 since 8bc9678; was 0.5 earlier in 0.38) is not implemented,
 - SwiftInvert-only controls: exposure stops, tone controls
   (shadows/highlights ± contrasts), overall contrast, temp/tint, 3-band
   color grading, pre-saturation — all identity-at-default so the NegPy

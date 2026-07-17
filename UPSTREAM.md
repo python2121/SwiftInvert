@@ -9,12 +9,12 @@ and appending a history entry.
 ## Last reviewed
 
 ```
-commit:   4a669ed  ("fix: override export_fmt/export_color_space from session
-          in all_saved scope (#527) (#534)")
-reviewed: 2026-07-16
-fixtures: Tests/Fixtures/ dumped from 6b841a1 (2026-07-15: Auto Grade constants
-          + paper_dmin/true_black default flips ported; the dump manifest now
-          records true_black per config and both parity harnesses read it).
+commit:   0ea27d2  ("initial changelog update for 0.38.0")
+reviewed: 2026-07-17
+fixtures: Tests/Fixtures/ dumped from 6b841a1 (still valid — the one pipeline
+          change since, Dye Mute 8bc9678, lives in parameter derivation
+          outside every fixture-pinned stage; apply_saturation itself is
+          unchanged, so lab_color fixtures hold too).
 ```
 
 ## How to run a review
@@ -40,6 +40,46 @@ updates this file. The manual procedure, for reference:
 6. Update the **Last reviewed** marker and append to the history below.
 
 ## Review history
+
+### 2026-07-17 — through `0ea27d2` (0.38.0 tail, 6 commits)
+
+**One pipeline-relevant commit, and it's a golden move:** `8bc9678`
+**Dye Mute — grade-coupled chroma damping**, ON by default upstream (0.5),
+relocation goldens regenerated. Mechanism: `damp = (slope_min/slope_g)^strength`
+(green reference slope, clamped) folded into the Lab saturation multiplier at
+parameter-derivation time — per-channel print curves multiply channel
+separation by the slope, so chroma inflates with grade; the damping counters
+it ("mimicking paper dyes' unwanted absorptions"). No WGSL/uniform change
+upstream; the identical fold works here (`colorPopActive` reads derived
+params, so `params.saturation × damp` self-activates the pass). Port cost
+~15 lines + tests, NO fixture re-dump (derivation-side; `apply_saturation`
+unchanged). `dump_fixtures.py` signatures unaffected (new function only).
+
+**Deliberately skipped (for now) — reopening condition recorded:** Dye Mute
+is not ported despite being a golden move. Their motivation was a regression
+fix: the ProPhoto output bug had been squeezing their gamut for releases;
+fixing it (`07e3f8f`) suddenly exposed full-gamut chroma their users never
+saw, reading oversaturated at hard grades. **We never had the bug** — our
+color has been full-gamut ProPhoto from day one, and our deliberate
+divergences (preSaturation 1.15, redHue +0.5) were A/B-tuned ON that gamut
+toward MORE color, not less. Adopting their 0.5 default would desaturate our
+established default look ~15% at typical grades (up to ~55% at slope 10);
+adopting the slider at 0 would add exactly the kind of dormant control the
+2026-07-16 removals just cleared out. Reopen if hard-grade frames ever
+visibly oversaturate on real rolls — the mechanism above is the ready-made
+fix, and one negcli A/B decides the default.
+
+Also in `8bc9678`: default lab sharpen 0.5 → 0.25 (we don't implement lab
+sharpen — divergence note updated in CLAUDE.md).
+
+**Not applicable (this range):** `5811662` crop-ratio picker consolidation
+(their UI; NOTE their final ratio list — 7:5, 16:9, 16:10, US Letter — as
+reference for our own TODO'd aspect presets), `611b251` Finish/geometry
+sidebar cleanup + auto-narrowband-on-RGB-scan (capture-side scanning stack),
+`0ca43de` lint, `1c07529` tooltips, `0ea27d2` changelog. Changelog-only
+item: "Cast Removal strength sticks across frames" is their session-sticky
+settings model — ours is per-image sidecars + explicit Copy/Paste, an
+architectural divergence, not a gap.
 
 ### 2026-07-16 — through `4a669ed` (0.38.0 → unreleased, 9 commits)
 
