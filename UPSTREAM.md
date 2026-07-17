@@ -369,3 +369,33 @@ needed. Only two commits touched `features/exposure/` at all:
 **Known-unreviewed at time of writing:** local NegPy has already pulled past
 the marker (14 commits, `cac6396..c558a16`, mostly camera-scanning work by
 the titles) — NOT yet reviewed for pipeline changes.
+
+### 2026-07-16 — film-base sampling and the cast experiments REMOVED
+
+The 2026-07-15 "Ported" entry for `77c8113`-adjacent film-base sampling is
+superseded: **Sample Film Base was removed** after its trial, together with
+the three patent-derived cast experiments built 2026-07-16 (saturation-
+weighted colour metering, tempered cast removal, roll balance — see
+PLAN-cast-experiments.md at `2b73c5d` for the mechanisms). All were
+default-off and parity-clean; all verified mechanically correct end to end.
+
+**Why removed:** the trial standard was "visibly better on real rolls", and
+none met it. On neutral-rich frames every method converges with the existing
+statistical estimate BY DESIGN (film-base agreed within 0.02D; weighted
+metering moved bounds ~0.01D; tempered cast at shipping constants shifts
+pixels ~1/7 of an 8-bit step). The existing two-axis bounds + confidence-
+gated neutral axis already handle these rolls well; the added UI surface
+wasn't paying for itself. Direction judged wrong by the user 2026-07-16.
+
+**Do not re-propose without new evidence** — specifically, a real roll where
+casts visibly fail (dominant color, no neutrals, no usable rebate). If that
+roll appears, the removed work is complete and recoverable:
+`fed271a` (film-base sampling), `fa3e095` (weighted metering),
+`36ae788` (tempered cast), `420f583` (roll balance), `2b73c5d` (plan) —
+local-only commits, never pushed, reachable via reflog until gc.
+
+Kept: the NegPy 0.38 constants port (`1c1c3cb`, this entry's parent), the
+spot densitometer / zone strip / negative character (shipped earlier and in
+regular use), and the research findings in the 2026-07-16 conversation.
+The densitometer remains the darkroom read-out surface; sidecars and the
+one roll-profile dotfile were scrubbed of the removed features' keys.
