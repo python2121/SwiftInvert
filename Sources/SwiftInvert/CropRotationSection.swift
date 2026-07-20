@@ -123,15 +123,14 @@ struct CropRotationSection: View {
                 .buttonStyle(.bordered)
                 .tint(model.toolMode == .crop ? Color.accentColor : nil)
                 .help("Crop & straighten: adjust the box while the image rotates behind it; the box auto-fits as the angle changes. Return or the button commits; Esc cancels.")
-                if model.settings.cropRect != nil {
+                if model.settings.cropRect != nil || abs(model.settings.fineRotation) > 1e-9 {
                     Button {
-                        model.pendingHistoryLabel = "Crop cleared"
-                        model.settings.cropRect = nil
+                        model.clearCropAndStraighten()
                     } label: {
                         Image(systemName: "xmark.circle.fill")
                     }
                     .buttonStyle(.borderless)
-                    .help("Clear crop")
+                    .help("Clear crop and straighten")
                 }
             }
 

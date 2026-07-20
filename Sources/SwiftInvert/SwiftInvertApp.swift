@@ -94,11 +94,12 @@ struct SwiftInvertApp: App {
                 Toggle("Crop or Straighten", isOn: toolBinding(.crop))
                     .keyboardShortcut("k")
                     .disabled(model.selection == nil)
-                Button("Clear Crop") {
-                    model.pendingHistoryLabel = "Crop cleared"
-                    model.settings.cropRect = nil
+                Button("Clear Crop & Straighten") {
+                    model.clearCropAndStraighten()
                 }
-                .disabled(model.settings.cropRect == nil)
+                .disabled(
+                    model.settings.cropRect == nil
+                        && abs(model.settings.fineRotation) < 1e-9)
                 Divider()
                 Toggle("Crop for Analysis", isOn: toolBinding(.analysisRegion))
                     .keyboardShortcut("k", modifiers: [.command, .shift])

@@ -99,11 +99,14 @@ struct CropBoxOverlay: View {
 
                 // Interior: move (clamped along the drag so the box never
                 // leaves the rotated frame and never shrinks while moving).
+                // Same shape→position→gesture order as the corner handles:
+                // hit-testing after .offset() landed at the pre-offset frame,
+                // so interior drags never reached this gesture.
                 Rectangle()
                     .fill(.clear)
                     .frame(width: max(boxRect.width, 1), height: max(boxRect.height, 1))
-                    .offset(x: boxRect.minX, y: boxRect.minY)
                     .contentShape(Rectangle())
+                    .position(x: boxRect.midX, y: boxRect.midY)
                     .gesture(moveGesture)
 
                 // Corner handles (resize about the opposite corner).

@@ -217,6 +217,22 @@ final class AppModel {
         settings = next
     }
 
+    /// The ⨯ next to the Crop button and the Image-menu item: one action
+    /// resets both geometry edits (no crop remap needed — the crop goes too).
+    func clearCropAndStraighten() {
+        let hadCrop = settings.cropRect != nil
+        let hadAngle = abs(settings.fineRotation) > 1e-9
+        guard hadCrop || hadAngle else { return }
+        pendingHistoryLabel =
+            hadCrop && hadAngle
+            ? "Crop & straighten cleared"
+            : hadCrop ? "Crop cleared" : "Straighten cleared"
+        var next = settings
+        next.cropRect = nil
+        next.fineRotation = 0
+        settings = next
+    }
+
     func rotateClockwise() {
         pendingHistoryLabel = "Rotate 90° CW"
         settings.rotation = ((settings.rotation + 90) % 360 + 360) % 360 }
