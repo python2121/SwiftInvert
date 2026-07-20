@@ -331,11 +331,10 @@ cases; per-channel crossover trims are a candidate future feature.
 **Deliberate divergences from NegPy** (fixture tests pin the NegPy-neutral
 values where needed):
 - `preSaturation` default **1.15** (NegPy has no equivalent; parity tests set 1.0),
-- `redHue` default **+0.5** (Color Mixer, SwiftInvert-only: C-41 reds skew
-  magenta out of the box, +0.5 = 15° toward orange; parity tests pin 0).
-  **RE-EVALUATE under Adobe RGB**: the reds-toward-magenta it counters
-  matches the ProPhoto-interpretation hue skew the b3490eb port removed at
-  the root — the correct-primaries output may want redHue back at 0,
+- ~~`redHue` default +0.5~~ RETIRED 2026-07-20: it countered reds skewing
+  magenta, which was the ProPhoto-interpretation hue skew the b3490eb port
+  removed at the root — default is 0 again (sidecars that explicitly set a
+  redHue keep their value; keyless sidecars now decode to neutral),
 - Color Mixer band constants were tuned in the old ROMM/D50 Lab; re-checked
   numerically after b3490eb (real-content reds/greens/sky-blues still land
   in-band; only colorimetric-primary blue sits at the feather edge, which

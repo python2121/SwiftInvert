@@ -23,8 +23,7 @@ struct ColorMixerSection: View {
             case .blue: return \.blueHue
             }
         }
-        /// Reset target for the Hue slider (red diverges: +0.5 default).
-        var hueDefault: Double { self == .red ? 0.5 : 0 }
+        var hueDefault: Double { 0 }
 
         var saturationKeyPath: WritableKeyPath<ExposureSettings, Double> {
             switch self {

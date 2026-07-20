@@ -19,7 +19,6 @@ func settingsFrom(_ config: [String: Any]) -> ExposureSettings {
     // NegPy fixtures predate pre-saturation (a SwiftInvert-only default of 1.15);
     // parity requires the neutral value.
     s.preSaturation = 1.0
-    s.redHue = 0  // Color Mixer red default is +0.5 (SwiftInvert-only); pin off
     s.trueBlack = e["true_black"] as! Bool
     s.density = e["density"] as! Double
     s.grade = e["grade"] as! Double

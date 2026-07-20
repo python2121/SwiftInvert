@@ -92,10 +92,10 @@ thresholds baked in the ROMM toe), pre-saturation chroma margin 1.05 →
 content blues land 240–265° in the new Lab — the band constants
 themselves survive). ExportColorSpace's wide option relabeled Adobe RGB
 (case name kept for sticky-JSON compat). Export-note: existing exports
-re-render slightly different, as upstream's changelog warns. Follow-up
-recorded in CLAUDE.md divergences: re-evaluate redHue +0.5 (it counters
-the hue skew this port removes at the root) and an on-scan mixer-band
-re-tune pass. 132 tests green incl. GPU parity against Adobe-world
+re-render slightly different, as upstream's changelog warns. Follow-ups:
+redHue +0.5 RETIRED same day (it countered the hue skew this port removes
+at the root; default 0 again, explicit sidecar values preserved); the
+on-scan mixer-band re-tune pass remains open. 132 tests green incl. GPU parity against Adobe-world
 fixtures; bench unchanged.
 
 **Coupled to the above — do NOT port separately:** `2db0470` + `088c393`

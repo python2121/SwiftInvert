@@ -60,10 +60,11 @@ public struct ExposureSettings: Codable, Equatable, Sendable {
     // red→orange, yellow→green, green→teal, blue→purple) and saturation
     // tames/boosts them — the neutral axis never moves, so these fix "the
     // reds are too red" without touching white balance.
-    // redHue defaults +0.5 (SwiftInvert divergence, like preSaturation): C-41
-    // reds skew magenta out of the box; a 15° nudge toward orange reads as
-    // the "correct" red on most stocks. Parity fixtures must pin this to 0.
-    public var redHue: Double = 0.5
+    // redHue defaulted +0.5 through the ROMM era: it countered reds skewing
+    // magenta — which turned out to be the ProPhoto-interpretation hue skew
+    // the b3490eb Adobe RGB port removed at the root, so the divergence was
+    // retired (2026-07-20) and the default is neutral again.
+    public var redHue: Double = 0
     public var redSaturation: Double = 1.0
     public var yellowHue: Double = 0
     public var yellowSaturation: Double = 1.0
@@ -143,7 +144,7 @@ public struct ExposureSettings: Codable, Equatable, Sendable {
         overallContrast = d(.overallContrast, 0)
         vibrance = d(.vibrance, 1.0)
         saturation = d(.saturation, 1.0)
-        redHue = d(.redHue, 0.5)
+        redHue = d(.redHue, 0)
         redSaturation = d(.redSaturation, 1.0)
         yellowHue = d(.yellowHue, 0)
         yellowSaturation = d(.yellowSaturation, 1.0)
