@@ -9,38 +9,41 @@ import Testing
 
     // MARK: - prepare/finalize (ImageSession's two-tier cache contract)
 
-    /// A cached `Prepared` reused across offset changes must match a fresh
-    /// end-to-end analysis: prepare must be deterministic and finalize must
-    /// not mutate its input. This is exactly what ImageSession does on every
-    /// white/black-point drag.
+    /// A cached `Prepared` reused later must match a fresh end-to-end
+    /// analysis: prepare must be deterministic and finalize must not mutate
+    /// its input — the contract behind ImageSession's analysis cache.
     @Test func reusedPreparedMatchesFreshAnalysis() {
         let image = Synthetic64.input
         let prepared = ExposureKernel.prepare(linearImage: image, analysisBuffer: 0.05)
-        for (wp, bp) in [(0.0, 0.0), (0.08, 0.0), (0.0, -0.06), (0.05, 0.05)] {
-            let cached = ExposureKernel.finalize(
-                prepared, whitePointOffset: wp, blackPointOffset: bp)
-            let fresh = ExposureKernel.analyze(
-                linearImage: image, analysisBuffer: 0.05,
-                whitePointOffset: wp, blackPointOffset: bp)
-            #expect(cached == fresh, "offsets (\(wp), \(bp))")
-        }
+        let cached = ExposureKernel.finalize(prepared)
+        let fresh = ExposureKernel.analyze(linearImage: image, analysisBuffer: 0.05)
+        #expect(cached == fresh)
+        // And finalize is pure: a second call agrees with the first.
+        #expect(ExposureKernel.finalize(prepared) == cached)
     }
 
-    /// The split's reason to exist: everything except the neutral axis is
-    /// offset-independent. If a prepare-tier meter ever started reading the
-    /// final bounds, the cache would serve stale values on wp/bp drags.
-    @Test func offsetsOnlyMoveTheNeutralAxis() {
+    /// The 2125a34 semantics: the neutral axis is measured against the
+    /// PRE-trim base bounds (the film's cast is a source property), so the
+    /// whole analysis is offset-independent — while the white/black-point
+    /// handles still reach the RENDER through derive-time finalBounds.
+    @Test func neutralAxisIsPreTrimAndOffsetsStillReachTheRender() {
         let prepared = ExposureKernel.prepare(linearImage: Synthetic64.input, analysisBuffer: 0.05)
-        let neutral = ExposureKernel.finalize(prepared)
-        let offset = ExposureKernel.finalize(
-            prepared, whitePointOffset: 0.10, blackPointOffset: -0.08)
-        #expect(offset.baseBounds == neutral.baseBounds)
-        #expect(offset.anchor == neutral.anchor)
-        #expect(offset.texturalRange == neutral.texturalRange)
-        #expect(offset.shadowRefs == neutral.shadowRefs)
-        // The bands really did shift on this fixture — the neutral axis is the
-        // offset-dependent part, not accidentally invariant too.
-        #expect(offset.neutralMid != neutral.neutralMid)
+        let analysis = ExposureKernel.finalize(prepared)
+
+        // The axis is exactly the base-bounds measurement.
+        let direct = Meters.neutralAxis(grid: prepared.grid, bounds: prepared.baseBounds)
+        #expect(analysis.neutralMid == direct?.mid)
+        #expect(analysis.neutralShadow == direct?.shadow)
+        #expect(analysis.neutralConfidence == direct?.confidence)
+
+        // Offsets are a render-side fold: finalBounds moves, analysis doesn't.
+        var settings = ExposureSettings()
+        settings.whitePointOffset = 0.10
+        settings.blackPointOffset = -0.08
+        let params = ExposureKernel.deriveRenderParams(settings, analysis)
+        #expect(
+            params.finalBounds
+                == analysis.baseBounds.applyingOffsets(whitePoint: 0.10, blackPoint: -0.08))
     }
 
     // MARK: - RGBImage.downsampled

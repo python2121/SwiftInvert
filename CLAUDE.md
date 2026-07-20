@@ -104,8 +104,10 @@ made the 0° straighten base's look differ from the committed re-bake).
 Rendering/export still bake the angle; `exportRender` shares `prepare()`,
 so preview and export agree.
 
-Split into two tiers so white/black-point drags stay fast
-(`ExposureKernel.prepare` ≈150 ms once per image/crop; `finalize` ≈25 ms):
+Two stages, both offset-independent since the 2125a34 port
+(`ExposureKernel.prepare` ≈150 ms once per image/crop; `finalize` ≈25 ms,
+cached with it — white/black-point drags re-run NO analysis at all; the
+offsets fold into `finalBounds` at derive time only):
 
 **`prepare(linearImage:cropRect:analysisRect:analysisBuffer:)` →
 `Prepared`** (offset-independent, cached per rect state):
@@ -134,19 +136,20 @@ Split into two tiers so white/black-point drags stay fast
    - `texturalRange`: |P90 − P10| of raw log luma — drives Auto Contrast.
    - `shadowRefs`: P98 per channel — the cast-removal fallback tie.
 
-**`finalize(prepared, whitePointOffset, blackPointOffset)` →
-`ExposureAnalysis`** (the only offset-dependent meter): the **neutral axis**
-(NegPy `measure_neutral_axis_from_log`) measured against the final
-(offset-adjusted) bounds: three normalized-luma bands (highlight 0.10–0.30,
+**`finalize(prepared)` → `ExposureAnalysis`**: the **neutral axis**
+(NegPy `measure_neutral_axis_from_log`) measured against the PRE-trim base
+bounds — NegPy 2125a34: the film's cast is a source property, so creative
+WP/BP trims must not perturb it (their GPU always measured pre-trim; the
+CPU side we'd ported was the bug): three normalized-luma bands (highlight 0.10–0.30,
 mid 0.40–0.60, shadow 0.72–0.92); per band, keep the lowest-chroma 30%
 (≥64 px, median chroma ≤0.35 cap) and take per-channel **raw-log medians**;
 `confidence = 1 − midChroma/cap` gates Auto cast removal. Returns nil mid or
 shadow → no neutral axis (shadow-ref fallback used downstream).
 
 `ImageSession` caches: decode (per image) → oriented preview (per
-orientation) → `Prepared` (per rects) → `ExposureAnalysis` (per rects +
-offsets) → GPU source textures (per crop). The "Analyzing…" indicator shows
-only when `prepare` will run.
+orientation) → `Prepared` + `ExposureAnalysis` (per rects) → GPU source
+textures (per crop). The "Analyzing…" indicator shows only when `prepare`
+will run.
 
 `AppModel.sessionLRU` retains the **2** most recent sessions (active + the one
 navigated from), so arrowing back to a frame doesn't rebuild the whole tower.
@@ -306,6 +309,8 @@ For "what changed in NegPy?" requests, run the **`/negpy-review` skill**
 (`.claude/skills/negpy-review/`) — it fetches upstream, triages the diff
 around the inversion pipeline, and maintains UPSTREAM.md.
 
+Neutral-axis semantics are synced with NegPy `2125a34` (pre-trim bounds;
+fixtures unaffected — all dump configs use zero offsets).
 Kernel constants are synced with **NegPy 0.38** (`6b841a1`: Auto Grade retune
 `auto_grade_target` 0.55 / `auto_grade_strength` 0.3, defaults `paper_dmin`
 off + `true_black` on — plus the 0.36 set: `toe_height` 0.90 with the

@@ -231,9 +231,11 @@ do {
         let prep = ExposureKernel.prepare(linearImage: img)
         let prepMS = -tPrep.timeIntervalSinceNow * 1000
         let tFin = Date()
-        for i in 0..<20 { _ = ExposureKernel.finalize(prep, blackPointOffset: Double(i) * 0.001) }
+        // Since the 2125a34 port, finalize is offset-independent — wp/bp
+        // drags re-run no analysis; this times the (now once-per-rect) cost.
+        for _ in 0..<20 { _ = ExposureKernel.finalize(prep) }
         print(String(
-            format: "analysis: prepare %.1f ms, finalize (wp/bp tick) %.1f ms",
+            format: "analysis: prepare %.1f ms, finalize %.1f ms",
             prepMS, -tFin.timeIntervalSinceNow * 1000 / 20))
         let analysis = ExposureKernel.finalize(prep)
         let pipeline = try RenderPipeline()

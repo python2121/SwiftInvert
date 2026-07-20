@@ -74,10 +74,10 @@ public enum Meters {
         return refs
     }
 
-    /// measure_neutral_axis_from_log. `bounds` must be the FINAL bounds (with
-    /// white/black-point offsets applied), matching NormalizationProcessor.
-    /// Runs on every white/black-point tick, so it's single-pass and
-    /// allocation-lean.
+    /// measure_neutral_axis_from_log. `bounds` is the PRE-trim base bounds
+    /// (NegPy 2125a34: the film's cast is a source property; user WP/BP
+    /// trims don't perturb it — their GPU always measured pre-trim, and the
+    /// CPU side was standardized to match). Single-pass and allocation-lean.
     public static func neutralAxis(grid: RGBImage, bounds: LogNegativeBounds) -> NeutralAxisRefs? {
         let n = grid.width * grid.height
 

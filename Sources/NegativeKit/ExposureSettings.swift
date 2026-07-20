@@ -306,14 +306,14 @@ public enum ExposureKernel {
         )
     }
 
-    /// The cheap, offset-dependent tail: only the neutral axis reads the final
-    /// bounds (its luma-band membership shifts with the offsets, as in NegPy).
-    public static func finalize(
-        _ prepared: Prepared, whitePointOffset: Double = 0, blackPointOffset: Double = 0
-    ) -> ExposureAnalysis {
-        let final = prepared.baseBounds.applyingOffsets(
-            whitePoint: whitePointOffset, blackPoint: blackPointOffset)
-        let neutral = Meters.neutralAxis(grid: prepared.grid, bounds: final)
+    /// Assemble the analysis from a Prepared. The neutral axis is measured
+    /// against the PRE-trim base bounds (NegPy 2125a34): the film's inherent
+    /// cast is a source property, and creative white/black-point trims must
+    /// not perturb its measurement — so the whole analysis is now
+    /// offset-independent (offsets fold into finalBounds at derive time
+    /// only, and wp/bp drags re-run no analysis at all).
+    public static func finalize(_ prepared: Prepared) -> ExposureAnalysis {
+        let neutral = Meters.neutralAxis(grid: prepared.grid, bounds: prepared.baseBounds)
         return ExposureAnalysis(
             baseBounds: prepared.baseBounds,
             anchor: prepared.anchor,
@@ -330,15 +330,12 @@ public enum ExposureKernel {
         linearImage: RGBImage,
         cropRect: NormalizedRect? = nil,
         analysisRect: NormalizedRect? = nil,
-        analysisBuffer: Double = defaultAnalysisBuffer,
-        whitePointOffset: Double = 0,
-        blackPointOffset: Double = 0
+        analysisBuffer: Double = defaultAnalysisBuffer
     ) -> ExposureAnalysis {
         finalize(
             prepare(
                 linearImage: linearImage, cropRect: cropRect, analysisRect: analysisRect,
-                analysisBuffer: analysisBuffer),
-            whitePointOffset: whitePointOffset, blackPointOffset: blackPointOffset)
+                analysisBuffer: analysisBuffer))
     }
 
     /// PhotometricProcessor's parameter derivation (the cheap per-slider path).

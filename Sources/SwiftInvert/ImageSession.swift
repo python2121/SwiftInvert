@@ -48,22 +48,16 @@ actor ImageSession {
     }
     private var orientKey: OrientKey?
 
-    /// Two-tier analysis cache: the expensive prepared stage depends only on
-    /// the pre-process rects; the cheap finalize (neutral axis) also depends on
-    /// the white/black-point offsets — so wp/bp drags never re-run the grid.
+    /// Analysis cache: one tier. Since the 2125a34 port the whole analysis
+    /// (neutral axis included) is offset-independent — wp/bp handle drags
+    /// re-run NOTHING here; offsets fold into finalBounds at derive time.
     private struct PreparedKey: Equatable {
         var analysisRect: NormalizedRect?
         var cropRect: NormalizedRect?
     }
-    private struct AnalysisKey: Equatable {
-        var prepared: PreparedKey
-        var whitePoint: Double
-        var blackPoint: Double
-    }
     private var prepared: ExposureKernel.Prepared?
     private var preparedKey: PreparedKey?
     private var analysis: ExposureAnalysis?
-    private var analysisKey: AnalysisKey?
 
     /// GPU source textures, uploaded once per (image, crop) — slider changes
     /// only re-run the compute passes on the cached texture.
@@ -145,15 +139,8 @@ actor ImageSession {
             preparedKey = pKey
             analysis = nil
         }
-        let aKey = AnalysisKey(
-            prepared: pKey,
-            whitePoint: settings.whitePointOffset, blackPoint: settings.blackPointOffset)
-        if analysis == nil || aKey != analysisKey {
-            analysis = ExposureKernel.finalize(
-                prepared!,
-                whitePointOffset: settings.whitePointOffset,
-                blackPointOffset: settings.blackPointOffset)
-            analysisKey = aKey
+        if analysis == nil {
+            analysis = ExposureKernel.finalize(prepared!)
         }
         return (preview!, analysis!)
     }
@@ -259,9 +246,7 @@ actor ImageSession {
             : meterImage
         let prepared = ExposureKernel.prepare(
             linearImage: meterImage, cropRect: settings.cropRect, analysisRect: settings.analysisRect)
-        let analysis = ExposureKernel.finalize(
-            prepared, whitePointOffset: settings.whitePointOffset,
-            blackPointOffset: settings.blackPointOffset)
+        let analysis = ExposureKernel.finalize(prepared)
         let params = ExposureKernel.deriveRenderParams(settings, analysis)
         let image = settings.cropRect.map { oriented.cropped(to: $0) } ?? oriented
         let source = try pipeline.upload(image)

@@ -76,17 +76,19 @@ against the Adobe RGB output; applying them under our ROMM output applies
 their new-space taste to our old-space look. Port together with b3490eb or
 not at all.
 
-**To port (independent, recommended — we share the bug):** `2125a34`
-Cast Removal neutral axis vs PRE-trim bounds. Their CPU measured the
-neutral axis against user-trimmed (WP/BP-adjusted) bounds while their GPU
-measured pre-trim; they standardized on pre-trim ("the film's inherent
-cast is a source property — creative trims shouldn't perturb it"). Our
-`finalize` measures against post-offset bounds — a faithful port of the
-now-declared-buggy CPU side. Port = measure `Meters.neutralAxis` against
-`prepared.baseBounds`: small change, fixtures unchanged at zero offsets,
-and it makes finalize fully offset-independent (the two-tier
-prepare/finalize cache seam simplifies; ImagePipelineSeamTests'
-offsets-only-move-the-neutral-axis assertions flip to offsets-move-nothing).
+**Ported (2026-07-20) — we shared the bug:** `2125a34` Cast Removal
+neutral axis vs PRE-trim bounds. Their CPU measured the neutral axis
+against user-trimmed (WP/BP-adjusted) bounds while their GPU measured
+pre-trim; they standardized on pre-trim ("the film's inherent cast is a
+source property — creative trims shouldn't perturb it"). Our `finalize`
+had faithfully ported the now-declared-buggy CPU side. Ported as the
+simplification it implies: `finalize`/`analyze` lost their offset params
+(the analysis is now fully offset-independent; offsets fold into
+finalBounds at derive time only), ImageSession's second cache tier
+(AnalysisKey) dissolved — wp/bp handle drags re-run no analysis at all —
+and ImagePipelineSeamTests pins the new semantics (axis == base-bounds
+measurement; offsets still reach the render). Fixtures unchanged (all
+dump configs use zero offsets); CLAUDE.md §2 updated.
 
 **To port (proposed, needs a Settings surface + the visible-improvement
 bar):** `91a1b78` user-tunable Auto Density / Auto Grade targets —
