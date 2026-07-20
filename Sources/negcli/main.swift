@@ -19,7 +19,7 @@ func usage() -> Never {
                         [--cyan C] [--magenta M] [--yellow Y] [--exposure STOPS]
                         [--shadows S] [--shadow-contrast S] [--highlights H]
                         [--highlight-contrast H]
-              Full C-41 conversion (analysis + Metal render), 16-bit ROMM TIFF.
+              Full C-41 conversion (analysis + Metal render), 16-bit Adobe RGB TIFF.
           negcli bench <raw-file> [--frames N]
               Slider-latency benchmark: decode+analyze once, re-render N times.
           negcli meter <raw-file> [--at u,v] [--grade G] [--density D]
@@ -56,16 +56,16 @@ func parseFlags(_ args: [String]) -> (positional: [String], options: [String: St
     return (positional, options, flags)
 }
 
-/// Write an RGBImage as a 16-bit TIFF. `romm: true` tags ROMM RGB (ProPhoto,
-/// gamma 1.8 — exactly the pipeline's encoded output space); false tags linear
-/// sRGB (debug dumps of linear sensor data).
+/// Write an RGBImage as a 16-bit TIFF. `romm: true` tags Adobe RGB (1998) —
+/// exactly the pipeline's encoded output space (name kept for call-site
+/// stability); false tags linear sRGB (debug dumps of linear sensor data).
 func writeTIFF16(_ img: RGBImage, to url: URL, romm: Bool = false) throws {
     let count = img.width * img.height * 3
     var u16 = [UInt16](repeating: 0, count: count)
     for i in 0..<count { u16[i] = UInt16(max(0, min(65535, img.pixels[i] * 65535 + 0.5))) }
     let data = u16.withUnsafeBufferPointer { Data(buffer: $0) }
     guard let provider = CGDataProvider(data: data as CFData),
-        let cs = CGColorSpace(name: romm ? CGColorSpace.rommrgb : CGColorSpace.linearSRGB),
+        let cs = CGColorSpace(name: romm ? CGColorSpace.adobeRGB1998 : CGColorSpace.linearSRGB),
         let cg = CGImage(
             width: img.width, height: img.height, bitsPerComponent: 16, bitsPerPixel: 48,
             bytesPerRow: img.width * 6, space: cs,

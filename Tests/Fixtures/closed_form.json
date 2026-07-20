@@ -2,7 +2,7 @@
  "constants": {
   "cmy_max_density": 0.2,
   "density_multiplier": 0.2,
-  "anchor_target_density": 0.74,
+  "anchor_target_density": 0.75,
   "zone_density_sharpness": 4.0,
   "zone_density_shadow_offset": 0.75,
   "zone_density_highlight_offset": -0.4,
@@ -49,8 +49,8 @@
   "anchor_meter_strength": 0.2,
   "toe_grade_strength": 0.05833333333333333,
   "shoulder_grade_strength": 0.12,
-  "auto_grade_target": 0.55,
-  "auto_grade_strength": 0.3,
+  "auto_grade_target": 0.6,
+  "auto_grade_strength": 0.5,
   "auto_grade_nominal_ratio": 2.0,
   "textural_range_clip": 10.0,
   "flat_log_gain": 0.65,
@@ -232,45 +232,45 @@
    "density": 1.0,
    "d_min": 0.06,
    "anchor": null,
-   "out": 0.22862362738634948
+   "out": 0.2247937822304263
   },
   {
    "slope": 3.0,
    "density": 1.0,
    "d_min": 0.06,
    "anchor": 0.46,
-   "out": 0.22862362738634948
+   "out": 0.2247937822304263
   },
   {
    "slope": 3.0,
    "density": 0.5,
    "d_min": 0.06,
    "anchor": 0.52,
-   "out": 0.3886236273863495
+   "out": 0.38479378223042626
   },
   {
    "slope": 5.0,
    "density": 1.5,
    "d_min": 0.06,
    "anchor": 0.4,
-   "out": 0.16117417643180967
+   "out": 0.1588762693382558
   },
   {
    "slope": 2.9,
    "density": 1.0,
    "d_min": 0.06,
    "anchor": 0.34,
-   "out": 0.10064513177898221
+   "out": 0.0966832229969927
   }
  ],
  "reference_linear_value": [
   {
    "d_min": 0.0,
-   "out": 0.702223263624751
+   "out": 0.7134417513162776
   },
   {
    "d_min": 0.06,
-   "out": 0.6941291178409517
+   "out": 0.7056186533087212
   }
  ],
  "softplus": [
@@ -336,25 +336,25 @@
    "auto": true,
    "floor_ceil": 1.3,
    "textural": 0.7,
-   "out": 1.0764285714285715
+   "out": 1.1571428571428573
   },
   {
    "auto": true,
    "floor_ceil": 1.3,
    "textural": null,
-   "out": 1.1
+   "out": 1.2
   },
   {
    "auto": true,
    "floor_ceil": 2.0,
    "textural": 0.4,
-   "out": 1.595
+   "out": 2.1
   },
   {
    "auto": true,
    "floor_ceil": 0.9,
    "textural": 0.8,
-   "out": 0.9556250000000001
+   "out": 0.9375
   }
  ],
  "grade_coupled_shape": [
@@ -425,28 +425,28 @@
   },
   {
    "x": 0.001,
-   "enc": 0.01600000075995922,
-   "dec_of_enc": 0.0010000000474974513
+   "enc": 0.04323935508728027,
+   "dec_of_enc": 0.0009999999310821295
   },
   {
    "x": 0.001953125,
-   "enc": 0.031249994412064552,
-   "dec_of_enc": 0.0019531246507540345
+   "enc": 0.05862409621477127,
+   "dec_of_enc": 0.0019531247671693563
   },
   {
    "x": 0.01,
-   "enc": 0.07742635905742645,
+   "enc": 0.12319302558898926,
    "dec_of_enc": 0.009999998845160007
   },
   {
    "x": 0.18,
-   "enc": 0.3857114017009735,
-   "dec_of_enc": 0.17999999225139618
+   "enc": 0.4585294723510742,
+   "dec_of_enc": 0.18000000715255737
   },
   {
    "x": 0.5,
-   "enc": 0.6803950071334839,
-   "dec_of_enc": 0.5
+   "enc": 0.7296583652496338,
+   "dec_of_enc": 0.4999999701976776
   },
   {
    "x": 1.0,

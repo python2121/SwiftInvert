@@ -3,10 +3,11 @@ import Foundation
 import NegativeKit
 
 enum ImageConversion {
-    /// GPU-quantized RGBA8 rows (display fast path) → color-managed CGImage.
+    /// GPU-quantized RGBA8 rows (display fast path) → color-managed CGImage
+    /// (tagged Adobe RGB 1998, the working space since the b3490eb port).
     /// No CPU conversion: the bytes go straight into the data provider.
     static func cgImage(rgba8 bytes: [UInt8], width: Int, height: Int) -> CGImage? {
-        guard let cs = CGColorSpace(name: CGColorSpace.rommrgb),
+        guard let cs = CGColorSpace(name: CGColorSpace.adobeRGB1998),
             let provider = CGDataProvider(data: Data(bytes) as CFData)
         else { return nil }
         return CGImage(
@@ -16,10 +17,10 @@ enum ImageConversion {
             provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
     }
 
-    /// Encoded (ROMM TRC) buffer → color-managed CGImage. Tagging rommrgb makes
+    /// Encoded (Adobe RGB TRC) buffer → color-managed CGImage. Tagging makes
     /// ColorSync handle the display transform (NegPy needed a littleCMS LUT here).
     static func cgImage(fromEncoded img: RGBImage, bitsPerComponent: Int = 8) -> CGImage? {
-        guard let cs = CGColorSpace(name: CGColorSpace.rommrgb) else { return nil }
+        guard let cs = CGColorSpace(name: CGColorSpace.adobeRGB1998) else { return nil }
         if bitsPerComponent == 16 {
             var u16 = [UInt16](repeating: 0, count: img.pixels.count)
             for i in 0..<img.pixels.count {

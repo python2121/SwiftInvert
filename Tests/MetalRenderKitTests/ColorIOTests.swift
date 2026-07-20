@@ -6,27 +6,28 @@ import Testing
 @testable import NegativeKit
 
 /// The export sRGB conversion, pinned against NegPy's littleCMS display
-/// transform (ProPhoto-v4 → sRGB-v4, relative colorimetric + BPC) — oracle
-/// values generated with NegPy's own ICC profiles.
+/// transform (AdobeCompat-v4 → sRGB-v4, relative colorimetric + BPC, since
+/// the b3490eb working-space port) — oracle values regenerated 2026-07-20
+/// with NegPy's own ICC profiles at 96adfde.
 @Suite struct ColorIOTests {
-    static let cases: [(romm: [UInt8], srgb: [UInt8])] = [
-        ([200, 60, 50], [255, 0, 60]),
-        ([70, 190, 60], [0, 218, 0]),
-        ([60, 80, 200], [0, 102, 222]),
-        ([180, 140, 120], [226, 148, 135]),
-        ([128, 128, 128], [146, 146, 146]),
-        ([160, 170, 140], [174, 186, 153]),
+    static let cases: [(working: [UInt8], srgb: [UInt8])] = [
+        ([200, 60, 50], [231, 57, 46]),
+        ([70, 190, 60], [0, 191, 40]),
+        ([60, 80, 200], [46, 79, 205]),
+        ([180, 140, 120], [195, 141, 120]),
+        ([128, 128, 128], [129, 129, 129]),
+        ([160, 170, 140], [157, 171, 140]),
     ]
 
     @Test func srgbConversionMatchesLittleCMS() throws {
         let n = Self.cases.count
         var img = RGBImage(width: n, height: 1)
         for (i, c) in Self.cases.enumerated() {
-            for ch in 0..<3 { img[0, i, ch] = Float(c.romm[ch]) / 255.0 }
+            for ch in 0..<3 { img[0, i, ch] = Float(c.working[ch]) / 255.0 }
         }
-        let romm16 = try #require(ColorIO.cgImage(fromEncoded: img, bitsPerComponent: 16))
+        let working16 = try #require(ColorIO.cgImage(fromEncoded: img, bitsPerComponent: 16))
         let srgbSpace = try #require(CGColorSpace(name: CGColorSpace.sRGB))
-        let out = try #require(ColorIO.converted(romm16, to: srgbSpace, bitsPerComponent: 8))
+        let out = try #require(ColorIO.converted(working16, to: srgbSpace, bitsPerComponent: 8))
 
         let data = try #require(out.dataProvider?.data as Data?)
         let bpr = out.bytesPerRow
@@ -49,7 +50,7 @@ import Testing
         for ch in 0..<3 { img[0, 1, ch] = 1.0 }
         let out = try #require(ColorIO.cgImage(fromEncoded: img, bitsPerComponent: 8))
         #expect(out.bitsPerComponent == 8 && out.bitsPerPixel == 24)
-        #expect(out.colorSpace?.name == CGColorSpace.rommrgb)
+        #expect(out.colorSpace?.name == CGColorSpace.adobeRGB1998)
         let data = try #require(out.dataProvider?.data as Data?)
         #expect(data[0] == 128 && data[3] == 255)  // 0.5*255+0.5 → 128; 1.0 → 255
     }

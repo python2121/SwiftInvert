@@ -54,7 +54,9 @@ import Testing
         }
         let cBase = meanChroma(outBase)
         let cBoost = meanChroma(outBoost)
-        #expect(cBoost > cBase * 1.05, "chroma \(cBase) → \(cBoost)")
+        // Margin 1.02 (was 1.05 in ROMM/D50 Lab): the smaller-gamut Lab measures
+        // the same numeric boost as a smaller chroma delta; direction is the contract.
+        #expect(cBoost > cBase * 1.02, "chroma \(cBase) → \(cBoost)")
         _ = base
     }
 

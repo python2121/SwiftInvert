@@ -15,9 +15,14 @@ import Testing
         // Without BPC paper black floats well above display black; BPC pulls it
         // down hard. Exact 0 is unreachable at neutral toe — the softplus bound
         // approaches d_max only asymptotically (NegPy documents the same).
-        #expect(base.last! > 0.04, "without BPC paper black floats (got \(base.last!))")
-        #expect(bpc.last! < 0.02 && bpc.last! < base.last! * 0.4,
-            "BPC should pull toward display black (base \(base.last!) → \(bpc.last!))")
+        // Assert in LINEAR (decoded) domain so the contract is OETF-independent
+        // (the old encoded thresholds baked in the ROMM toe; the Adobe RGB pure
+        // gamma maps small linears to much larger code values).
+        let baseLin = Double(WorkingOETF.decode(base.last!))
+        let bpcLin = Double(WorkingOETF.decode(bpc.last!))
+        #expect(baseLin > 0.003, "without BPC paper black floats (linear \(baseLin))")
+        #expect(bpcLin < 0.0015 && bpcLin < baseLin * 0.4,
+            "BPC should pull toward display black (linear \(baseLin) → \(bpcLin))")
         // Highlights are essentially untouched (normalization by 1−black ≈ 1.005).
         expectClose(Double(bpc[0]), Double(base[0]), accuracy: 0.01, "highlight end")
         // Still monotone.

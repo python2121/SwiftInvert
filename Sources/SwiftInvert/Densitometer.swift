@@ -53,7 +53,8 @@ final class DensitometerState {
             reading = nil
             return
         }
-        // ImageConversion writes rgba8 (noneSkipLast) tagged ROMM, so these
+        // ImageConversion writes rgba8 (noneSkipLast) tagged with the working
+        // space (Adobe RGB), so these
         // bytes ARE the working-space encoded values the read-out is defined
         // on — no colour conversion, just the /255.
         let rgb = SIMD3<Double>(

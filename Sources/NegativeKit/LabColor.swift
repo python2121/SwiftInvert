@@ -1,23 +1,24 @@
 import Foundation
 import simd
 
-/// CIELAB in the working space (linear ProPhoto RGB / ROMM, D50) and the
+/// CIELAB in the working space (linear Adobe RGB (1998), D65) and the
 /// saturation/vibrance chroma ops — ports of negpy/kernel/image/logic.py
-/// (rgb_to_lab_working / lab_to_rgb_working) and negpy/features/lab/logic.py
-/// (apply_saturation / apply_vibrance). Mirrored in NegPipeline.metal.
+/// (rgb_to_lab_working / lab_to_rgb_working, Adobe RGB since b3490eb) and
+/// negpy/features/lab/logic.py (apply_saturation / apply_vibrance).
+/// Mirrored in NegPipeline.metal.
 public enum LabColor {
-    // ProPhoto (ROMM) primaries, D50 white.
+    // Adobe RGB (1998) primaries, D65 white (upstream _WORKING_TO_XYZ).
     static let toXYZ: (SIMD3<Double>, SIMD3<Double>, SIMD3<Double>) = (
-        SIMD3(0.7976749, 0.1351917, 0.0313534),
-        SIMD3(0.2880402, 0.7118741, 0.0000857),
-        SIMD3(0.0000000, 0.0000000, 0.8252100)
+        SIMD3(0.5767309, 0.1855540, 0.1881852),
+        SIMD3(0.2973769, 0.6273491, 0.0752741),
+        SIMD3(0.0270343, 0.0706872, 0.9911085)
     )
     static let toRGB: (SIMD3<Double>, SIMD3<Double>, SIMD3<Double>) = (
-        SIMD3(1.3459433, -0.2556075, -0.0511118),
-        SIMD3(-0.5445989, 1.5081673, 0.0205351),
-        SIMD3(0.0000000, 0.0000000, 1.2118128)
+        SIMD3(2.0413690, -0.5649464, -0.3446944),
+        SIMD3(-0.9692660, 1.8760108, 0.0415560),
+        SIMD3(0.0134474, -0.1183897, 1.0154096)
     )
-    static let d50White = SIMD3<Double>(0.96422, 1.00000, 0.82521)
+    static let workingWhite = SIMD3<Double>(0.95047, 1.00000, 1.08883)
     static let labEps = 0.008856
     static let labKappa = 7.787
     /// Chroma below which vibrance considers a color "muted" (NegPy: /60).
@@ -42,13 +43,13 @@ public enum LabColor {
     /// counterclockwise: red→orange, yellow→green, green→teal, blue→purple).
     public static let bandMaxHueShiftDeg = 30.0
 
-    /// Linear ProPhoto RGB → CIELAB (D50), OpenCV float scale (L 0–100).
+    /// Linear working RGB → CIELAB (D65), OpenCV float scale (L 0–100).
 
     public static func rgbToLab(_ rgb: SIMD3<Double>) -> SIMD3<Double> {
         let lin = simd_max(rgb, SIMD3<Double>())
         var xyz = SIMD3(
             simd_dot(toXYZ.0, lin), simd_dot(toXYZ.1, lin), simd_dot(toXYZ.2, lin))
-        xyz /= d50White
+        xyz /= workingWhite
         var f = SIMD3<Double>()
         for i in 0..<3 {
             f[i] = xyz[i] > labEps ? cbrt(xyz[i]) : labKappa * xyz[i] + 16.0 / 116.0
@@ -56,7 +57,7 @@ public enum LabColor {
         return SIMD3(116.0 * f.y - 16.0, 500.0 * (f.x - f.y), 200.0 * (f.y - f.z))
     }
 
-    /// CIELAB (D50) → linear ProPhoto RGB (lower-clamped, no upper clip).
+    /// CIELAB (D65) → linear working RGB (lower-clamped, no upper clip).
 
     public static func labToRgb(_ lab: SIMD3<Double>) -> SIMD3<Double> {
         let fy = (lab.x + 16.0) / 116.0
@@ -66,7 +67,7 @@ public enum LabColor {
             let f3 = f[i] * f[i] * f[i]
             xyz[i] = f3 > labEps ? f3 : (f[i] - 16.0 / 116.0) / labKappa
         }
-        xyz *= d50White
+        xyz *= workingWhite
         let lin = SIMD3(
             simd_dot(toRGB.0, xyz), simd_dot(toRGB.1, xyz), simd_dot(toRGB.2, xyz))
         return simd_max(lin, SIMD3<Double>())

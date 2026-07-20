@@ -12,11 +12,10 @@ and appending a history entry.
 commit:   96adfde  ("Camera scanning: faster triplet cadence and clearer scan
           feedback while rolling (#559)")
 reviewed: 2026-07-19
-fixtures: Tests/Fixtures/ dumped from 6b841a1 — STILL VALID for our tree, but
-          upstream has since moved the working space (b3490eb) and the auto
-          constants (2db0470/088c393): any future re-dump from ≥b3490eb lands
-          in the Adobe RGB world and MUST NOT be mixed with our ROMM kernels.
-          dump_fixtures.py needs verification first (OETF signatures changed).
+fixtures: Tests/Fixtures/ dumped from 96adfde (2026-07-20, Adobe RGB world:
+          the b3490eb working-space port + coupled auto constants are in;
+          dump_fixtures.py adapted to the paper_black rename — the manifest
+          keeps the true_black key both parity harnesses read).
 ```
 
 ## How to run a review
@@ -78,12 +77,26 @@ pipeline output as ROMM the same way — and one of our own divergences may
 be evidence: redHue +0.5 exists because "C-41 reds skew magenta out of the
 box", which matches the reported ProPhoto-interpretation hue shift exactly.
 A correct-primaries output might let redHue return toward 0.
-**Still gated on the user's by-eye call** (default look changes; L-size
-port: WorkingOETF Swift+MSL, outputEncode/histogram kernels, Lab matrices
-both sides, ColorIO/ImageConversion tagging, littleCMS oracles, full
-re-dump). Cheap next step when wanted: a headless A/B — export a few real
-frames under a prototype Adobe-RGB interpretation and compare by eye
-before committing the port.
+**PORTED 2026-07-20** — the user chose convergence over A/B ("I want to
+stay close to the main project"). Full port: WorkingOETF → pure 563/256
+gamma (Swift + MSL 0.45470693 literal), Lab matrices/white → Adobe RGB
+D65 both sides, output tagging → adobeRGB1998 (ImageConversion, ColorIO
+workingColorSpace, negcli TIFF), littleCMS oracles regenerated from
+NegPy's AdobeCompat-v4/sRGB-v4 at 96adfde, fixtures re-dumped from
+96adfde (dump script adapted to the paper_black rename, manifest key
+stable), coupled constants ported (anchor 0.75, grade target 0.6,
+strength 0.5). Space-sensitive tests recalibrated with intent preserved:
+True Black's contract restated in the linear domain (the old encoded
+thresholds baked in the ROMM toe), pre-saturation chroma margin 1.05 →
+1.02 (smaller-gamut Lab), mixer-band test pixel moved in-band (real-
+content blues land 240–265° in the new Lab — the band constants
+themselves survive). ExportColorSpace's wide option relabeled Adobe RGB
+(case name kept for sticky-JSON compat). Export-note: existing exports
+re-render slightly different, as upstream's changelog warns. Follow-up
+recorded in CLAUDE.md divergences: re-evaluate redHue +0.5 (it counters
+the hue skew this port removes at the root) and an on-scan mixer-band
+re-tune pass. 132 tests green incl. GPU parity against Adobe-world
+fixtures; bench unchanged.
 
 **Coupled to the above — do NOT port separately:** `2db0470` + `088c393`
 auto-constant tunings (anchor_target_density 0.74 → 0.75, auto_grade_target

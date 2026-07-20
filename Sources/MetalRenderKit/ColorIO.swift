@@ -3,15 +3,15 @@ import Foundation
 import NegativeKit
 
 /// CGImage construction and color-space conversion for the pipeline's
-/// ROMM-encoded output. Conversion goes through a ColorSync-managed CGContext
+/// Adobe RGB-encoded output. Conversion goes through a ColorSync-managed CGContext
 /// draw — verified byte-identical to NegPy's littleCMS display transform
 /// (relative colorimetric) on reference colors.
 public enum ColorIO {
-    public static func rommColorSpace() -> CGColorSpace? { CGColorSpace(name: CGColorSpace.rommrgb) }
+    public static func workingColorSpace() -> CGColorSpace? { CGColorSpace(name: CGColorSpace.adobeRGB1998) }
 
-    /// Encoded (ROMM TRC) float buffer → ROMM-tagged CGImage.
+    /// Encoded (Adobe RGB TRC) float buffer → Adobe RGB (1998)-tagged CGImage.
     public static func cgImage(fromEncoded img: RGBImage, bitsPerComponent: Int = 8) -> CGImage? {
-        guard let cs = rommColorSpace() else { return nil }
+        guard let cs = workingColorSpace() else { return nil }
         if bitsPerComponent == 16 {
             var u16 = [UInt16](repeating: 0, count: img.pixels.count)
             for i in 0..<img.pixels.count {

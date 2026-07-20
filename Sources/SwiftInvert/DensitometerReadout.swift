@@ -13,7 +13,7 @@ struct ZoneStrip: View {
 
     /// Each cell's lightness, taken back through the ruler's own hinge so the
     /// steps line up with the zones the read-out names. `Color(white:)` isn't
-    /// ROMM-encoded, so these are an approximate visual ruler — read the number
+    /// working-space-encoded, so these are an approximate visual ruler — read the number
     /// for the actual value, not the swatch.
     private func shade(_ z: Int) -> Color {
         let mid = Densitometry.midGrayEncoded

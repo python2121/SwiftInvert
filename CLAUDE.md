@@ -220,7 +220,8 @@ One command buffer, passes in order (`RenderPipeline.render` /
       reflectance** out.
 3. **`colorPop`** (dispatched ONLY when a color-pop control is off-default:
    vibrance/saturation/redSaturation ≠ 1 or redHue ≠ 0) — CIELAB
-   (ProPhoto primaries, D50; matrices duplicated in MSL and
+   (Adobe RGB (1998) primaries, D65 since the b3490eb port; matrices
+   duplicated in MSL and
    `LabColor.swift` — keep in sync): the **Color Mixer** first
    (`LabColor.applyColorMixer`, SwiftInvert-only, no NegPy equivalent —
    chroma-gated hue-targeted R/Y/G/B bands: per-band raised-cosine hue
@@ -239,8 +240,8 @@ One command buffer, passes in order (`RenderPipeline.render` /
    texture, which becomes the content texture.
 4. **`histogram256`** — 4×256 atomic bins (R,G,B + Rec.709 luma) from the
    linear content, OETF-encoded in-shader so bins match display values.
-5. **`outputEncode`** — working-space OETF (ProPhoto ROMM TRC: gamma 1.8,
-   linear toe ×16 below 1/512). Display fast path writes the same kernel
+5. **`outputEncode`** — working-space OETF (Adobe RGB 1998 TRC: pure
+   563/256 = 2.19921875 power, no linear segment — b3490eb). Display fast path writes the same kernel
    into an **rgba8unorm** texture (GPU quantization, 4× smaller readback,
    zero CPU conversion); export/tests use the float path.
 
@@ -254,16 +255,21 @@ sides plus the asserts together.
 
 ### 5. Color management
 
-Working space is **linear ProPhoto → ROMM-encoded** at the end of the chain.
+Working space is **linear Adobe RGB (1998) → Adobe-RGB-encoded** at the end
+of the chain (b3490eb port, 2026-07-20: upstream moved off ProPhoto because
+the pipeline ASSIGNS primaries to sensor-native data at output, and
+ProPhoto's imaginary primaries inflated chroma and skewed hues — reds
+toward magenta, skies toward cyan).
 - **Display**: the encoded output becomes a CGImage tagged
-  `CGColorSpace.rommrgb`; ColorSync converts to the monitor — verified
-  byte-identical to NegPy's littleCMS display transform (relative
-  colorimetric + BPC) on reference colors (`ColorIOTests` pins the oracle
-  values, generated with NegPy's bundled ICC profiles).
+  `CGColorSpace.adobeRGB1998`; ColorSync converts to the monitor — pinned
+  against NegPy's littleCMS display transform (AdobeCompat-v4 → sRGB-v4,
+  relative colorimetric + BPC) on reference colors (`ColorIOTests` oracle
+  values regenerated 2026-07-20 with NegPy's bundled ICC profiles).
 - **Export** (`Exporter` + `ColorIO`): default **sRGB** (NegPy's default;
   wide-gamut files look washed out in profile-ignorant viewers) via a 16-bit
-  ROMM CGImage drawn into an sRGB CGContext (one quantization). ProPhoto
-  remains selectable. JPEG 8-bit (default q=0.92) or TIFF 16-bit, optional
+  working-space CGImage drawn into an sRGB CGContext (one quantization).
+  Adobe RGB remains selectable (the ExportColorSpace case is still NAMED
+  rommRGB for sticky-options JSON compatibility). JPEG 8-bit (default q=0.92) or TIFF 16-bit, optional
   long-edge resize, destination next-to-source or a chosen folder.
 
 ## Parity with NegPy
@@ -326,18 +332,16 @@ cases; per-channel crossover trims are a candidate future feature.
 values where needed):
 - `preSaturation` default **1.15** (NegPy has no equivalent; parity tests set 1.0),
 - `redHue` default **+0.5** (Color Mixer, SwiftInvert-only: C-41 reds skew
-  magenta out of the box, +0.5 = 15° toward orange; parity tests pin 0),
+  magenta out of the box, +0.5 = 15° toward orange; parity tests pin 0).
+  **RE-EVALUATE under Adobe RGB**: the reds-toward-magenta it counters
+  matches the ProPhoto-interpretation hue skew the b3490eb port removed at
+  the root — the correct-primaries output may want redHue back at 0,
+- Color Mixer band constants were tuned in the old ROMM/D50 Lab; re-checked
+  numerically after b3490eb (real-content reds/greens/sky-blues still land
+  in-band; only colorimetric-primary blue sits at the feather edge, which
+  matches the tuned-on-real-content philosophy) — but an on-scan re-tune
+  pass is still worth doing,
 - default analysis buffer **0.10** vs NegPy 0.05 (tests pass 0.05 explicitly),
-- **Film-base sampling** (`settings.filmBaseSample`, SwiftInvert-only): a
-  sampled rebate patch (per-channel log medians, `ExposureKernel.
-  measureFilmBase`) replaces the colour-axis CEILING offsets in
-  `BoundsAnalysis.analyze` — ground truth for the orange mask instead of the
-  gray-world percentile estimate. Ceiling-only on purpose (the mask lives in
-  the unexposed couplers → strongest at the thin end; base offsets at the
-  floors would overcorrect highlights); the ceiling level stays luma-anchored
-  (median channel pinned), so only color moves. nil = bit-identical to NegPy's
-  path (fixtures unaffected). The VALUE is stored, not the rect: channel
-  medians are orientation-invariant and paste across a roll,
 - NegPy's default lab sharpen (0.25 since 8bc9678; was 0.5 earlier in 0.38) is not implemented,
 - SwiftInvert-only controls: exposure stops, tone controls
   (shadows/highlights ± contrasts), overall contrast, temp/tint, 3-band
@@ -360,7 +364,7 @@ values where needed):
   the measured pre-offset density range vs `CurveLogic.defaultGradeRange`.
   Both mirror NegPy (`densitometer.py`, `stats._negative_row`), including its
   quirk of taking luma on the ENCODED triplet before decoding. The probe reads
-  the **displayed rgba8 bitmap** (ROMM-encoded, so the bytes already are the
+  the **displayed rgba8 bitmap** (working-space-encoded, so the bytes already are the
   working-space values) rather than a GPU metric — `DensitometerState` caches
   the provider bytes once per render and is a separate `@Observable` so pointer
   moves invalidate only the read-out label, never the canvas. NegPy's 120-bin
@@ -446,7 +450,8 @@ values where needed):
 
 - `K` (`ExposureConstants.swift`) is the single Swift source; the MSL
   duplicates: tone anchors/sharpness (`TONE_SHARPNESS`, `SHADOW_ANCHOR`,
-  `HIGHLIGHT_ANCHOR`), Lab matrices/eps/kappa, ROMM OETF breakpoints.
+  `HIGHLIGHT_ANCHOR`), Lab matrices/eps/kappa/white, the working-space
+  OETF exponent (0.45470693 in MSL = 256/563).
   GPU/CPU parity tests catch drift but update them together.
 - If NegPy's `EXPOSURE_CONSTANTS` change deliberately: update `K`, re-dump
   fixtures, re-run `make test`.

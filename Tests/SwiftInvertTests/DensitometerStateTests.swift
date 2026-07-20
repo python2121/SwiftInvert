@@ -107,7 +107,7 @@ import Testing
         #expect(image.width == 3 && image.height == 2)
         #expect(image.bitsPerComponent == 8 && image.bitsPerPixel == 32)
         #expect(image.bytesPerRow == 12)
-        #expect(image.colorSpace?.name == CGColorSpace.rommrgb)
+        #expect(image.colorSpace?.name == CGColorSpace.adobeRGB1998)
     }
 
     @Test func encodedImageShapes() throws {
@@ -117,6 +117,6 @@ import Testing
         #expect(eight.width == 4 && eight.height == 3 && eight.bitsPerComponent == 8)
         let sixteen = try #require(ImageConversion.cgImage(fromEncoded: img, bitsPerComponent: 16))
         #expect(sixteen.bitsPerComponent == 16 && sixteen.bitsPerPixel == 48)
-        #expect(sixteen.colorSpace?.name == CGColorSpace.rommrgb)
+        #expect(sixteen.colorSpace?.name == CGColorSpace.adobeRGB1998)
     }
 }

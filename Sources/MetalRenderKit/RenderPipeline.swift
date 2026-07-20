@@ -254,7 +254,8 @@ public final class RenderPipeline: @unchecked Sendable {
 
     // MARK: - Display fast path
 
-    /// One display render's read-back results: 8-bit RGBA rows (ROMM-encoded,
+    /// One display render's read-back results: 8-bit RGBA rows (working-space
+    /// (Adobe RGB) encoded,
     /// alpha = 255), ready for a CGImage without any CPU conversion loop.
     public struct DisplayResult: Sendable {
         public let rgba: [UInt8]

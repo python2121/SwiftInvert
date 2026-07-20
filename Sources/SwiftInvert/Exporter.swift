@@ -34,7 +34,9 @@ enum ExportColorSpace: String, Codable, CaseIterable, Identifiable {
     var label: String {
         switch self {
         case .sRGB: return "sRGB"
-        case .rommRGB: return "ProPhoto (wide gamut)"
+        // Case name kept for sticky-options JSON compatibility; since the
+        // b3490eb port the wide-gamut export is the Adobe RGB working space.
+        case .rommRGB: return "Adobe RGB (wide gamut)"
         }
     }
 }
@@ -47,7 +49,8 @@ struct ExportOptions: Codable, Equatable {
     var resize: Bool = false
     var maxLongEdge: Int = 3000
     /// sRGB default (NegPy's default): correct everywhere, including viewers
-    /// that mishandle wide-gamut profiles.
+    /// that mishandle wide-gamut profiles. The wide option is the Adobe RGB
+    /// working space (case named rommRGB for persisted-JSON compatibility).
     var colorSpace: ExportColorSpace = .sRGB
     /// Destination: next to each source (default) or a chosen folder.
     var useCustomDestination: Bool = false
@@ -106,7 +109,7 @@ enum Exporter {
         return (exif, tiff, props[kCGImagePropertyGPSDictionary] as? [CFString: Any])
     }
 
-    /// Write the encoded (ROMM TRC) buffer with the ROMM RGB profile embedded
+    /// Write the encoded (Adobe RGB TRC) buffer with its profile embedded
     /// and the source RAW's capture metadata carried over.
     static func write(
         _ encoded: RGBImage, to url: URL, options: ExportOptions, source: URL? = nil
@@ -119,7 +122,8 @@ enum Exporter {
         var cg: CGImage?
         switch options.colorSpace {
         case .sRGB:
-            // Build 16-bit ROMM first so the ColorSync conversion quantizes once.
+            // Build 16-bit working-space (Adobe RGB) first so the ColorSync
+            // conversion quantizes once.
             if let romm16 = ColorIO.cgImage(fromEncoded: image, bitsPerComponent: 16),
                 let srgb = CGColorSpace(name: CGColorSpace.sRGB)
             {

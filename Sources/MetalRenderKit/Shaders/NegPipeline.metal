@@ -83,28 +83,29 @@ inline float softplus(float x) {
     return max(x, 0.0f) + log(1.0f + exp(-abs(x)));
 }
 
-// Working-space OETF (ProPhoto ROMM: gamma 1.8 + linear toe below 1/512).
+// Working-space OETF (Adobe RGB 1998: pure 563/256 gamma, no linear
+// segment — b3490eb; exponent literal matches upstream's WGSL).
 inline float oetf_encode(float t) {
     float x = clamp(t, 0.0f, 1.0f);
-    return x < 0.001953125f ? x * 16.0f : pow(x, 0.55555556f);
+    return pow(x, 0.45470693f);
 }
 
-// ── CIELAB in the working space (linear ProPhoto / ROMM, D50) — mirrors
+// ── CIELAB in the working space (linear Adobe RGB 1998, D65) — mirrors
 //    LabColor.swift; constants must stay in sync. ─────────────────────────
-constant float3x3 PROPHOTO_TO_XYZ = float3x3(
-    float3(0.7976749f, 0.2880402f, 0.0f),       // columns (MSL is column-major)
-    float3(0.1351917f, 0.7118741f, 0.0f),
-    float3(0.0313534f, 0.0000857f, 0.8252100f));
-constant float3x3 XYZ_TO_PROPHOTO = float3x3(
-    float3(1.3459433f, -0.5445989f, 0.0f),
-    float3(-0.2556075f, 1.5081673f, 0.0f),
-    float3(-0.0511118f, 0.0205351f, 1.2118128f));
-constant float3 D50_WHITE = float3(0.96422f, 1.0f, 0.82521f);
+constant float3x3 WORKING_TO_XYZ = float3x3(
+    float3(0.5767309f, 0.2973769f, 0.0270343f), // columns (MSL is column-major)
+    float3(0.1855540f, 0.6273491f, 0.0706872f),
+    float3(0.1881852f, 0.0752741f, 0.9911085f));
+constant float3x3 XYZ_TO_WORKING = float3x3(
+    float3(2.0413690f, -0.9692660f, 0.0134474f),
+    float3(-0.5649464f, 1.8760108f, -0.1183897f),
+    float3(-0.3446944f, 0.0415560f, 1.0154096f));
+constant float3 WORKING_WHITE = float3(0.95047f, 1.0f, 1.08883f);
 constant float LAB_EPS = 0.008856f;
 constant float LAB_KAPPA = 7.787f;
 
 inline float3 rgb_to_lab(float3 rgb) {
-    float3 xyz = (PROPHOTO_TO_XYZ * max(rgb, float3(0.0f))) / D50_WHITE;
+    float3 xyz = (WORKING_TO_XYZ * max(rgb, float3(0.0f))) / WORKING_WHITE;
     float3 f = select(LAB_KAPPA * xyz + 16.0f / 116.0f, pow(xyz, float3(1.0f / 3.0f)), xyz > LAB_EPS);
     return float3(116.0f * f.y - 16.0f, 500.0f * (f.x - f.y), 200.0f * (f.y - f.z));
 }
@@ -113,8 +114,8 @@ inline float3 lab_to_rgb(float3 lab) {
     float fy = (lab.x + 16.0f) / 116.0f;
     float3 f = float3(lab.y / 500.0f + fy, fy, fy - lab.z / 200.0f);
     float3 f3 = f * f * f;
-    float3 xyz = select((f - 16.0f / 116.0f) / LAB_KAPPA, f3, f3 > LAB_EPS) * D50_WHITE;
-    return max(XYZ_TO_PROPHOTO * xyz, float3(0.0f));
+    float3 xyz = select((f - 16.0f / 116.0f) / LAB_KAPPA, f3, f3 > LAB_EPS) * WORKING_WHITE;
+    return max(XYZ_TO_WORKING * xyz, float3(0.0f));
 }
 
 // ── Pass 1: log10 + per-channel stretch (normalization.wgsl) ──────────────

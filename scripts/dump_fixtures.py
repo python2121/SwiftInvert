@@ -177,7 +177,11 @@ def run_pipeline(img: np.ndarray, exposure: ExposureConfig, out_dir: Path, dump_
             "cast_removal_strength": exposure.cast_removal_strength,
             "toe": exposure.toe, "toe_width": exposure.toe_width,
             "shoulder": exposure.shoulder, "shoulder_width": exposure.shoulder_width,
-            "paper_dmin": exposure.paper_dmin, "true_black": exposure.true_black,
+            "paper_dmin": exposure.paper_dmin,
+            # 687bcd5 renamed true_black -> paper_black (inverted:
+            # bpc = not paper_black). Manifest keeps the true_black key —
+            # both Swift parity harnesses read it as the BPC flag.
+            "true_black": not exposure.paper_black,
         },
         "bounds": {
             "base_floors": jsonable(base_bounds.floors), "base_ceils": jsonable(base_bounds.ceils),

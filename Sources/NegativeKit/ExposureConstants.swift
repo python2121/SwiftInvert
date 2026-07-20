@@ -9,7 +9,7 @@ public enum K {
     // Density slider → exposure pivot scale.
     public static let densityMultiplier = 0.2
     // Target print density for the reference tone.
-    public static let anchorTargetDensity = 0.74
+    public static let anchorTargetDensity = 0.75
     // Default normalized midtone reference (auto-exposure off).
     public static let assumedAnchor = 0.46
     // ISO R paper-grade slider range (hard → soft).
@@ -63,9 +63,10 @@ public enum K {
     // (mirrors NegPy 0.36).
     public static let toeGradeStrength = 0.15 * 0.35 / 0.90
     public static let shoulderGradeStrength = 0.12
-    // Auto grade (NegPy 0.38 retune: punchier target, less scene adaptation).
-    public static let autoGradeTarget = 0.55
-    public static let autoGradeStrength = 0.3
+    // Auto grade (NegPy 2db0470/088c393 retune, coupled to the Adobe RGB
+    // working space — tuned against that output, ported together with it).
+    public static let autoGradeTarget = 0.6
+    public static let autoGradeStrength = 0.5
     public static let autoGradeNominalRatio = 2.0
     // Textural-range percentile margin.
     public static let texturalRangeClip = 10.0
@@ -118,16 +119,20 @@ public enum K {
     public static let lumaB = 0.0722
 }
 
-/// Working-space OETF: ProPhoto RGB (ROMM) TRC — gamma 1.8 with a linear toe
-/// below 1/512 (negpy/kernel/image/logic.py working_oetf_encode/decode).
+/// Working-space OETF: Adobe RGB (1998) TRC — a pure 563/256 power, no
+/// linear segment (negpy/kernel/image/logic.py working_oetf_encode/decode,
+/// since b3490eb: the working space moved ProPhoto→Adobe RGB because the
+/// pipeline ASSIGNS primaries to sensor-native data at output, and
+/// ProPhoto's imaginary primaries inflated chroma and skewed hues).
 public enum WorkingOETF {
+    /// 563/256 = 2.19921875 — Adobe RGB's exact rational gamma.
+    public static let gamma: Float = 563.0 / 256.0
+
     @inlinable public static func encode(_ x: Float) -> Float {
-        if x < 1.0 / 512.0 { return max(x, 0) * 16.0 }
-        return pow(x, 1.0 / 1.8)
+        pow(max(x, 0), 1.0 / 2.19921875)
     }
 
     @inlinable public static func decode(_ e: Float) -> Float {
-        if e < 1.0 / 32.0 { return max(e, 0) / 16.0 }
-        return pow(e, 1.8)
+        pow(max(e, 0), 2.19921875)
     }
 }

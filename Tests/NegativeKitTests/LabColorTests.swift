@@ -111,7 +111,11 @@ import simd
     @Test func mixerBandsTargetTheirOwnHues() {
         let red = SIMD3(0.55, 0.10, 0.08)
         let green = SIMD3(0.10, 0.55, 0.12)
-        let blue = SIMD3(0.08, 0.12, 0.60)
+        // Hue 264° in the Adobe-D65 Lab (in the blue band 235±65). The old
+        // primary-ish (0.08, 0.12, 0.60) lands at 293° — the feather's edge —
+        // consistent with the bands being tuned on real content, whose blues
+        // (sky ~240-265° here) stay in-band across the space change.
+        let blue = SIMD3(0.06, 0.22, 0.55)
 
         // The blue band ignores saturated red/green (far outside its window)…
         for px in [red, green] {
