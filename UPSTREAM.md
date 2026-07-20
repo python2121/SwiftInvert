@@ -59,15 +59,31 @@ is now markedly more muted than either the pre-fix or the ProPhoto-era look.
 **Third output-space change in four days** (stale Adobe RGB bug → ProPhoto
 + Dye Mute → deliberate Adobe RGB).
 
-**Judgment — logged as To port (proposed), gated on TWO conditions:**
-(1) upstream stability: if the output space moves again, a port now is
-churn; give it a release to settle. (2) The user's look call: this changes
-the default look of every conversion (less saturated), on top of taste
-divergences (preSaturation 1.15, redHue +0.5) that were tuned against OUR
-ProPhoto-tagged output. Porting is L-size: WorkingOETF (Swift + MSL) +
-outputEncode/histogram kernels + Lab matrices BOTH sides + ColorIO/
-ImageConversion tagging + littleCMS oracles + FULL fixture re-dump. Decide
-by eye on real rolls first — render a set both ways before committing.
+**Judgment (revised 2026-07-20 after researching issue #537 / PRs
+518/538/544):** the "third change in four days" framing was wrong — this is
+NOT a flip-flop. NegPy's output had been Adobe-RGB-interpreted for its
+whole life via a stale tag; PR #518 exposed true ProPhoto for the first
+time, two independent users immediately reported neon reds AND hue shifts
+(red→magenta, sky→cyan) with image evidence, Dye Mute could damp chroma but
+not hue, and #544 restored Adobe RGB coherently (primaries + pure 563/256
+TRC + D65) within three days. The argument (user thetalkingdrum, adopted
+verbatim by the maintainer): the pipeline ASSIGNS primaries to raw
+uncharacterized sensor RGB at output — an interpretation, not a conversion
+— and ProPhoto's imaginary green/blue primaries stretch dye separations
+outside the spectral locus. Decision is settled upstream (both reporters
+confirmed the fix; follow-ups are routed to crosstalk characterization).
+
+**The argument applies to SwiftInvert verbatim** — we tag sensor-native
+pipeline output as ROMM the same way — and one of our own divergences may
+be evidence: redHue +0.5 exists because "C-41 reds skew magenta out of the
+box", which matches the reported ProPhoto-interpretation hue shift exactly.
+A correct-primaries output might let redHue return toward 0.
+**Still gated on the user's by-eye call** (default look changes; L-size
+port: WorkingOETF Swift+MSL, outputEncode/histogram kernels, Lab matrices
+both sides, ColorIO/ImageConversion tagging, littleCMS oracles, full
+re-dump). Cheap next step when wanted: a headless A/B — export a few real
+frames under a prototype Adobe-RGB interpretation and compare by eye
+before committing the port.
 
 **Coupled to the above — do NOT port separately:** `2db0470` + `088c393`
 auto-constant tunings (anchor_target_density 0.74 → 0.75, auto_grade_target
