@@ -9,12 +9,14 @@ and appending a history entry.
 ## Last reviewed
 
 ```
-commit:   0ea27d2  ("initial changelog update for 0.38.0")
-reviewed: 2026-07-17
-fixtures: Tests/Fixtures/ dumped from 6b841a1 (still valid — the one pipeline
-          change since, Dye Mute 8bc9678, lives in parameter derivation
-          outside every fixture-pinned stage; apply_saturation itself is
-          unchanged, so lab_color fixtures hold too).
+commit:   96adfde  ("Camera scanning: faster triplet cadence and clearer scan
+          feedback while rolling (#559)")
+reviewed: 2026-07-19
+fixtures: Tests/Fixtures/ dumped from 6b841a1 — STILL VALID for our tree, but
+          upstream has since moved the working space (b3490eb) and the auto
+          constants (2db0470/088c393): any future re-dump from ≥b3490eb lands
+          in the Adobe RGB world and MUST NOT be mixed with our ROMM kernels.
+          dump_fixtures.py needs verification first (OETF signatures changed).
 ```
 
 ## How to run a review
@@ -40,6 +42,76 @@ updates this file. The manual procedure, for reference:
 6. Update the **Last reviewed** marker and append to the history below.
 
 ## Review history
+
+### 2026-07-19 — through `96adfde` (0.38.0 → 0.39.0-dev, 19 commits)
+
+**Seven pipeline-relevant commits — the deepest range since the original
+port, headlined by a full working-space swap.**
+
+**The headline: `b3490eb` Adobe RGB (1998) working space.** Upstream
+REVERSED the 2026-07-16 ProPhoto output fix: full ProPhoto primaries at
+output are now judged "unnaturally saturated, pain to correct", and the
+whole pipeline boundary moved to Adobe RGB — OETF ROMM TRC (1.8 + linear
+toe) → pure 563/256 gamma (no linear segment), output tagging, Lab
+matrices, CLAHE/toning shaders, display/export management, ALL goldens
+regenerated. Dye Mute stays at default 0.5 on top, so their canonical look
+is now markedly more muted than either the pre-fix or the ProPhoto-era look.
+**Third output-space change in four days** (stale Adobe RGB bug → ProPhoto
++ Dye Mute → deliberate Adobe RGB).
+
+**Judgment — logged as To port (proposed), gated on TWO conditions:**
+(1) upstream stability: if the output space moves again, a port now is
+churn; give it a release to settle. (2) The user's look call: this changes
+the default look of every conversion (less saturated), on top of taste
+divergences (preSaturation 1.15, redHue +0.5) that were tuned against OUR
+ProPhoto-tagged output. Porting is L-size: WorkingOETF (Swift + MSL) +
+outputEncode/histogram kernels + Lab matrices BOTH sides + ColorIO/
+ImageConversion tagging + littleCMS oracles + FULL fixture re-dump. Decide
+by eye on real rolls first — render a set both ways before committing.
+
+**Coupled to the above — do NOT port separately:** `2db0470` + `088c393`
+auto-constant tunings (anchor_target_density 0.74 → 0.75, auto_grade_target
+0.55 → 0.6, auto_grade_strength 0.3 → 0.5, goldens moved). These were tuned
+against the Adobe RGB output; applying them under our ROMM output applies
+their new-space taste to our old-space look. Port together with b3490eb or
+not at all.
+
+**To port (independent, recommended — we share the bug):** `2125a34`
+Cast Removal neutral axis vs PRE-trim bounds. Their CPU measured the
+neutral axis against user-trimmed (WP/BP-adjusted) bounds while their GPU
+measured pre-trim; they standardized on pre-trim ("the film's inherent
+cast is a source property — creative trims shouldn't perturb it"). Our
+`finalize` measures against post-offset bounds — a faithful port of the
+now-declared-buggy CPU side. Port = measure `Meters.neutralAxis` against
+`prepared.baseBounds`: small change, fixtures unchanged at zero offsets,
+and it makes finalize fully offset-independent (the two-tier
+prepare/finalize cache seam simplifies; ImagePipelineSeamTests'
+offsets-only-move-the-neutral-axis assertions flip to offsets-move-nothing).
+
+**To port (proposed, needs a Settings surface + the visible-improvement
+bar):** `91a1b78` user-tunable Auto Density / Auto Grade targets —
+app-global calibration (TUNABLE_TARGETS ranges over 5 anchor/grade
+constants, Set Targets dialog, TARGETS_REVISION cache-bust). The right
+shape for per-scanner calibration; we have no Settings window yet (TODO).
+
+**Bookkeeping (no action):** `687bcd5` True Black renamed **Paper Black,
+inverted** — new default (off) keeps BPC on, so upstream's effective
+default still matches ours; only nomenclature/polarity changed. Our
+`trueBlack` field and UI naming stand; renaming to match upstream is a
+cosmetic option, recorded here so the next review doesn't re-derive the
+polarity mapping (paper_black = !bpc).
+
+**Not applicable:** `81bea3c` half-frame mode (their asset/session model),
+`4678569`/`96adfde` camera-scanning fixes, `7e888ef` dodge/burn mask
+visibility, `13a7ba5`/`3113241` update banner, `b14dc62` tutorial,
+docs/changelog/roadmap churn (`a11535f` `18f6dd5` `7a0046d` `46c85c2`
+`c27b379` `5bd0c03` `57948f5` `0ca43de`-style lint).
+
+**dump_fixtures.py: BROKEN against ≥b3490eb** — `_oetf_encode_flat`/
+`_oetf_decode_flat` lost their break-point parameters and the OETF
+semantics changed; the closed-form `working_oetf` fixture case would dump
+Adobe-gamma values against our ROMM oracle. Verify/adjust the script
+BEFORE any re-dump past b3490eb (it still works at ≤6b841a1 checkouts).
 
 ### 2026-07-17 — through `0ea27d2` (0.38.0 tail, 6 commits)
 
