@@ -9,13 +9,10 @@ and appending a history entry.
 ## Last reviewed
 
 ```
-commit:   96adfde  ("Camera scanning: faster triplet cadence and clearer scan
-          feedback while rolling (#559)")
-reviewed: 2026-07-19
-fixtures: Tests/Fixtures/ dumped from 96adfde (2026-07-20, Adobe RGB world:
-          the b3490eb working-space port + coupled auto constants are in;
-          dump_fixtures.py adapted to the paper_black rename — the manifest
-          keeps the true_black key both parity harnesses read).
+commit:   8d6f44e  ("SANE/pieusb: RGBI + NegPys IR dust removal (#583)")
+reviewed: 2026-07-21
+fixtures: Tests/Fixtures/ dumped from 96adfde (2026-07-20, Adobe RGB world) —
+          still valid; nothing in 96adfde..8d6f44e touches the pipeline.
 ```
 
 ## How to run a review
@@ -41,6 +38,81 @@ updates this file. The manual procedure, for reference:
 6. Update the **Last reviewed** marker and append to the history below.
 
 ## Review history
+
+### 2026-07-21 — through `8d6f44e` (0.39.0-dev, 21 commits)
+
+**Kernel status: untouched — a genuine null.** The path-filtered log over
+`features/exposure/`, `features/process/`, `kernel/image/` and the
+characterization goldens is empty; no renames in the range; the pipeline-tree
+diff is empty. No fixture re-dump, no constants drift, `dump_fixtures.py`
+unaffected. The range is film-scanner integration (Coolscan/SANE `bba487d`,
+RGBI + IR dust over SANE `8d6f44e`), IR dust reconstruction rework
+(`f612a74`), lab sharpen improvements (`d3436c7` — stage we don't ship),
+multi-part scan stitching (`5e141df` — capture-side composite assembly),
+contact-sheet/DB/UI work, and docs churn.
+
+**Noted for the active crosstalk thread (not a pipeline change):** `a27f035`
+widens the crosstalk matrix adjustment range in their EDITOR dialog by one
+line — the matrix math is untouched. Confirms the Density Mixer remains
+manual upstream; the chart-based auto-solve being planned here
+(`negcli chart-solve`, see 2026-07-20/21 conversations) stays a
+SwiftInvert-original with no upstream counterpart to converge with yet.
+
+**Not applicable:** `2d8e55e` TIFF sRGB decode gating (their TIFF ingestion;
+we're camera-RAW only), `67e2051` scan-window exposure gating, `ce28dc1` DB
+dialog, `9c260e2` contact-sheet labels, `2cdc569` filmstrip thumbnails,
+`b805578` icon/migration fixes, readme/changelog/tutorial commits.
+
+### 2026-07-20 — through `2cdc569` (0.39.0 → 0.40.0, 9 commits)
+
+**Kernel status: untouched.** Zero commits in the range touch
+`features/exposure/`, `features/process/`, `kernel/image/`, or the
+characterization goldens — the path-filtered log AND `git diff --stat` over
+those trees are empty, and there are no renames in the range
+(`--diff-filter=R` empty). The shared-kernel-adjacent hunks were checked by
+hand: `lab.wgsl` + `lab/logic.py`/`models.py` changed ONLY the sharpen block
+(rewritten for the 0.40.0 sharpening feature — zero lines touch vibrance/
+saturation/Dye Mute or the Lab matrices our `colorPop` mirrors), and the
+`domain/models.py` hunks are sidecar migrations for features we don't ship
+(IR inpaint radius, filed-carrier toggle fold). No fixture re-dump, no
+constants drift; `dump_fixtures.py` signatures unaffected (exposure
+`normalization.py`/`logic.py` unchanged).
+
+**Ported:** nothing (nothing required).
+
+**Divergence baseline moved (no action):** `d3436c7` rebuilt sharpening —
+Method selector (Unsharp Mask with halo-suppression overshoot clamp +
+gradient Masking, or Richardson-Lucy deconvolution on linear Y applied as a
+chroma-preserving RGB ratio), Radius/Masking sliders, preview/export parity
+via shared `gaussian_kernel_1d` taps (the old fixed 5×5 GPU kernel sharpened
+the wrong band at export scale). We don't ship sharpen (recorded
+divergence); if it's ever implemented, port THIS version (PIPELINE.md §5.4
+documents the full math). Default `sharpen` stays 0.25.
+
+**Noted upstream self-doubt on Dye Mute (strengthens our skip):**
+PIPELINE.md now carries "(The default was tuned against the old ProPhoto
+working gamut — it may run strong now that the working space is Adobe RGB.)"
+— upstream themselves flag the 0.5 default as possibly too strong post-
+b3490eb. Our 2026-07-17 skip stands; reopening condition unchanged
+(visible oversaturation at hard grades on real rolls).
+
+**UI idea worth copying independently (not pipeline):** `b805578`'s
+analysis-region active-indicator — a small dot on the Freedraw Analysis
+Region button whenever a custom region is overriding the buffer. We have the
+same override semantics (`resolve_analysis_region` port) and the same
+discoverability gap after the tool closes.
+
+**Not applicable:** `a27f035` crosstalk matrix range (stage we don't ship),
+`bba487d` Coolscan/SANE film scanning (capture stack), `f612a74`/`8a98326`
+IR dust reconstruction (retouch; runs pre-normalization on IR-carrying
+scans — we're camera-RAW only, no IR plane), `d3436c7`'s non-sharpen bulk
+(their GPU engine sharpen-pass plumbing), `c3e83ff` tooltips, `b805578`'s
+icon fixes/carrier migration, `c53aa26` USER_GUIDE rewrite, `2cdc569`
+filmstrip thumbnail fixes.
+
+**Still open (carried over):** `91a1b78` user-tunable Auto Density / Auto
+Grade targets — blocked on us growing a Settings surface; the on-scan
+Color Mixer band re-tune pass (ours, post-b3490eb).
 
 ### 2026-07-19 — through `96adfde` (0.38.0 → 0.39.0-dev, 19 commits)
 
