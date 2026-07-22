@@ -9,10 +9,10 @@ and appending a history entry.
 ## Last reviewed
 
 ```
-commit:   8d6f44e  ("SANE/pieusb: RGBI + NegPys IR dust removal (#583)")
-reviewed: 2026-07-21
+commit:   a9e5169  ("fix: correct ICC tagging across export formats (#599)")
+reviewed: 2026-07-22
 fixtures: Tests/Fixtures/ dumped from 96adfde (2026-07-20, Adobe RGB world) —
-          still valid; nothing in 96adfde..8d6f44e touches the pipeline.
+          still valid; nothing in 96adfde..a9e5169 touches the pipeline.
 ```
 
 ## How to run a review
@@ -38,6 +38,32 @@ updates this file. The manual procedure, for reference:
 6. Update the **Last reviewed** marker and append to the history below.
 
 ## Review history
+
+### 2026-07-22 — through `a9e5169` (0.39.0-dev, 3 commits)
+
+**Kernel status: untouched — a genuine null.** The path-filtered log over
+`features/exposure/`, `features/process/`, `kernel/image/` and the
+characterization goldens is empty; no VERSION/CHANGELOG/PIPELINE.md movement.
+No fixture re-dump, no constants drift, `dump_fixtures.py` unaffected.
+
+**Not applicable (all three, each diff checked):**
+- `a9e5169` ICC tagging fixes across export formats — read in full because
+  export tagging is a shared bug class, but all four defects live in features
+  we don't ship: greyscale JPEG/WebP CMS (B&W), ACES/XYZ export targets
+  (rawpy decode spaces; our export offers only sRGB/Adobe RGB), untagged
+  contact-sheet JPEGs. Our ImageIO path tags from the CGImage's colorspace
+  and can't produce the swallowed-lcms-error untagged case.
+- `40f7d2f` toolbar streamline + compare/flat-peek stabilization — Qt UI.
+  Their fix (rotate/flip re-render INSIDE an active compare view via
+  `rerender_active_view` instead of dropping to the plain edit) doesn't map:
+  our baseline compare is hold-to-press (`showingBaseline`), so geometry ops
+  can't interleave with it, and we have no flat-peek.
+- `1d48e01` stitch-config sidecar-key whitelist warning — scan stitching,
+  capture side.
+
+**Still open (carried over):** `91a1b78` user-tunable Auto Density / Auto
+Grade targets (blocked on a Settings surface); the on-scan Color Mixer band
+re-tune pass (ours, post-b3490eb).
 
 ### 2026-07-21 — through `8d6f44e` (0.39.0-dev, 21 commits)
 
