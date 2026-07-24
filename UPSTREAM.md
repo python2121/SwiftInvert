@@ -9,10 +9,10 @@ and appending a history entry.
 ## Last reviewed
 
 ```
-commit:   a9e5169  ("fix: correct ICC tagging across export formats (#599)")
-reviewed: 2026-07-22
+commit:   07dd965  ("fix(canvas): compensate print border in tool coordinate mapping (#614)")
+reviewed: 2026-07-23
 fixtures: Tests/Fixtures/ dumped from 96adfde (2026-07-20, Adobe RGB world) —
-          still valid; nothing in 96adfde..a9e5169 touches the pipeline.
+          still valid; nothing in 96adfde..07dd965 touches the pipeline.
 ```
 
 ## How to run a review
@@ -38,6 +38,42 @@ updates this file. The manual procedure, for reference:
 6. Update the **Last reviewed** marker and append to the history below.
 
 ## Review history
+
+### 2026-07-23 — through `07dd965` (0.41.0 → 0.42.0, 7 commits)
+
+**Kernel status: untouched — a genuine null.** The path-filtered log over
+`features/exposure/`, `features/process/`, `kernel/image/` and the
+characterization goldens is empty; no renames in the range; the full
+`diff --stat` touches only desktop/Qt, presets, contact-sheet and export-form
+code. The one rendering-adjacent hunk was read in full:
+`services/rendering/image_processor.py` (+18) is the contact-sheet tile
+downsampling fix (`fdf43b7`) — memory management in a feature we don't ship,
+zero kernel lines. No fixture re-dump, no constants drift,
+`dump_fixtures.py` unaffected. Changelog: 0.41.0 finalized + 0.42.0 opened,
+all entries UI/workflow/export-plumbing.
+
+**Ported:** nothing (nothing required).
+
+**UI ideas worth copying independently (not pipeline):**
+- `ec66499` per-setting copy/paste + apply-to-roll: pasting opens a picker
+  listing exactly the settings that differ on the source frame, grouped by
+  section with values shown; per-frame geometry never overwritten. Our
+  Copy/Paste Adjustments (⇧⌘C/⇧⌘V) is all-or-nothing (geometry excluded) —
+  the granular picker is the natural upgrade if multi-frame workflows grow.
+- `1dcccbe` presets redesign builds on the same picker (a preset stores
+  exactly the ticked settings, applied as overlay or replace) — relevant
+  only if we ever grow presets.
+
+**Not applicable:** `fdf43b7` contact-sheet tile memory (feature we don't
+ship), `4772dcd` export-destination-mode restore (their export form; our
+`exportOptions` JSON blob round-trips the destination already), `07dd965`
+print-border tool-coordinate compensation (we ship no print borders, and
+our coordinate space is unified by baking orientation into pixels),
+`5e08828`/`650cf4b` changelog/lint/skill churn.
+
+**Still open (carried over):** `91a1b78` user-tunable Auto Density / Auto
+Grade targets (blocked on a Settings surface); the on-scan Color Mixer band
+re-tune pass (ours, post-b3490eb).
 
 ### 2026-07-22 — through `a9e5169` (0.39.0-dev, 3 commits)
 
