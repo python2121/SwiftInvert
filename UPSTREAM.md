@@ -9,10 +9,11 @@ and appending a history entry.
 ## Last reviewed
 
 ```
-commit:   0369b10  ("fix lint")
-reviewed: 2026-07-25
+commit:   0e5b3f6  ("Fix macOS release builds for Intel + ARM runners (#633)")
+reviewed: 2026-07-26
 fixtures: Tests/Fixtures/ dumped from 0369b10 (2026-07-25, with the 127bcd7
-          cast-removal estimators — ported same day).
+          cast-removal estimators) — still valid; nothing in
+          0369b10..0e5b3f6 touches the pipeline.
 ```
 
 ## How to run a review
@@ -38,6 +39,40 @@ updates this file. The manual procedure, for reference:
 6. Update the **Last reviewed** marker and append to the history below.
 
 ## Review history
+
+### 2026-07-26 — through `0e5b3f6` (0.43.0 tail, 4 commits)
+
+**Kernel status: untouched — a genuine null.** The path-filtered log over
+`features/exposure/`, `features/process/`, `kernel/image/` and the
+characterization goldens is empty; no renames; no VERSION/CHANGELOG
+movement. The one render-adjacent hunk was read in full:
+`desktop/workers/render.py` (+5) adds a separate Qt signal so a batch
+thumbnail overwrite can't clobber an already-rendered canvas frame — their
+worker plumbing, zero kernel lines. No fixture re-dump, no constants
+drift, `dump_fixtures.py` unaffected.
+
+**Ported:** nothing (nothing required).
+
+**UI idea worth noting (not pipeline):** `e5f99ff` slider UX — their Qt
+CompactSlider now grabs on click anywhere in the groove (absolute jump,
+Shift = relative fine-drag) and forwards near-miss clicks in an ~8 px band
+above/below the groove into a real drag. Our SwiftUI sliders already
+click-to-jump; the near-miss band + Shift-for-fine-drag are candidates if
+slider precision ever comes up.
+
+**Not applicable:** `9319408` camera live-view ability checks (capture),
+`00d01c3` RGB-triplet thumbnail rendering (their thumbnail service;
+camera-RAW only here), `0e5b3f6` macOS release CI (their packaging).
+
+**Still open (carried over):** `91a1b78` user-tunable Auto Density / Auto
+Grade targets — the "needs a Settings surface" blocker is weakening now
+that the app has the profile picker/editor windows (2026-07-25), but those
+manage ADJUSTMENT profiles; tunable targets are analysis CONSTANTS
+(anchor/grade calibration), a different layer. Note the adjacent history:
+an anchor-meter recalibration A/B for these same constants was built and
+dropped 2026-07-25 (user: don't pursue) — any tunable-targets port should
+be user-initiated. Also open: the on-scan Color Mixer band re-tune pass
+(ours, post-b3490eb).
 
 ### 2026-07-25 — through `0369b10` (0.42.0 → 0.43.0, 14 commits)
 
