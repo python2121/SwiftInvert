@@ -16,6 +16,15 @@ import NegativeKit
 /// - The profile is plain settings — nothing hidden in derivation — so
 ///   cancelling it is always just `ExposureSettings()`.
 enum DefaultProfile {
+    /// The ACTIVE profile's settings — the built-in below unless the user
+    /// picked another via File → Choose Default Settings… (ProfileStore).
+    @MainActor static var settings: ExposureSettings {
+        ProfileStore.shared.active.settings
+    }
+
+    /// The code-derived house profile ("SwiftInvert Default", always first
+    /// in the picker, not user-editable — evolve it here).
+    ///
     /// Derived 2026-07-25 from the aggregate of hand corrections across
     /// the two Negative Test rolls (7 frames; thin, shadow-heavy scans):
     /// every frame was brightened (mean +0.73 EV counting both brightness
@@ -27,7 +36,7 @@ enum DefaultProfile {
     /// 2026-07-25 (same day): overall contrast +0.2 and shadow contrast
     /// +0.5 added by request — beyond the measured aggregate (contrast:
     /// 2/7 frames, mean +0.03; shadow contrast: 3/7, mixed sign, median 0).
-    static var settings: ExposureSettings {
+    static var builtIn: ExposureSettings {
         var s = ExposureSettings()
         s.exposureStops = 0.7
         s.highlights = -0.2

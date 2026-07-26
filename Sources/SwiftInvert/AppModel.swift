@@ -283,6 +283,11 @@ final class AppModel {
         toolMode = .none  // settings didSet already re-renders (and re-analyzes)
     }
 
+    /// The NSWindow hosting this model's ContentView (set by
+    /// WindowKeyObserver): the key monitor only consumes events from its
+    /// own window now that profile editors make the app multi-window.
+    @ObservationIgnored weak var hostWindow: NSWindow?
+
     let thumbnails = ThumbnailStore()
     private var pipeline: RenderPipeline?
     private var session: ImageSession?
@@ -436,7 +441,20 @@ final class AppModel {
         isNavigatingHistory = false
     }
 
-    init() {
+    /// Profile-editor mode (the Create/Edit window of File → Choose Default
+    /// Settings…): one shared adjustments draft applies to EVERY frame —
+    /// navigate anywhere and the same look follows; adjust further and it
+    /// follows back. Geometry stays per-frame (read from sidecars, shown but
+    /// never written), and NO sidecar is ever written in this mode.
+    let isProfileEditor: Bool
+
+    /// The shared adjustments being edited (geometry always stock). Kept in
+    /// sync from `settings` on every change; what Accept saves to the profile.
+    private(set) var profileDraft = ExposureSettings()
+
+    init(profileEditor: Bool = false, profileSeed: ExposureSettings = ExposureSettings()) {
+        isProfileEditor = profileEditor
+        profileDraft = profileSeed.adjustmentsOnly
         // One-time migration from the pre-rename defaults domain ("NegSwift"):
         // unbundled binaries key their preferences by process name.
         if UserDefaults.standard.object(forKey: "libraryFolder") == nil,
@@ -548,8 +566,10 @@ final class AppModel {
         straightenBase = nil
         session = retainedSession(for: url, pipeline: pipeline)
         // Loading the sidecar mutates settings, which triggers the first render.
-        // A frame with no sidecar gets the house default profile.
-        let restored = SidecarStore.load(for: url) ?? DefaultProfile.settings
+        // A frame with no sidecar gets the house default profile. The profile
+        // editor instead composes its shared draft over the frame's geometry.
+        let frame = SidecarStore.load(for: url) ?? DefaultProfile.settings
+        let restored = isProfileEditor ? profileDraft.keepingGeometry(of: frame) : frame
         isRestoringSettings = true
         if restored == settings {
             settingsChanged()  // no mutation → kick the render explicitly
@@ -583,6 +603,9 @@ final class AppModel {
     }
 
     private func settingsChanged() {
+        // Every settings edit in the profile editor updates the shared draft
+        // (geometry stripped — crop/rotate in the editor stays view-local).
+        if isProfileEditor { profileDraft = settings.adjustmentsOnly }
         scheduleRender()
         if !isRestoringSettings { scheduleSave() }
         if !isRestoringSettings && !isNavigatingHistory { scheduleHistoryCommit() }
@@ -663,7 +686,7 @@ final class AppModel {
     }
 
     private func scheduleSave() {
-        guard let url = selection else { return }
+        guard !isProfileEditor, let url = selection else { return }
         let snapshot = settings
         saveTask?.cancel()
         saveTask = Task {
@@ -775,7 +798,7 @@ final class AppModel {
     /// others by rewriting their sidecars (picked up when opened; thumbnails
     /// show the raw negative, so nothing to invalidate).
     func pasteAdjustments(to urls: [URL]) {
-        guard let source = copiedAdjustments else { return }
+        guard !isProfileEditor, let source = copiedAdjustments else { return }
         for url in urls {
             if url == selection {
                 pasteAdjustments()
@@ -792,14 +815,7 @@ final class AppModel {
     private func mergedAdjustments(
         _ source: ExposureSettings, keepingGeometryOf target: ExposureSettings
     ) -> ExposureSettings {
-        var next = source
-        next.rotation = target.rotation
-        next.flipHorizontal = target.flipHorizontal
-        next.fineRotation = target.fineRotation
-        next.cropRect = target.cropRect
-        next.analysisRect = target.analysisRect
-        next.analysisRectFineRotation = target.analysisRectFineRotation
-        return next
+        source.keepingGeometry(of: target)
     }
 
     func pasteAdjustments() {
@@ -829,7 +845,7 @@ final class AppModel {
         options.saveSticky()
         exportRequest = nil
         // Flush the debounced sidecar so the open image exports what's on screen.
-        if let selection { SidecarStore.save(settings, for: selection) }
+        if let selection, !isProfileEditor { SidecarStore.save(settings, for: selection) }
 
         isExporting = true
         let liveURL = selection

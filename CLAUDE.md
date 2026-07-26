@@ -372,14 +372,26 @@ values where needed):
   (`showingBaseline` renders stock settings with current geometry), export
   batch task with progress/cancel.
 - **`ImageSession`** (actor): the per-image cache tower (see §2) + render.
-- **Default profile** (`DefaultProfile.swift`): the evolving house look — plain
-  `ExposureSettings` applied wherever a frame is seen fresh (open with no
-  sidecar, Reset All, sidecar-less frames in batch export and Copy
-  Adjustments). The "Start from Scratch" button (under View Original) cancels
-  it back to stock `ExposureSettings()`, which stays NegPy-parity-neutral —
-  fixtures, negcli and the parity suite never see the profile. Tune it in
-  that one file only; `DefaultProfileTests` pins the documented field list
-  and adjustments-only (never geometry).
+- **Default profiles** (`DefaultProfile.swift`, `ProfileStore.swift`,
+  `ProfileWindows.swift`): the house look applied wherever a frame is seen
+  fresh (open with no sidecar, Reset All, sidecar-less frames in batch
+  export and Copy Adjustments) — resolved as `DefaultProfile.settings` =
+  the ACTIVE `SettingsProfile` in `ProfileStore` (built-in
+  "SwiftInvert Default" from code, always first, never persisted/editable;
+  user profiles + active choice as UserDefaults JSON). File → Choose
+  Default Settings… opens the picker (Accept = set active; Create New
+  seeds from the selection); Create/Edit opens a **profile-editor window**:
+  the full app UI under `AppModel(profileEditor: true)`, where one shared
+  adjustments draft (`profileDraft`) applies to EVERY frame — geometry
+  stays per-frame from sidecars, and NO sidecar is ever written in that
+  mode (guards in scheduleSave/paste/export-flush). Multi-window plumbing:
+  `KeyModelTracker` + `WindowKeyObserver` route menu commands and each
+  ContentView's key monitor to the key window's model. "Start from
+  Scratch" (under View Original) cancels the profile to stock
+  `ExposureSettings()`, which stays NegPy-parity-neutral — fixtures,
+  negcli and the parity suite never see profiles. `DefaultProfileTests` +
+  `ProfileStoreTests` pin the built-in's field list, adjustments-only
+  stripping, built-in protection, and persistence round-trip.
 - **Darkroom read-outs** (`Densitometry` in NegativeKit — pure measurement, no
   render path, so no parity surface): the **spot densitometer** (hover the
   canvas → D + zone in the control bar, with an 11-cell `ZoneStrip`) and the
@@ -417,7 +429,7 @@ values where needed):
   coordinate base. The analysis tool keeps the old draw-a-rect
   `SelectionOverlay`.
 - **Menu bar** (`SwiftInvertApp` `.commands`): File = Open Folder ⌘O /
-  Export ⌘E / Show in Finder ⇧⌘R; Edit = Undo/Redo (replacing the system
+  Choose Default Settings… / Export ⌘E / Show in Finder ⇧⌘R; Edit = Undo/Redo (replacing the system
   group — the ⌘Z shortcuts live HERE, not on HistoryPanel's buttons),
   Copy/Paste Adjustments ⇧⌘C/⇧⌘V (geometry never pasted), Reset All ⌥⌘R;
   View = Show Library ⇧⌘L / Show Grid Lines ⇧⌘G / HQ Preview ⇧⌘P

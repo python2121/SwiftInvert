@@ -7,6 +7,7 @@ struct SwiftInvertApp: App {
     // Same keys the in-window controls use, so menu toggles stay in sync.
     @AppStorage("libraryVisible") private var libraryVisible = true
     @AppStorage("showGridLines") private var showGridLines = false
+    @Environment(\.openWindow) private var openWindow
 
     init() {
         // Running unbundled via `swift run` needs an explicit activation policy
@@ -21,10 +22,14 @@ struct SwiftInvertApp: App {
         DispatchQueue.main.async { NSApplication.shared.activate(ignoringOtherApps: true) }
     }
 
+    /// Menu commands act on the key window's model: profile-editor windows
+    /// are full app copies, so ⌘Z/arrows/Reset must hit the frontmost one.
+    private var keyModel: AppModel { KeyModelTracker.shared.active ?? model }
+
     private func toolBinding(_ mode: AppModel.ToolMode) -> Binding<Bool> {
         Binding(
-            get: { model.toolMode == mode },
-            set: { model.toolMode = $0 ? mode : .none })
+            get: { keyModel.toolMode == mode },
+            set: { keyModel.toolMode = $0 ? mode : .none })
     }
 
     var body: some Scene {
@@ -34,27 +39,29 @@ struct SwiftInvertApp: App {
         .commands {
             // File: the library is folder-based, so Open Folder replaces New.
             CommandGroup(replacing: .newItem) {
-                Button("Open Folder…") { model.chooseFolder() }
+                Button("Open Folder…") { keyModel.chooseFolder() }
                     .keyboardShortcut("o")
                 Divider()
-                Button("Export…") { model.requestExportFromMenu() }
-                    .keyboardShortcut("e")
-                    .disabled(model.selection == nil || model.isExporting)
+                Button("Choose Default Settings…") { openWindow(id: "choose-default-settings") }
                 Divider()
-                Button("Show in Finder") { model.revealSelectionInFinder() }
+                Button("Export…") { keyModel.requestExportFromMenu() }
+                    .keyboardShortcut("e")
+                    .disabled(keyModel.selection == nil || keyModel.isExporting)
+                Divider()
+                Button("Show in Finder") { keyModel.revealSelectionInFinder() }
                     .keyboardShortcut("r", modifiers: [.command, .shift])
-                    .disabled(model.selection == nil)
+                    .disabled(keyModel.selection == nil)
             }
             // Edit: undo/redo drive the per-image edit history (shortcuts
             // live here, not on the HistoryPanel buttons, so they work
             // whether or not the panel is visible).
             CommandGroup(replacing: .undoRedo) {
-                Button("Undo Edit") { model.undo() }
+                Button("Undo Edit") { keyModel.undo() }
                     .keyboardShortcut("z")
-                    .disabled(!model.canUndo)
-                Button("Redo Edit") { model.redo() }
+                    .disabled(!keyModel.canUndo)
+                Button("Redo Edit") { keyModel.redo() }
                     .keyboardShortcut("z", modifiers: [.command, .shift])
-                    .disabled(!model.canRedo)
+                    .disabled(!keyModel.canRedo)
             }
             // View: panel and display toggles.
             CommandGroup(after: .sidebar) {
@@ -64,67 +71,79 @@ struct SwiftInvertApp: App {
                 Toggle("Show Grid Lines", isOn: $showGridLines)
                     .keyboardShortcut("g", modifiers: [.command, .shift])
                 Toggle("HQ Preview", isOn: Binding(
-                    get: { model.hqPreview },
-                    set: { model.hqPreview = $0 }))
+                    get: { keyModel.hqPreview },
+                    set: { keyModel.hqPreview = $0 }))
                     .keyboardShortcut("p", modifiers: [.command, .shift])
-                    .disabled(model.selection == nil)
+                    .disabled(keyModel.selection == nil)
             }
             // Image: orientation + the two draw-on-image tools (checkmarked
             // while active; Escape also exits them).
             CommandMenu("Image") {
                 // Bare-key menu equivalents intercept before responders, so
                 // disable while the export sheet (with its text field) is up.
-                Button("Previous Image") { model.selectAdjacent(-1) }
+                Button("Previous Image") { keyModel.selectAdjacent(-1) }
                     .keyboardShortcut(.leftArrow, modifiers: [])
-                    .disabled(model.files.isEmpty || model.exportRequest != nil)
-                Button("Next Image") { model.selectAdjacent(1) }
+                    .disabled(keyModel.files.isEmpty || keyModel.exportRequest != nil)
+                Button("Next Image") { keyModel.selectAdjacent(1) }
                     .keyboardShortcut(.rightArrow, modifiers: [])
-                    .disabled(model.files.isEmpty || model.exportRequest != nil)
+                    .disabled(keyModel.files.isEmpty || keyModel.exportRequest != nil)
                 Divider()
-                Button("Rotate Left") { model.rotateCounterclockwise() }
+                Button("Rotate Left") { keyModel.rotateCounterclockwise() }
                     .keyboardShortcut("[")
-                    .disabled(model.selection == nil)
-                Button("Rotate Right") { model.rotateClockwise() }
+                    .disabled(keyModel.selection == nil)
+                Button("Rotate Right") { keyModel.rotateClockwise() }
                     .keyboardShortcut("]")
-                    .disabled(model.selection == nil)
-                Button("Flip Horizontal") { model.flipHorizontal() }
+                    .disabled(keyModel.selection == nil)
+                Button("Flip Horizontal") { keyModel.flipHorizontal() }
                     .keyboardShortcut("h", modifiers: [.command, .shift])
-                    .disabled(model.selection == nil)
+                    .disabled(keyModel.selection == nil)
                 Divider()
                 Toggle("Crop or Straighten", isOn: toolBinding(.crop))
                     .keyboardShortcut("k")
-                    .disabled(model.selection == nil)
+                    .disabled(keyModel.selection == nil)
                 Button("Clear Crop & Straighten") {
-                    model.clearCropAndStraighten()
+                    keyModel.clearCropAndStraighten()
                 }
                 .disabled(
-                    model.settings.cropRect == nil
-                        && abs(model.settings.fineRotation) < 1e-9)
+                    keyModel.settings.cropRect == nil
+                        && abs(keyModel.settings.fineRotation) < 1e-9)
                 Divider()
                 Toggle("Crop for Analysis", isOn: toolBinding(.analysisRegion))
                     .keyboardShortcut("k", modifiers: [.command, .shift])
-                    .disabled(model.selection == nil)
+                    .disabled(keyModel.selection == nil)
                 Button("Clear Analysis Region") {
-                    model.pendingHistoryLabel = "Analysis region cleared"
-                    model.settings.analysisRect = nil
+                    keyModel.pendingHistoryLabel = "Analysis region cleared"
+                    keyModel.settings.analysisRect = nil
                 }
-                .disabled(model.settings.analysisRect == nil)
+                .disabled(keyModel.settings.analysisRect == nil)
             }
             CommandGroup(after: .pasteboard) {
                 Divider()
-                Button("Copy Adjustments") { model.copyAdjustments() }
+                Button("Copy Adjustments") { keyModel.copyAdjustments() }
                     .keyboardShortcut("c", modifiers: [.command, .shift])
-                    .disabled(model.selection == nil)
-                Button("Paste Adjustments") { model.pasteAdjustments() }
+                    .disabled(keyModel.selection == nil)
+                Button("Paste Adjustments") { keyModel.pasteAdjustments() }
                     .keyboardShortcut("v", modifiers: [.command, .shift])
-                    .disabled(model.selection == nil || model.copiedAdjustments == nil)
-                Button("Paste Adjustments to Selection") { model.pasteAdjustmentsToSelection() }
+                    .disabled(keyModel.selection == nil || keyModel.copiedAdjustments == nil)
+                Button("Paste Adjustments to Selection") { keyModel.pasteAdjustmentsToSelection() }
                     .keyboardShortcut("v", modifiers: [.command, .shift, .option])
-                    .disabled(model.multiSelection.isEmpty || model.copiedAdjustments == nil)
+                    .disabled(keyModel.multiSelection.isEmpty || keyModel.copiedAdjustments == nil)
                 Divider()
-                Button("Reset All") { model.resetSettings() }
+                Button("Reset All") { keyModel.resetSettings() }
                     .keyboardShortcut("r", modifiers: [.command, .option])
-                    .disabled(model.selection == nil)
+                    .disabled(keyModel.selection == nil)
+            }
+        }
+
+        // File → Choose Default Settings…: profile picker + live editors.
+        Window("Choose Default Settings", id: "choose-default-settings") {
+            ProfilePickerView()
+        }
+        .windowResizability(.contentSize)
+
+        WindowGroup("Default Settings Editor", for: ProfileEditRequest.self) { $request in
+            if let request {
+                ProfileEditorView(request: request)
             }
         }
     }
@@ -169,6 +188,7 @@ struct ContentView: View {
             ControlsSidebar(model: model)
         }
         .animation(.easeOut(duration: 0.15), value: libraryVisible)
+        .background(WindowKeyObserver(model: model))
         .onExitCommand { model.toolMode = .none }
         // onExitCommand needs focus; a local monitor catches Escape anywhere
         // in the window. Pass-through unless a tool mode is active, so sheets
@@ -187,7 +207,12 @@ struct ContentView: View {
                 guard isEscape || isAccept || isUp || isDown else { return event }
                 // Monitors fire on the main thread; only Sendable values
                 // cross the isolation boundary (NSEvent is not).
+                let eventWindow = event.window
                 let consumed = MainActor.assumeIsolated { () -> Bool in
+                    // Local monitors are app-global and every window's
+                    // ContentView installs one — act only on events from
+                    // THIS view's window (profile editors are full copies).
+                    guard let host = model.hostWindow, eventWindow === host else { return false }
                     // The export sheet owns all of these while it's up
                     // (Return = default button, Escape = Cancel, arrows =
                     // its text fields).
