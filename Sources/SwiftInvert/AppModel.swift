@@ -452,6 +452,11 @@ final class AppModel {
     /// sync from `settings` on every change; what Accept saves to the profile.
     private(set) var profileDraft = ExposureSettings()
 
+    /// Set by the key monitor when Escape lands in a profile-editor window
+    /// with no tool mode active (tool Escapes keep their exit/cancel
+    /// meaning); ProfileEditorView watches it and runs save/discard/close.
+    var profileEditorEscape = false
+
     init(profileEditor: Bool = false, profileSeed: ExposureSettings = ExposureSettings()) {
         isProfileEditor = profileEditor
         profileDraft = profileSeed.adjustmentsOnly

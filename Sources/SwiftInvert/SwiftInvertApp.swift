@@ -223,7 +223,15 @@ struct ContentView: View {
                         model.selectAdjacent(isUp ? -1 : 1)
                         return true
                     }
-                    guard model.toolMode != .none else { return false }
+                    guard model.toolMode != .none else {
+                        // Editor windows: bare Escape (no tool active) starts
+                        // the save/discard/close flow in ProfileEditorView.
+                        if isEscape, model.isProfileEditor {
+                            model.profileEditorEscape = true
+                            return true
+                        }
+                        return false
+                    }
                     if isEscape, model.toolMode == .crop {
                         model.cancelCropMode()
                     } else {

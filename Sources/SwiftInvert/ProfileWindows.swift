@@ -1,4 +1,5 @@
 import AppKit
+import NegativeKit
 import SwiftUI
 
 /// Which window's AppModel owns the menu bar and the app-global key
@@ -124,19 +125,59 @@ struct ProfileEditorView: View {
     let request: ProfileEditRequest
     @State private var model: AppModel
     @State private var name: String
+    @State private var showingClosePrompt = false
     @Environment(\.dismiss) private var dismiss
+
+    /// What the editor opened with — Escape closes silently when nothing
+    /// (draft or name) has moved off this.
+    private let seedAdjustments: ExposureSettings
+    private let seedName: String
 
     init(request: ProfileEditRequest) {
         self.request = request
         let seed = ProfileStore.shared.all.first { $0.id == (request.editID ?? request.seedID) }
             ?? ProfileStore.builtIn
+        seedAdjustments = seed.settings.adjustmentsOnly
+        seedName = request.editID != nil ? seed.name : "\(seed.name) Copy"
         _model = State(initialValue: AppModel(profileEditor: true, profileSeed: seed.settings))
         _name = State(initialValue: request.editID != nil ? seed.name : "\(seed.name) Copy")
+    }
+
+    private var hasChanges: Bool {
+        model.profileDraft != seedAdjustments || name != seedName
+    }
+
+    private func saveProfile() {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        ProfileStore.shared.upsert(
+            SettingsProfile(
+                id: request.editID ?? UUID(),
+                name: trimmed.isEmpty ? "Untitled Profile" : trimmed,
+                settings: model.profileDraft))
     }
 
     var body: some View {
         ContentView(model: model)
             .navigationTitle("Default Settings Editor — adjustments apply to every photo")
+            .onChange(of: model.profileEditorEscape) { _, requested in
+                guard requested else { return }
+                model.profileEditorEscape = false
+                if hasChanges {
+                    showingClosePrompt = true
+                } else {
+                    dismiss()
+                }
+            }
+            .alert("Save this profile before closing?", isPresented: $showingClosePrompt) {
+                Button("Save Profile") {
+                    saveProfile()
+                    dismiss()
+                }
+                Button("Discard Changes", role: .destructive) { dismiss() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("\"\(name)\" has unsaved adjustments.")
+            }
             .toolbar {
                 // Separate toolbar items, not one HStack: a single custom
                 // item gets the toolbar's capsule background wrapped around
@@ -156,12 +197,7 @@ struct ProfileEditorView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Accept") {
-                        let trimmed = name.trimmingCharacters(in: .whitespaces)
-                        ProfileStore.shared.upsert(
-                            SettingsProfile(
-                                id: request.editID ?? UUID(),
-                                name: trimmed.isEmpty ? "Untitled Profile" : trimmed,
-                                settings: model.profileDraft))
+                        saveProfile()
                         dismiss()
                     }
                     .buttonStyle(.borderedProminent)
