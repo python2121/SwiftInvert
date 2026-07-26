@@ -179,17 +179,33 @@ struct ProfileEditorView: View {
                 Text("\"\(name)\" has unsaved adjustments.")
             }
             .toolbar {
-                // Separate toolbar items, not one HStack: a single custom
-                // item gets the toolbar's capsule background wrapped around
-                // label AND field (a bubble in a bubble) — as siblings the
-                // label renders as plain text and only the field has a border.
-                ToolbarItemGroup(placement: .principal) {
-                    Text("Profile name:")
-                        .foregroundStyle(.secondary)
-                    TextField("My default look", text: $name)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 200)
-                        .help("The name this profile is listed under in Choose Default Settings")
+                // The toolbar draws a shared glass capsule BEHIND its items
+                // (label + field end up inside one bubble regardless of how
+                // they're grouped). Hide it where the API exists so the only
+                // bubble is the text field's own border; older systems keep
+                // the grouped look.
+                if #available(macOS 26.0, *) {
+                    ToolbarItem(placement: .principal) {
+                        Text("Profile name:")
+                            .foregroundStyle(.secondary)
+                    }
+                    .sharedBackgroundVisibility(.hidden)
+                    ToolbarItem(placement: .principal) {
+                        TextField("My default look", text: $name)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 200)
+                            .help("The name this profile is listed under in Choose Default Settings")
+                    }
+                    .sharedBackgroundVisibility(.hidden)
+                } else {
+                    ToolbarItemGroup(placement: .principal) {
+                        Text("Profile name:")
+                            .foregroundStyle(.secondary)
+                        TextField("My default look", text: $name)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 200)
+                            .help("The name this profile is listed under in Choose Default Settings")
+                    }
                 }
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", role: .cancel) { dismiss() }
