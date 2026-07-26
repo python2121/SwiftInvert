@@ -17,6 +17,7 @@ import Testing
         s.shadows = 0
         s.blackPointOffset = 0
         s.overallContrast = 0
+        s.shadowContrast = 0
         #expect(s == ExposureSettings())
     }
 
