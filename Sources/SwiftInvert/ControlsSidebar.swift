@@ -130,6 +130,7 @@ struct ControlsSidebar: View {
                         } label: {
                             Label("Start from Scratch", systemImage: "arrow.counterclockwise")
                         }
+                        .buttonStyle(SidebarButtonStyle())
                         .disabled(model.selection == nil)
                         .help("Clear everything including the default adjustments — edit up from the stock conversion")
                     }
@@ -279,10 +280,8 @@ struct ControlsSidebar: View {
                 model.toolMode = model.toolMode == mode ? .none : mode
             } label: {
                 Label(label, systemImage: mode == .crop ? "crop" : "viewfinder.rectangular")
-                    .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.bordered)
-            .tint(model.toolMode == mode ? Color.accentColor : nil)
+            .buttonStyle(SidebarButtonStyle(active: model.toolMode == mode))
             .help(help)
             if isSet {
                 Button {
@@ -364,28 +363,41 @@ struct HoldButton: View {
     var body: some View {
         Button {} label: {
             Label(label, systemImage: systemImage)
-                .frame(maxWidth: .infinity)
         }
-        .buttonStyle(HoldButtonStyle(onPressingChanged: onPressingChanged))
+        .buttonStyle(SidebarButtonStyle(onPressingChanged: onPressingChanged))
         .disabled(!isEnabled)
     }
 }
 
-private struct HoldButtonStyle: ButtonStyle {
-    let onPressingChanged: (Bool) -> Void
+/// One style for the sidebar's action-button family (tool rows, View
+/// Original, Start from Scratch) so they match in size and look: full-width
+/// label, shared padding/corner/border, dimmed when disabled. `active`
+/// tints a latched tool; `onPressingChanged` forwards isPressed (the
+/// HoldButton mechanism).
+struct SidebarButtonStyle: ButtonStyle {
+    var active = false
+    var onPressingChanged: ((Bool) -> Void)? = nil
+    @Environment(\.isEnabled) private var isEnabled
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
+            .frame(maxWidth: .infinity)
             .padding(.vertical, 3)
             .padding(.horizontal, 8)
             .background(
                 RoundedRectangle(cornerRadius: 6)
-                    .fill(configuration.isPressed ? Color.accentColor.opacity(0.25) : Color.primary.opacity(0.06)))
+                    .fill(
+                        configuration.isPressed || active
+                            ? Color.accentColor.opacity(0.25) : Color.primary.opacity(0.06)))
             .overlay(
                 RoundedRectangle(cornerRadius: 6)
-                    .strokeBorder(Color.primary.opacity(0.15), lineWidth: 1))
+                    .strokeBorder(
+                        active ? Color.accentColor.opacity(0.5) : Color.primary.opacity(0.15),
+                        lineWidth: 1))
+            .contentShape(RoundedRectangle(cornerRadius: 6))
+            .opacity(isEnabled ? 1 : 0.4)
             .onChange(of: configuration.isPressed) { _, pressed in
-                onPressingChanged(pressed)
+                onPressingChanged?(pressed)
             }
     }
 }
