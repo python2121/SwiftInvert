@@ -138,15 +138,17 @@ struct ProfileEditorView: View {
         ContentView(model: model)
             .navigationTitle("Default Settings Editor — adjustments apply to every photo")
             .toolbar {
-                ToolbarItem(placement: .principal) {
-                    HStack(spacing: 6) {
-                        Text("Profile name:")
-                            .foregroundStyle(.secondary)
-                        TextField("My default look", text: $name)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 200)
-                            .help("The name this profile is listed under in Choose Default Settings")
-                    }
+                // Separate toolbar items, not one HStack: a single custom
+                // item gets the toolbar's capsule background wrapped around
+                // label AND field (a bubble in a bubble) — as siblings the
+                // label renders as plain text and only the field has a border.
+                ToolbarItemGroup(placement: .principal) {
+                    Text("Profile name:")
+                        .foregroundStyle(.secondary)
+                    TextField("My default look", text: $name)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 200)
+                        .help("The name this profile is listed under in Choose Default Settings")
                 }
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", role: .cancel) { dismiss() }
