@@ -372,6 +372,14 @@ values where needed):
   (`showingBaseline` renders stock settings with current geometry), export
   batch task with progress/cancel.
 - **`ImageSession`** (actor): the per-image cache tower (see §2) + render.
+- **Default profile** (`DefaultProfile.swift`): the evolving house look — plain
+  `ExposureSettings` applied wherever a frame is seen fresh (open with no
+  sidecar, Reset All, sidecar-less frames in batch export and Copy
+  Adjustments). The "Start from Scratch" button (under View Original) cancels
+  it back to stock `ExposureSettings()`, which stays NegPy-parity-neutral —
+  fixtures, negcli and the parity suite never see the profile. Tune it in
+  that one file only; `DefaultProfileTests` pins the documented field list
+  and adjustments-only (never geometry).
 - **Darkroom read-outs** (`Densitometry` in NegativeKit — pure measurement, no
   render path, so no parity surface): the **spot densitometer** (hover the
   canvas → D + zone in the control bar, with an 11-cell `ZoneStrip`) and the

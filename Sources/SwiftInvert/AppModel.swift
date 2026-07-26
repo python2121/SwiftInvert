@@ -548,7 +548,8 @@ final class AppModel {
         straightenBase = nil
         session = retainedSession(for: url, pipeline: pipeline)
         // Loading the sidecar mutates settings, which triggers the first render.
-        let restored = SidecarStore.load(for: url) ?? ExposureSettings()
+        // A frame with no sidecar gets the house default profile.
+        let restored = SidecarStore.load(for: url) ?? DefaultProfile.settings
         isRestoringSettings = true
         if restored == settings {
             settingsChanged()  // no mutation → kick the render explicitly
@@ -674,11 +675,18 @@ final class AppModel {
 
     /// Reset every slider/toggle to defaults; the pre-process rects are
     /// geometry, not adjustments, and survive the reset.
-    /// Back to "first time we see this image": stock adjustments AND stock
+    /// Back to "first time we see this image": the default profile AND stock
     /// geometry (crop, analysis region, orientation, straighten) — the frame
     /// re-analyzes and renders exactly as on first open with no sidecar.
     func resetSettings() {
         pendingHistoryLabel = "Reset all"
+        settings = DefaultProfile.settings
+    }
+
+    /// Cancel the default profile too: the untouched stock (NegPy-neutral)
+    /// conversion, for starting an edit from scratch.
+    func resetToStock() {
+        pendingHistoryLabel = "Start from scratch"
         settings = ExposureSettings()
     }
 
@@ -760,7 +768,7 @@ final class AppModel {
     /// Context-menu copy from any frame: the open image's live settings, or
     /// another frame's sidecar (defaults if it has never been edited).
     func copyAdjustments(from url: URL) {
-        copiedAdjustments = url == selection ? settings : (SidecarStore.load(for: url) ?? ExposureSettings())
+        copiedAdjustments = url == selection ? settings : (SidecarStore.load(for: url) ?? DefaultProfile.settings)
     }
 
     /// Paste to explicit targets: the open image via the normal history path,
@@ -772,7 +780,7 @@ final class AppModel {
             if url == selection {
                 pasteAdjustments()
             } else {
-                let target = SidecarStore.load(for: url) ?? ExposureSettings()
+                let target = SidecarStore.load(for: url) ?? DefaultProfile.settings
                 SidecarStore.save(mergedAdjustments(source, keepingGeometryOf: target), for: url)
             }
         }
@@ -834,7 +842,7 @@ final class AppModel {
                 if Task.isCancelled { break }
                 exportProgress = ExportProgress(
                     done: index, total: urls.count, currentName: url.lastPathComponent)
-                let fileSettings = url == liveURL ? liveSettings : (SidecarStore.load(for: url) ?? ExposureSettings())
+                let fileSettings = url == liveURL ? liveSettings : (SidecarStore.load(for: url) ?? DefaultProfile.settings)
                 let session = url == liveURL && liveSession != nil
                     ? liveSession! : ImageSession(url: url, pipeline: pipeline)
                 do {

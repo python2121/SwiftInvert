@@ -125,6 +125,13 @@ struct ControlsSidebar: View {
                             model.setBaselinePreview(pressing)
                         }
                         .help("Hold to compare against the stock conversion")
+                        Button {
+                            model.resetToStock()
+                        } label: {
+                            Label("Start from Scratch", systemImage: "arrow.counterclockwise")
+                        }
+                        .disabled(model.selection == nil)
+                        .help("Clear everything including the default adjustments — edit up from the stock conversion")
                     }
                     .padding(6)
                 }
