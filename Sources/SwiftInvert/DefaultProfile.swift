@@ -24,12 +24,15 @@ enum DefaultProfile {
     /// (mean −0.09) to keep blacks anchored after the brightening.
     /// Mixed-sign and single-frame moves (shadow contrast, dark shadows,
     /// mixer bands, toe) were left out — those are per-frame looks.
+    /// 2026-07-25 (same day): overall contrast +0.2 added by request —
+    /// beyond the measured aggregate (2/7 frames, mean +0.03).
     static var settings: ExposureSettings {
         var s = ExposureSettings()
         s.exposureStops = 0.7
         s.highlights = -0.2
         s.shadows = 0.3
         s.blackPointOffset = -0.09
+        s.overallContrast = 0.2
         return s
     }
 }
