@@ -674,12 +674,12 @@ final class AppModel {
 
     /// Reset every slider/toggle to defaults; the pre-process rects are
     /// geometry, not adjustments, and survive the reset.
+    /// Back to "first time we see this image": stock adjustments AND stock
+    /// geometry (crop, analysis region, orientation, straighten) — the frame
+    /// re-analyzes and renders exactly as on first open with no sidecar.
     func resetSettings() {
         pendingHistoryLabel = "Reset all"
-        var fresh = ExposureSettings()
-        fresh.analysisRect = settings.analysisRect
-        fresh.cropRect = settings.cropRect
-        settings = fresh
+        settings = ExposureSettings()
     }
 
     // MARK: - Baseline (press-and-hold "before") preview

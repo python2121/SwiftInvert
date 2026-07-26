@@ -122,7 +122,7 @@ struct SwiftInvertApp: App {
                     .keyboardShortcut("v", modifiers: [.command, .shift, .option])
                     .disabled(model.multiSelection.isEmpty || model.copiedAdjustments == nil)
                 Divider()
-                Button("Reset All Adjustments") { model.resetSettings() }
+                Button("Reset All") { model.resetSettings() }
                     .keyboardShortcut("r", modifiers: [.command, .option])
                     .disabled(model.selection == nil)
             }
