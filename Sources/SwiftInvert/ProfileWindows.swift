@@ -139,12 +139,18 @@ struct ProfileEditorView: View {
             .navigationTitle("Default Settings Editor — adjustments apply to every photo")
             .toolbar {
                 ToolbarItem(placement: .principal) {
-                    TextField("Profile name", text: $name)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 220)
+                    HStack(spacing: 6) {
+                        Text("Profile name:")
+                            .foregroundStyle(.secondary)
+                        TextField("My default look", text: $name)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 200)
+                            .help("The name this profile is listed under in Choose Default Settings")
+                    }
                 }
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    Button("Cancel", role: .cancel) { dismiss() }
+                        .help("Close without saving the profile")
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Accept") {
@@ -156,6 +162,8 @@ struct ProfileEditorView: View {
                                 settings: model.profileDraft))
                         dismiss()
                     }
+                    .buttonStyle(.borderedProminent)
+                    .help("Save this profile with the current adjustments")
                 }
             }
     }
