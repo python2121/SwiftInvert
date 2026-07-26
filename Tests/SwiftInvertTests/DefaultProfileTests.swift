@@ -39,11 +39,12 @@ import Testing
         #expect(DefaultProfile.builtIn != ExposureSettings())
     }
 
-    /// The active resolution: with no user choice, DefaultProfile.settings
-    /// IS the built-in.
-    @MainActor @Test func activeDefaultsToBuiltIn() {
+    /// The active resolution: out of the box the active profile is "None"
+    /// (stock settings — no house look until the user opts in).
+    @MainActor @Test func activeDefaultsToNone() {
         let store = ProfileStore(defaults: UserDefaults(suiteName: "test-dp-\(UUID().uuidString)")!)
-        #expect(store.active.settings == DefaultProfile.builtIn)
+        #expect(store.activeID == ProfileStore.noneID)
+        #expect(store.active.settings == ExposureSettings())
     }
 }
 
@@ -54,11 +55,22 @@ import Testing
         UserDefaults(suiteName: "test-profiles-\(UUID().uuidString)")!
     }
 
-    @Test func builtInIsFirstAndActiveByDefault() {
+    @Test func noneFirstThenBuiltInNoneActiveByDefault() {
         let store = ProfileStore(defaults: freshDefaults())
-        #expect(store.all.first?.id == ProfileStore.builtInID)
-        #expect(store.activeID == ProfileStore.builtInID)
-        #expect(store.active.name == "SwiftInvert Default")
+        #expect(store.all.map(\.id) == [ProfileStore.noneID, ProfileStore.builtInID])
+        #expect(store.activeID == ProfileStore.noneID)
+        #expect(store.active.name == "None")
+        #expect(ProfileStore.none.settings == ExposureSettings())
+    }
+
+    /// Choosing the built-in default survives restarts (a fresh store over
+    /// the same defaults keeps the choice).
+    @Test func choosingDefaultPersists() {
+        let defaults = freshDefaults()
+        ProfileStore(defaults: defaults).setActive(ProfileStore.builtInID)
+        let reloaded = ProfileStore(defaults: defaults)
+        #expect(reloaded.activeID == ProfileStore.builtInID)
+        #expect(reloaded.active.settings == DefaultProfile.builtIn)
     }
 
     @Test func upsertStripsGeometryAndRoundTrips() {
@@ -82,26 +94,31 @@ import Testing
         let reloaded = ProfileStore(defaults: defaults)
         #expect(reloaded.activeID == id)
         #expect(reloaded.active.settings == saved)
-        #expect(reloaded.all.count == 2)
+        #expect(reloaded.all.count == 3)
     }
 
-    @Test func builtInCannotBeUpsertedOrDeleted() {
+    @Test func reservedProfilesCannotBeUpsertedOrDeleted() {
         let store = ProfileStore(defaults: freshDefaults())
         var hijack = ProfileStore.builtIn
         hijack.settings.vibrance = 9
         store.upsert(hijack)
+        var hijackNone = ProfileStore.none
+        hijackNone.settings.vibrance = 9
+        store.upsert(hijackNone)
         store.delete(ProfileStore.builtInID)
-        #expect(store.all.count == 1)
-        #expect(store.active.settings == DefaultProfile.builtIn)
+        store.delete(ProfileStore.noneID)
+        #expect(store.all.count == 2)
+        #expect(store.all[0].settings == ExposureSettings())
+        #expect(store.all[1].settings == DefaultProfile.builtIn)
     }
 
-    @Test func deletingActiveFallsBackToBuiltIn() {
+    @Test func deletingActiveFallsBackToNone() {
         let store = ProfileStore(defaults: freshDefaults())
         let id = UUID()
         store.upsert(SettingsProfile(id: id, name: "Temp", settings: ExposureSettings()))
         store.setActive(id)
         store.delete(id)
-        #expect(store.activeID == ProfileStore.builtInID)
+        #expect(store.activeID == ProfileStore.noneID)
         #expect(store.userProfiles.isEmpty)
     }
 

@@ -16,14 +16,15 @@ import NegativeKit
 /// - The profile is plain settings — nothing hidden in derivation — so
 ///   cancelling it is always just `ExposureSettings()`.
 enum DefaultProfile {
-    /// The ACTIVE profile's settings — the built-in below unless the user
-    /// picked another via File → Choose Default Settings… (ProfileStore).
+    /// The ACTIVE profile's settings — "None" (stock, no adjustments) out
+    /// of the box; the built-in below or a user profile once picked via
+    /// File → Choose Default Settings… (ProfileStore; survives restarts).
     @MainActor static var settings: ExposureSettings {
         ProfileStore.shared.active.settings
     }
 
-    /// The code-derived house profile ("SwiftInvert Default", always first
-    /// in the picker, not user-editable — evolve it here).
+    /// The code-derived house profile ("SwiftInvert Default", second in the
+    /// picker after None, not user-editable — evolve it here).
     ///
     /// Derived 2026-07-25 from the aggregate of hand corrections across
     /// the two Negative Test rolls (7 frames; thin, shadow-heavy scans):

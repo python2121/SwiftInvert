@@ -376,9 +376,11 @@ values where needed):
   `ProfileWindows.swift`): the house look applied wherever a frame is seen
   fresh (open with no sidecar, Reset All, sidecar-less frames in batch
   export and Copy Adjustments) — resolved as `DefaultProfile.settings` =
-  the ACTIVE `SettingsProfile` in `ProfileStore` (built-in
-  "SwiftInvert Default" from code, always first, never persisted/editable;
-  user profiles + active choice as UserDefaults JSON). File → Choose
+  the ACTIVE `SettingsProfile` in `ProfileStore` (two reserved rows from
+  code, never persisted/editable: "None" = stock, first in the list and
+  the out-of-the-box active choice, then "SwiftInvert Default" = the house
+  look; user profiles + active choice as UserDefaults JSON, so a picked
+  default survives restarts). File → Choose
   Default Settings… opens the picker (Accept = set active; Create New
   seeds from the selection); Create/Edit opens a **profile-editor window**:
   the full app UI under `AppModel(profileEditor: true)`, where one shared

@@ -66,14 +66,14 @@ struct ProfilePickerView: View {
     @State private var selectedID: UUID = ProfileStore.shared.activeID
 
     private var store: ProfileStore { ProfileStore.shared }
-    private var selectionIsBuiltIn: Bool { selectedID == ProfileStore.builtInID }
+    private var selectionIsBuiltIn: Bool { ProfileStore.reservedIDs.contains(selectedID) }
 
     var body: some View {
         VStack(spacing: 0) {
             List(store.all, selection: Binding(get: { selectedID }, set: { selectedID = $0 ?? selectedID })) { profile in
                 HStack {
                     Text(profile.name)
-                    if profile.id == ProfileStore.builtInID {
+                    if ProfileStore.reservedIDs.contains(profile.id) {
                         Text("built-in").font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()

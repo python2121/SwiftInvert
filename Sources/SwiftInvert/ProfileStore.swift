@@ -32,32 +32,45 @@ extension ExposureSettings {
 
 /// The profile library and which profile is the app's default look.
 ///
-/// The built-in profile (`DefaultProfile.builtIn`, "SwiftInvert Default") is
-/// always first, resolved from code each launch — never persisted, never
-/// editable, so it evolves with the app. User profiles + the active choice
-/// persist as JSON in UserDefaults (`settingsProfiles`/`activeProfileID`,
-/// same pattern as `exportOptions`). Everything that asks "what does a
-/// fresh frame get?" reads `DefaultProfile.settings`, which resolves
+/// Two reserved rows lead the list, resolved from code each launch — never
+/// persisted, never editable: "None" (stock settings, the out-of-the-box
+/// active choice) and "SwiftInvert Default" (`DefaultProfile.builtIn`, the
+/// house look, which evolves with the app). User profiles + the active
+/// choice persist as JSON in UserDefaults
+/// (`settingsProfiles`/`activeProfileID`, same pattern as `exportOptions`),
+/// so picking a default survives restarts. Everything that asks "what does
+/// a fresh frame get?" reads `DefaultProfile.settings`, which resolves
 /// through `ProfileStore.shared.active` — so Accept in the picker changes
 /// the app's default look immediately, everywhere.
 @MainActor @Observable
 final class ProfileStore {
     static let shared = ProfileStore()
 
+    /// "None" — stock, NegPy-neutral settings; first in the list and the
+    /// out-of-the-box active choice (fresh installs apply no house look
+    /// until the user opts into one).
+    static let noneID = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
+    static var none: SettingsProfile {
+        SettingsProfile(id: noneID, name: "None", settings: ExposureSettings())
+    }
+
     static let builtInID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
     static var builtIn: SettingsProfile {
         SettingsProfile(id: builtInID, name: "SwiftInvert Default", settings: DefaultProfile.builtIn)
     }
 
+    /// The code-provided rows: never persisted, editable or deletable.
+    static let reservedIDs: Set<UUID> = [noneID, builtInID]
+
     private let defaults: UserDefaults
     private(set) var userProfiles: [SettingsProfile] = []
-    private(set) var activeID: UUID = ProfileStore.builtInID
+    private(set) var activeID: UUID = ProfileStore.noneID
 
-    /// Built-in first, then user profiles in creation order.
-    var all: [SettingsProfile] { [Self.builtIn] + userProfiles }
+    /// None, then the built-in default, then user profiles in creation order.
+    var all: [SettingsProfile] { [Self.none, Self.builtIn] + userProfiles }
 
     var active: SettingsProfile {
-        all.first { $0.id == activeID } ?? Self.builtIn
+        all.first { $0.id == activeID } ?? Self.none
     }
 
     init(defaults: UserDefaults = .standard) {
@@ -81,9 +94,9 @@ final class ProfileStore {
     }
 
     /// Insert or update a user profile (geometry stripped here, so no caller
-    /// can persist a crop into a profile). The built-in id is refused.
+    /// can persist a crop into a profile). Reserved ids are refused.
     func upsert(_ profile: SettingsProfile) {
-        guard profile.id != Self.builtInID else { return }
+        guard !Self.reservedIDs.contains(profile.id) else { return }
         var stripped = profile
         stripped.settings = profile.settings.adjustmentsOnly
         if let i = userProfiles.firstIndex(where: { $0.id == stripped.id }) {
@@ -94,11 +107,12 @@ final class ProfileStore {
         persist()
     }
 
-    /// Remove a user profile; deleting the active one falls back to built-in.
+    /// Remove a user profile; deleting the active one falls back to None
+    /// (the out-of-the-box state).
     func delete(_ id: UUID) {
-        guard id != Self.builtInID else { return }
+        guard !Self.reservedIDs.contains(id) else { return }
         userProfiles.removeAll { $0.id == id }
-        if activeID == id { activeID = Self.builtInID }
+        if activeID == id { activeID = Self.noneID }
         persist()
     }
 
