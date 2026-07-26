@@ -105,7 +105,7 @@ Rendering/export still bake the angle; `exportRender` shares `prepare()`,
 so preview and export agree.
 
 Two stages, both offset-independent since the 2125a34 port
-(`ExposureKernel.prepare` ≈150 ms once per image/crop; `finalize` ≈25 ms,
+(`ExposureKernel.prepare` ≈180 ms once per image/crop; `finalize` ≈45 ms,
 cached with it — white/black-point drags re-run NO analysis at all; the
 offsets fold into `finalBounds` at derive time only):
 
@@ -127,7 +127,16 @@ offsets fold into `finalBounds` at derive time only):
    two independent percentile axes on the grid, one sort per channel
    (vDSP): the **luma axis** (base clip 0.01%) sets the mean center+span
    (dynamic range); the **colour axis** (base clip 1.0%) sets per-channel
-   cast offsets relative to the median channel. Recombined:
+   cast offsets relative to the median channel. Since the 127bcd7 port
+   (NegPy 0.43) the colour axis's dense end (floors = print whites) prefers
+   **same-pixel refs** (`samePixelColorFloorRefs`, float64 end-to-end like
+   upstream): one shared chroma-gated pixel set — the luma-extreme band
+   `[clip, clip+4]` percentile, lowest-RMS-chroma 30%, chroma base-anchored
+   against the thin-end refs with a two-pass provisional-gamma refinement —
+   so coloured highlight content can't masquerade as film cast; falls back
+   to the percentile pass when the band has no trustworthy neutrals
+   (< 64 px or median chroma over the caps). Thin-end ceils stay
+   percentile-based (film density is bounded below by base). Recombined:
    `floor[ch] = mean(luma floors) + (colour floor[ch] − median(colour floors))`
    (same for ceils) → `LogNegativeBounds` (floors < ceils).
 4. **Meters** (all on the same grid):
@@ -140,11 +149,18 @@ offsets fold into `finalBounds` at derive time only):
 (NegPy `measure_neutral_axis_from_log`) measured against the PRE-trim base
 bounds — NegPy 2125a34: the film's cast is a source property, so creative
 WP/BP trims must not perturb it (their GPU always measured pre-trim; the
-CPU side we'd ported was the bug): three normalized-luma bands (highlight 0.10–0.30,
-mid 0.40–0.60, shadow 0.72–0.92); per band, keep the lowest-chroma 30%
-(≥64 px, median chroma ≤0.35 cap) and take per-channel **raw-log medians**;
-`confidence = 1 − midChroma/cap` gates Auto cast removal. Returns nil mid or
-shadow → no neutral axis (shadow-ref fallback used downstream).
+CPU side we'd ported was the bug). Two-pass since the 127bcd7 port
+(NegPy 0.43): three normalized-luma bands (highlight 0.10–0.30,
+mid 0.40–0.60, shadow 0.72–0.92); per band, keep the lowest-**RMS**-chroma
+30% (hue-uniform pairwise RMS, not max−min; ≥64 px). Pass 1 selects under a
+loose cap (0.55 — admits strong-but-correctable casts, rejects saturated
+content); the affine R/B→G correction implied by its mid+shadow refs
+re-ranks chroma; pass 2 selects true neutrals under the strict cap (0.29)
+and takes per-channel **raw-log medians**. `confidence = tightness ×
+sampleSize × agreement` — corrected mid/shadow chroma vs the cap,
+`n/(n+256)` on the mid set, and mid↔shadow deviation agreement (0.10 dead
+zone, 0.20 roll-off) — gates Auto cast removal. Returns nil mid or shadow
+(either pass) → no neutral axis (shadow-ref fallback used downstream).
 
 `ImageSession` caches: decode (per image) → oriented preview (per
 orientation) → `Prepared` + `ExposureAnalysis` (per rects) → GPU source
@@ -315,15 +331,15 @@ For "what changed in NegPy?" requests, run the **`/negpy-review` skill**
 (`.claude/skills/negpy-review/`) — it fetches upstream, triages the diff
 around the inversion pipeline, and maintains UPSTREAM.md.
 
-Neutral-axis semantics are synced with NegPy `2125a34` (pre-trim bounds;
-fixtures unaffected — all dump configs use zero offsets).
-Kernel constants are synced with **NegPy 0.38** (`6b841a1`: Auto Grade retune
-`auto_grade_target` 0.55 / `auto_grade_strength` 0.3, defaults `paper_dmin`
-off + `true_black` on — plus the 0.36 set: `toe_height` 0.90 with the
-`toe_grade_strength` rescale, True Black, always-confidence cast removal);
-fixtures were re-dumped from that revision (the manifest records `paper_dmin`
-and `true_black` per config; the parity harnesses read both, so default flips
-on either side can't silently skew parity). NegPy's per-layer R/G/B trims,
+Analysis semantics and kernel constants are synced with **NegPy 0.43**
+(`0369b10` tip; the estimator rewrite landed in `127bcd7`: two-pass
+RMS-chroma neutral axis with the rebuilt confidence, same-pixel colour
+floors, `neutral_axis_chroma_cap` 0.29 + the five new estimator constants —
+on top of the earlier syncs: 2125a34 pre-trim neutral axis, b3490eb-coupled
+auto constants, the 0.38 set with `paper_dmin` off + `true_black` on, the
+0.36 set). Fixtures were re-dumped from `0369b10` (the manifest records
+`paper_dmin` and `true_black` per config; the parity harnesses read both,
+so default flips on either side can't silently skew parity). NegPy's per-layer R/G/B trims,
 Split Grade and Zone Density (their convergent take on our tone controls)
 are NOT ported — our tone controls + 3-band grading cover the achromatic
 cases; per-channel crossover trims are a candidate future feature.

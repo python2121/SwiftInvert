@@ -62,9 +62,9 @@ public enum BoundsAnalysis {
         return (floors, ceils)
     }
 
-    /// One ascending sort per channel — the expensive half of the bounds
-    /// analysis, cacheable across white/black-point changes.
-    public static func sortedChannels(grid: RGBImage) -> [[Float]] {
+    /// One ascending sort per channel — the expensive half of the percentile
+    /// sampling.
+    static func sortedChannels(grid: RGBImage) -> [[Float]] {
         let n = grid.width * grid.height
         var channels: [[Float]] = [[], [], []]
         for c in 0..<3 {
@@ -79,22 +79,126 @@ public enum BoundsAnalysis {
         return channels
     }
 
+    /// _same_pixel_color_floor_refs: dense-end (print-white) colour refs from
+    /// one shared pixel set — the luma-extreme band's lowest-chroma subset,
+    /// chroma measured base-anchored (offsets from the thin-end refs,
+    /// per-channel span as provisional gamma, refined once from the band
+    /// medians). Independent per-channel percentiles read a different scene
+    /// object per channel, so coloured highlight content masquerades as film
+    /// cast; a shared chroma-gated set cannot. The thin end needs no such
+    /// treatment — density on real film is bounded below by base, anchoring
+    /// per-channel ceils. nil when the band's neutral set is too small or too
+    /// chromatic (caller falls back to the percentile pass).
+    ///
+    /// Runs in float64 end to end (the one analysis path that does upstream —
+    /// it casts the grid to float64 on entry), so this is bit-comparable to
+    /// the numpy reference.
+    static func samePixelColorFloorRefs(
+        grid: RGBImage,
+        lumaFloors: [Double], lumaCeils: [Double],
+        baseRefs: [Double],
+        colorClip: Double
+    ) -> [Double]? {
+        let eps = 1e-6
+        let n = grid.width * grid.height
+        let minPx = K.neutralAxisMinPixels
+        let width = K.colorBoundsBandWidth
+
+        var denoms = [Double](repeating: 0, count: 3)
+        for ch in 0..<3 {
+            var denom = lumaCeils[ch] - lumaFloors[ch]
+            if abs(denom) < eps { denom = denom >= 0 ? eps : -eps }
+            denoms[ch] = denom
+        }
+        var luma = [Double](repeating: 0, count: n)
+        grid.pixels.withUnsafeBufferPointer { src in
+            for i in 0..<n {
+                let r = (Double(src[i * 3]) - lumaFloors[0]) / denoms[0]
+                let g = (Double(src[i * 3 + 1]) - lumaFloors[1]) / denoms[1]
+                let b = (Double(src[i * 3 + 2]) - lumaFloors[2]) / denoms[2]
+                luma[i] = K.lumaR * r + K.lumaG * g + K.lumaB * b
+            }
+        }
+
+        let clip = max(0.00001, min(50.0 - width, colorClip))
+        let sortedLuma = Stats.sortedAscending(luma)
+        let lo = Stats.percentileOfSorted(sortedLuma, clip)
+        let hi = Stats.percentileOfSorted(sortedLuma, clip + width)
+
+        // Band offsets from the thin-end base refs, order-preserving triplets.
+        var d: [Double] = []
+        d.reserveCapacity(n / 8 * 3)
+        grid.pixels.withUnsafeBufferPointer { src in
+            for i in 0..<n where luma[i] >= lo && luma[i] <= hi {
+                d.append(Double(src[i * 3]) - baseRefs[0])
+                d.append(Double(src[i * 3 + 1]) - baseRefs[1])
+                d.append(Double(src[i * 3 + 2]) - baseRefs[2])
+            }
+        }
+        let m = d.count / 3
+        guard m >= minPx else { return nil }
+
+        func select(_ gamma: [Double]) -> (kept: [Int], medianChroma: Double)? {
+            let g = gamma.map { abs($0) < eps ? eps : $0 }
+            var chroma = [Double](repeating: 0, count: m)
+            for j in 0..<m {
+                chroma[j] = Meters.rmsChroma(d[j * 3] / g[0], d[j * 3 + 1] / g[1], d[j * 3 + 2] / g[2])
+            }
+            let thr = Stats.quantile(chroma, K.neutralAxisChromaQuantile)
+            var kept: [Int] = []
+            var keptChroma: [Double] = []
+            kept.reserveCapacity(m / 2)
+            keptChroma.reserveCapacity(m / 2)
+            for j in 0..<m where chroma[j] <= thr {
+                kept.append(j)
+                keptChroma.append(chroma[j])
+            }
+            guard kept.count >= minPx else { return nil }
+            return (kept, Stats.median(keptChroma))
+        }
+
+        func channelMedians(_ rows: [Int]) -> [Double] {
+            var scratch = [Double](repeating: 0, count: rows.count)
+            var out = [Double](repeating: 0, count: 3)
+            for ch in 0..<3 {
+                for (k, j) in rows.enumerated() { scratch[k] = d[j * 3 + ch] }
+                out[ch] = Stats.median(scratch)
+            }
+            return out
+        }
+
+        let spans = (0..<3).map { lumaFloors[$0] - baseRefs[$0] }
+        // Pass-1 loose cap: a homogeneous coloured cluster would otherwise be
+        // self-normalized to zero chroma by pass 2 and read as neutral.
+        guard let first = select(spans), first.medianChroma <= K.neutralAxisFirstPassCap
+        else { return nil }
+        let provisional = channelMedians(first.kept)
+        guard provisional.allSatisfy({ abs($0) >= eps }) else { return nil }
+        guard let second = select(provisional), second.medianChroma <= K.neutralAxisChromaCap
+        else { return nil }
+        let med = channelMedians(second.kept)
+        return [baseRefs[0] + med[0], baseRefs[1] + med[1], baseRefs[2] + med[2]]
+    }
+
     /// Two-axis recombination: luma clip drives the mean centre+span, colour clip
-    /// the per-channel cast (offset from the median channel).
+    /// the per-channel cast (offset from the median channel). Colour floors
+    /// (dense end, scene content) prefer the same-pixel chroma-gated band refs
+    /// (NegPy 0.43), falling back to the percentile pass when the band holds no
+    /// trustworthy neutrals (and always for margin-mode clips).
     public static func analyze(
         grid: RGBImage, lumaRangeClip: Double = 0.0, colorRangeClip: Double = K.baseColorClip
     ) -> LogNegativeBounds {
-        analyze(
-            channelsSorted: sortedChannels(grid: grid),
-            lumaRangeClip: lumaRangeClip, colorRangeClip: colorRangeClip)
-    }
-
-    /// Bounds from pre-sorted channels (fast path for offset re-derives).
-    public static func analyze(
-        channelsSorted channels: [[Float]], lumaRangeClip: Double = 0.0, colorRangeClip: Double = K.baseColorClip
-    ) -> LogNegativeBounds {
+        let channels = sortedChannels(grid: grid)
         let (floors, ceils) = sampleLogBounds(channelsSorted: channels, percentileClip: lumaRangeClip, base: K.baseLumaClip)
-        let (cFloors, cCeils) = sampleLogBounds(channelsSorted: channels, percentileClip: colorRangeClip, base: 0.0)
+        let colour = sampleLogBounds(channelsSorted: channels, percentileClip: colorRangeClip, base: 0.0)
+        var cFloors = colour.floors
+        let cCeils = colour.ceils
+        if colorRangeClip >= 0,
+            let sp = samePixelColorFloorRefs(
+                grid: grid, lumaFloors: floors, lumaCeils: ceils, baseRefs: cCeils, colorClip: colorRangeClip)
+        {
+            cFloors = sp
+        }
 
         let meanLF = (floors[0] + floors[1] + floors[2]) / 3.0
         let meanLC = (ceils[0] + ceils[1] + ceils[2]) / 3.0

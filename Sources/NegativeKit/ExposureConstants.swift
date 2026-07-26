@@ -51,8 +51,23 @@ public enum K {
     public static let neutralAxisMidBand = (0.40, 0.60)
     public static let neutralAxisShadowBand = (0.72, 0.92)
     public static let neutralAxisChromaQuantile = 0.30
-    public static let neutralAxisChromaCap = 0.35
+    // Above this median corrected chroma (pass 2) the set isn't trustworthy →
+    // fall back to the shadow-only tie (NegPy 0.43: 0.35 → 0.29, coupled to the
+    // two-pass estimator).
+    public static let neutralAxisChromaCap = 0.29
+    // Pass-1 (pre-correction) chroma ceiling: admits strong correctable casts,
+    // rejects saturated content.
+    public static let neutralAxisFirstPassCap = 0.55
     public static let neutralAxisMinPixels = 64
+    // Confidence sample-size half-point: the size term is n / (n + this).
+    public static let neutralAxisConfidenceN0 = 256.0
+    // Mid↔shadow deviation-difference dead zone (plausible crossover passes
+    // free) and roll-off width of the confidence agreement term beyond it.
+    public static let neutralAxisAgreementDeadzone = 0.10
+    public static let neutralAxisAgreementScale = 0.20
+    // Width (percentile points) of the luma-extreme band the same-pixel colour
+    // floor refs read; the colour clip sets the band's depth.
+    public static let colorBoundsBandWidth = 4.0
     // Anchor metering.
     public static let anchorMeterPercentile = 50.0
     public static let anchorMeterBand = 0.12

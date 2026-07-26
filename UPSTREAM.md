@@ -9,10 +9,10 @@ and appending a history entry.
 ## Last reviewed
 
 ```
-commit:   07dd965  ("fix(canvas): compensate print border in tool coordinate mapping (#614)")
-reviewed: 2026-07-23
-fixtures: Tests/Fixtures/ dumped from 96adfde (2026-07-20, Adobe RGB world) —
-          still valid; nothing in 96adfde..07dd965 touches the pipeline.
+commit:   0369b10  ("fix lint")
+reviewed: 2026-07-25
+fixtures: Tests/Fixtures/ dumped from 0369b10 (2026-07-25, with the 127bcd7
+          cast-removal estimators — ported same day).
 ```
 
 ## How to run a review
@@ -38,6 +38,110 @@ updates this file. The manual procedure, for reference:
 6. Update the **Last reviewed** marker and append to the history below.
 
 ## Review history
+
+### 2026-07-25 — through `0369b10` (0.42.0 → 0.43.0, 14 commits)
+
+**Kernel status: ANALYSIS SEMANTICS MOVED UPSTREAM — goldens regenerated.**
+One commit, `127bcd7` ("Improve cast-removal estimators and fix chart cast
+parity", 0.43.0's headliner), rewrites the two analysis estimators we ported,
+with `test_scene_linear_relocation.py` goldens moved (small deltas ~1e-3 on
+the synthetic scene — it has no strong cast; the point of the change is real
+scans WITH casts). No WGSL/shader changes anywhere in the range — this is
+CPU-analysis only, so a port touches NegativeKit + fixtures, not the Metal
+side.
+
+**PORTED 2026-07-25 (same day, user approved and chose it as the default)
+— `127bcd7`, all pieces together as one semantic unit.** Landed in
+`Meters.neutralAxis` (two-pass rewrite), `BoundsAnalysis.samePixelColorFloorRefs`
++ `analyze` wiring, `K` (six constants), and `Stats` [Double] overloads
+(np-matching percentile/median — the same-pixel path is float64 end-to-end
+like upstream, bit-comparable arithmetic). The vestigial
+`analyze(channelsSorted:)` public overload was folded away (offset
+re-derives stopped re-running analysis at 2125a34; nothing external used
+it). Fixtures re-dumped from `0369b10`; all 132 tests pass, including
+AnalysisParityTests/GridParityTests against the new-estimator fixtures.
+Branch coverage verified positively: the same-pixel branch FIRES on
+synthetic_grid (refs ≈0.1D off the percentile floors, Swift matches) and
+correctly falls back on synthetic64; the two-pass axis moves synthetic64's
+confidence 0.984 → 0.337 (the n/(n+256) size term bites on a 32×32 grid —
+real previews sit near 393k grid px, where it doesn't). Real-scan A/B
+(three CR3s, `negcli meter` old vs new binary): neutral-rich frames move
+≤0.004D; IMG_0365's bright probe went 0.768/0.785/0.791 → 0.789/0.784/0.777
+— a slightly cyan highlight now reads neutral, the exact failure mode the
+same-pixel floors target. An independent line-by-line Python↔Swift audit
+cleared all eight semantic areas and surfaced two last-ulp fidelity gaps,
+both fixed: `Stats.percentileOfSorted` now mirrors numpy's two-sided
+`_lerp` (interpolates from the upper bound when frac ≥ 0.5 — both
+overloads), and the neutral axis's pass-1 luma/chroma read the ROUNDED
+float32 norm values (upstream computes them from the float32 normalized
+image). The audit's remaining note (two guards invert only under NaN) is
+unreachable: the grid is log10(clip(...)), finite by construction.
+Bench: slider path unchanged (4.6 ms/frame); prepare 157→182 ms,
+finalize 25→47 ms (per-image analysis, matches the added work). CLAUDE.md
+§2 + the constants-sync paragraph updated.
+
+The pieces, for the record:
+
+1. **Hue-uniform chroma metric**: near-neutral ranking switches from
+   `max−min` to pairwise RMS `sqrt(((r−g)²+(g−b)²+(r−b)²)/3)` — max−min
+   scores an opposed R/B split double a same-side deviation. Used by both
+   estimators below. Maps to our `finalize` neutral-axis band selection.
+2. **Two-pass neutral axis** (`measure_neutral_axis_from_log`): pass 1
+   selects under a LOOSE cap (`neutral_axis_first_pass_cap` 0.55 — admits
+   strong-but-correctable casts the old single 0.35 cap rejected outright;
+   saturated content still fails); the affine R/B→G correction implied by
+   pass-1 mid+shadow refs (normalized space) re-ranks chroma; pass 2 selects
+   true neutrals under the strict cap, now **0.29** (was 0.35).
+3. **Confidence rebuilt**: `tight × size × agreement` —
+   `tight = 1 − max(midChroma, shadowChroma)/cap` on CORRECTED chroma (was
+   mid-only, uncorrected); `size = n/(n+256)` (`neutral_axis_confidence_n0`);
+   `agreement` = 1 minus the mid↔shadow R/B deviation-difference beyond a
+   0.10 dead zone, rolled off over 0.20 (`neutral_axis_agreement_deadzone`/
+   `_scale`). Drives our `strength = confidence × slider` directly.
+4. **Same-pixel colour floors** (`_same_pixel_color_floor_refs` +
+   `analyze_log_exposure_bounds_from_log` wiring): the colour axis's dense
+   end (print whites) now reads ONE shared chroma-gated pixel set — the
+   luma-extreme percentile band `[colorClip, colorClip+4]`
+   (`color_bounds_band_width` 4.0), chroma measured base-anchored (offsets
+   from the thin-end refs, per-channel span as provisional gamma, refined
+   once from band medians, same two-pass loose/strict caps) — instead of
+   independent per-channel percentiles, so coloured highlight content stops
+   masquerading as film cast. Falls back to the percentile pass when the
+   band holds no trustworthy neutrals. The thin end stays percentile-based
+   (film density is bounded below by base). Maps to `BoundsAnalysis.analyze`'s
+   colour axis.
+
+   New `K` constants: `neutral_axis_chroma_cap` 0.35→**0.29**,
+   `neutral_axis_first_pass_cap` **0.55**, `neutral_axis_confidence_n0`
+   **256**, `neutral_axis_agreement_deadzone` **0.10**,
+   `neutral_axis_agreement_scale` **0.20**, `color_bounds_band_width`
+   **4.0**. All CPU-side (no MSL duplicates). `dump_fixtures.py` verified
+   compatible before the re-dump — every imported symbol's signature is
+   unchanged at 0369b10.
+
+**Not applicable:**
+- `127bcd7`'s chart-parity half: `cast_solve_inputs` (single source of truth
+  for CPU processor + chart — our `deriveRenderParams` already IS that),
+  `CharacteristicCurve` gaining `curvature` (chart-only class; their render
+  path `apply_characteristic_curve` always had it, as does our
+  `ReferenceCurve`), GPU engine exporting raw cast refs (chart plumbing).
+- `ab5a6ad` sensor-crosstalk calibration: 3×3 CFA unmix on the linear
+  capture for single-shot narrowband-LED camera scans, calibrated from bare-
+  light exposures, default None, gated off for RGB-triplet composites —
+  capture-side crosstalk stack we don't ship. **Noted for the crosstalk
+  thread:** upstream now formally splits sensor crosstalk (linear domain,
+  pre-inversion, per-setup) from dye crosstalk (density domain, Density
+  Mixer) — the planned `negcli chart-solve` is on the dye side and remains
+  a SwiftInvert-original.
+- `8a1a3e1` selectable scanner backend, `6cea8a5` live-view drop/output-
+  folder guards (capture stack); `d7e2502` IR sidecar case-insensitive
+  matching (retouch); `59e5352` DMG target-arch build flag (their
+  packaging); `6e294fa`/`d7ca80c`/`5a9cc2d`/`9b2345a`/`91cac6d` docs,
+  `76ae85f`/`f85877b` changelog, `0369b10` lint.
+
+**Still open (carried over):** `91a1b78` user-tunable Auto Density / Auto
+Grade targets (blocked on a Settings surface); the on-scan Color Mixer band
+re-tune pass (ours, post-b3490eb).
 
 ### 2026-07-23 — through `07dd965` (0.41.0 → 0.42.0, 7 commits)
 

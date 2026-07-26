@@ -30,7 +30,8 @@ public enum Stats {
         let hi = min(lo + 1, n - 1)
         let frac = pos - Double(lo)
         let a = Double(sorted[lo]), b = Double(sorted[hi])
-        return a + frac * (b - a)
+        // numpy's _lerp mirrors the interpolation above t = 0.5 (last-ulp parity).
+        return frac >= 0.5 ? b - (b - a) * (1.0 - frac) : a + frac * (b - a)
     }
 
     /// np.quantile — percentile with q in [0, 1].
@@ -54,5 +55,40 @@ public enum Stats {
         scratch[0..<count].sort()
         if count % 2 == 1 { return scratch[count / 2] }
         return (scratch[count / 2 - 1] + scratch[count / 2]) / 2.0
+    }
+
+    // Double-precision variants: the same-pixel colour-floor refs run in
+    // float64 upstream (the one analysis path that does), so their order
+    // statistics must too.
+
+    public static func sortedAscending(_ data: [Double]) -> [Double] {
+        var out = data
+        vDSP_vsortD(&out, vDSP_Length(out.count), 1)
+        return out
+    }
+
+    public static func percentileOfSorted(_ sorted: [Double], _ q: Double) -> Double {
+        let n = sorted.count
+        if n == 1 { return sorted[0] }
+        let pos = q / 100.0 * Double(n - 1)
+        let lo = Int(pos.rounded(.down))
+        let hi = min(lo + 1, n - 1)
+        let frac = pos - Double(lo)
+        let a = sorted[lo], b = sorted[hi]
+        // numpy's _lerp mirrors the interpolation above t = 0.5 (last-ulp parity).
+        return frac >= 0.5 ? b - (b - a) * (1.0 - frac) : a + frac * (b - a)
+    }
+
+    public static func quantile(_ data: [Double], _ q: Double) -> Double {
+        precondition(!data.isEmpty)
+        return percentileOfSorted(sortedAscending(data), q * 100.0)
+    }
+
+    public static func median(_ data: [Double]) -> Double {
+        precondition(!data.isEmpty)
+        let sorted = sortedAscending(data)
+        let n = sorted.count
+        if n % 2 == 1 { return sorted[n / 2] }
+        return (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
     }
 }

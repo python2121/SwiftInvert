@@ -4,3 +4,4 @@ dist/
 *.xcodeproj
 DerivedData/
 .DS_Store
+__pycache__/
