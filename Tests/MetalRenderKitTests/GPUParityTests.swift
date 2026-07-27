@@ -44,6 +44,8 @@ enum Fixtures2 {
         #expect(MemoryLayout<CurveUniforms>.offset(of: \.vibrance) == 208)
         #expect(MemoryLayout<CurveUniforms>.offset(of: \.saturation) == 212)
         #expect(MemoryLayout<CurveUniforms>.offset(of: \.preSaturation) == 216)
+        #expect(MemoryLayout<LevelsUniforms>.stride == 32)
+        #expect(MemoryLayout<LevelsUniforms>.offset(of: \.levelsOut) == 16)
     }
 }
 
@@ -174,6 +176,48 @@ enum Fixtures2 {
         // Histograms from both paths agree exactly (same linear texture).
         let floatHist = try pipeline.render(source: source, params: params).histogram
         #expect(display.histogram == floatHist)
+    }
+
+    @Test func levelsRemapParityWithCPU() throws {
+        // The interactive-histogram levels remap has no NegPy counterpart;
+        // GPU must match the CPU reference, and the GPU histogram must bin
+        // the REMAPPED values (the overlay reshapes live).
+        let pipeline = try #require(GPU.pipeline, "Metal unavailable")
+        let pixels = try Fixtures2.floats("synthetic64/input.bin")
+        let input = RGBImage(pixels: pixels, width: 64, height: 64)
+        let analysis = ExposureKernel.analyze(linearImage: input, analysisBuffer: 0.05)
+
+        var settings = ExposureSettings()
+        settings.levelsRed = SIMD2(0.2, 0.45)
+        settings.levelsGreen = SIMD2(0.7, 0.55)
+        settings.levelsBlue = SIMD2(0.35, 0.35)  // identity point off-centre
+        let params = ExposureKernel.deriveRenderParams(settings, analysis)
+
+        let cpu = ReferenceCurve.encodeOutput(
+            ReferenceCurve.applyPrintCurve(
+                ReferenceCurve.normalize(input, bounds: params.finalBounds), params: params),
+            levelsIn: params.levelsIn, levelsOut: params.levelsOut)
+        let source = try pipeline.upload(input)
+        let result = try pipeline.render(source: source, params: params)
+
+        let (mean, maxV) = Self.diffStats(result.encoded.pixels, cpu.pixels)
+        #expect(mean < 0.01 && maxV < 0.04, "levels GPU/CPU: mean \(mean), max \(maxV)")
+
+        // Histogram bins the remapped display values: CPU bins over the
+        // CPU-encoded (remapped) pixels must agree with the GPU bins.
+        var cpuBins = [UInt32](repeating: 0, count: 1024)
+        let n = cpu.width * cpu.height
+        for i in 0..<n {
+            let r = cpu.pixels[i * 3], g = cpu.pixels[i * 3 + 1], b = cpu.pixels[i * 3 + 2]
+            let l = Float(K.lumaR) * r + Float(K.lumaG) * g + Float(K.lumaB) * b
+            cpuBins[Int(min(max(r * 255, 0), 255))] += 1
+            cpuBins[256 + Int(min(max(g * 255, 0), 255))] += 1
+            cpuBins[512 + Int(min(max(b * 255, 0), 255))] += 1
+            cpuBins[768 + Int(min(max(l * 255, 0), 255))] += 1
+        }
+        var l1 = 0
+        for i in 0..<1024 { l1 += abs(Int(result.histogram[i]) - Int(cpuBins[i])) }
+        #expect(l1 <= n / 25, "remapped histogram L1 diff \(l1)")
     }
 
     @Test func histogramMatchesCPU() throws {

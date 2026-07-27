@@ -188,6 +188,7 @@ public final class RenderPipeline: @unchecked Sendable {
 
         var normU = UniformsBuilder.normUniforms(params)
         var curveU = UniformsBuilder.curveUniforms(params)
+        var levelsU = UniformsBuilder.levelsUniforms(params)
         if histBuffer == nil {
             histBuffer = device.makeBuffer(length: 1024 * 4, options: .storageModeShared)
         }
@@ -221,6 +222,7 @@ public final class RenderPipeline: @unchecked Sendable {
         if computeHistogram {
             enc.setTexture(content, index: 0)
             enc.setBuffer(histBuffer, offset: 0, index: 0)
+            enc.setBytes(&levelsU, length: MemoryLayout<LevelsUniforms>.stride, index: 1)
             enc.setComputePipelineState(histogramPSO)
             let tg = MTLSizeMake(16, 16, 1)
             let grid = MTLSizeMake((w + 15) / 16, (h + 15) / 16, 1)
@@ -229,6 +231,7 @@ public final class RenderPipeline: @unchecked Sendable {
 
         enc.setTexture(content, index: 0)
         enc.setTexture(encoded, index: 1)
+        enc.setBytes(&levelsU, length: MemoryLayout<LevelsUniforms>.stride, index: 0)
         dispatch(enc, encodePSO, width: w, height: h)
         enc.endEncoding()
 
@@ -296,6 +299,7 @@ public final class RenderPipeline: @unchecked Sendable {
 
         var normU = UniformsBuilder.normUniforms(params)
         var curveU = UniformsBuilder.curveUniforms(params)
+        var levelsU = UniformsBuilder.levelsUniforms(params)
         if histBuffer == nil {
             histBuffer = device.makeBuffer(length: 1024 * 4, options: .storageModeShared)
         }
@@ -327,6 +331,7 @@ public final class RenderPipeline: @unchecked Sendable {
         if computeHistogram {
             enc.setTexture(content, index: 0)
             enc.setBuffer(histBuffer, offset: 0, index: 0)
+            enc.setBytes(&levelsU, length: MemoryLayout<LevelsUniforms>.stride, index: 1)
             enc.setComputePipelineState(histogramPSO)
             let tg = MTLSizeMake(16, 16, 1)
             let grid = MTLSizeMake((w + 15) / 16, (h + 15) / 16, 1)
@@ -335,6 +340,7 @@ public final class RenderPipeline: @unchecked Sendable {
 
         enc.setTexture(content, index: 0)
         enc.setTexture(encoded8, index: 1)
+        enc.setBytes(&levelsU, length: MemoryLayout<LevelsUniforms>.stride, index: 0)
         dispatch(enc, encodePSO, width: w, height: h)
         enc.endEncoding()
 

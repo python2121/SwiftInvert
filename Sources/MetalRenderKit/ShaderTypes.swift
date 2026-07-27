@@ -51,6 +51,15 @@ public struct CurveUniforms {
     public var bandSaturations: SIMD4<Float>
 }
 
+/// Display-domain levels remap (interactive histogram): one control point per
+/// channel, (in, out) per lane; in == out = identity. Consumed by BOTH
+/// histogram256 and outputEncode so the binned histogram always matches the
+/// encoded output.
+public struct LevelsUniforms {
+    public var levelsIn: SIMD4<Float>
+    public var levelsOut: SIMD4<Float>
+}
+
 /// RenderParams (NegativeKit's per-slider derivation) → GPU uniform packing.
 /// The same single-source-of-truth role as NegPy's _upload_unified_uniforms.
 public enum UniformsBuilder {
@@ -104,5 +113,9 @@ public enum UniformsBuilder {
             bandHues: SIMD4<Float>(params.bandHues),
             bandSaturations: SIMD4<Float>(params.bandSaturations)
         )
+    }
+
+    public static func levelsUniforms(_ params: RenderParams) -> LevelsUniforms {
+        LevelsUniforms(levelsIn: f4(params.levelsIn), levelsOut: f4(params.levelsOut))
     }
 }

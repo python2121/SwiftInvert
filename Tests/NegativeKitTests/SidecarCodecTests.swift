@@ -53,6 +53,9 @@ import Testing
         s.colorShadows = SIMD3(0.1, -0.2, 0.3)
         s.colorMids = SIMD3(-0.1, 0.2, -0.3)
         s.colorHighs = SIMD3(0.05, 0.15, -0.25)
+        s.levelsRed = SIMD2(0.2, 0.35)
+        s.levelsGreen = SIMD2(0.6, 0.5)
+        s.levelsBlue = SIMD2(0.4, 0.45)
         s.rotation = 90
         s.flipHorizontal = true
         s.fineRotation = 1.5
@@ -67,7 +70,7 @@ import Testing
     /// `historyLabel` diff (HistoryLabels.swift), and `fullyMutated()` above.
     /// Update all three, then this count.
     @Test func storedFieldCountIsPinned() {
-        #expect(Mirror(reflecting: ExposureSettings()).children.count == 45)
+        #expect(Mirror(reflecting: ExposureSettings()).children.count == 48)
     }
 
     @Test func fullyMutatedActuallyMutatesEveryField() throws {
@@ -81,7 +84,7 @@ import Testing
         }
         let defaults = try json(ExposureSettings())
         let mutated = try json(Self.fullyMutated())
-        #expect(mutated.count == 45)
+        #expect(mutated.count == 48)
         for (key, value) in mutated {
             #expect(defaults[key] != value, "fullyMutated() left \(key) at its default")
         }

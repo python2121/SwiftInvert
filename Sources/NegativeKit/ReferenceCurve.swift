@@ -153,11 +153,37 @@ public enum ReferenceCurve {
         return out
     }
 
-    /// Working-space OETF encode over a whole buffer (final engine step).
-    public static func encodeOutput(_ img: RGBImage) -> RGBImage {
+    /// Working-space OETF encode over a whole buffer (final engine step),
+    /// with the optional per-channel display-domain levels remap (interactive
+    /// histogram) — mirrors the MSL `levels_remap` in outputEncode, same
+    /// float arithmetic order.
+    public static func encodeOutput(
+        _ img: RGBImage,
+        levelsIn: SIMD3<Double> = SIMD3(repeating: 0.5),
+        levelsOut: SIMD3<Double> = SIMD3(repeating: 0.5)
+    ) -> RGBImage {
         var out = img
+        if levelsIn == levelsOut {
+            out.pixels.withUnsafeMutableBufferPointer { buf in
+                for i in 0..<buf.count { buf[i] = WorkingOETF.encode(buf[i]) }
+            }
+            return out
+        }
+        let a = SIMD3<Float>(levelsIn), b = SIMD3<Float>(levelsOut)
         out.pixels.withUnsafeMutableBufferPointer { buf in
-            for i in 0..<buf.count { buf[i] = WorkingOETF.encode(buf[i]) }
+            var i = 0
+            while i < buf.count {
+                for ch in 0..<3 {
+                    let e = WorkingOETF.encode(buf[i + ch])
+                    let aa = a[ch], bb = b[ch]
+                    if aa == bb {
+                        buf[i + ch] = e
+                    } else {
+                        buf[i + ch] = e <= aa ? e * (bb / aa) : bb + (e - aa) * ((1 - bb) / (1 - aa))
+                    }
+                }
+                i += 3
+            }
         }
         return out
     }
@@ -167,6 +193,6 @@ public enum ReferenceCurve {
         let params = ExposureKernel.deriveRenderParams(settings, analysis)
         let normalized = normalize(linearImage, bounds: params.finalBounds)
         let positive = applyPrintCurve(normalized, params: params)
-        return encodeOutput(positive)
+        return encodeOutput(positive, levelsIn: params.levelsIn, levelsOut: params.levelsOut)
     }
 }

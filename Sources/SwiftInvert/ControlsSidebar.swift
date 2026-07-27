@@ -3,6 +3,7 @@ import SwiftUI
 
 struct ControlsSidebar: View {
     @Bindable var model: AppModel
+    @Environment(\.openWindow) private var openWindow
 
     @AppStorage("adjustmentsCollapsed") private var adjustmentsCollapsed = false
     @AppStorage("cropRotationCollapsed") private var cropRotationCollapsed = false
@@ -50,6 +51,18 @@ struct ControlsSidebar: View {
                         // Pinned: histogram stays visible while controls scroll.
                         HistogramView(model: model)
                             .padding(.horizontal, 12)
+                            .overlay(alignment: .topTrailing) {
+                                Button {
+                                    openWindow(id: "interactive-histogram")
+                                } label: {
+                                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                                        .font(.system(size: 9, weight: .semibold))
+                                }
+                                .buttonStyle(.borderless)
+                                .padding(.trailing, 16)
+                                .padding(.top, 2)
+                                .help("Interactive histogram: grab a channel's tones and drag to redistribute them")
+                            }
                         scrollingControls
                     }
                     .frame(minHeight: 210, maxHeight: .infinity)

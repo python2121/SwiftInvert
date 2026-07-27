@@ -255,9 +255,15 @@ One command buffer, passes in order (`RenderPipeline.render` /
    when branched off. Writes into the (already consumed) `normalized`
    texture, which becomes the content texture.
 4. **`histogram256`** — 4×256 atomic bins (R,G,B + Rec.709 luma) from the
-   linear content, OETF-encoded in-shader so bins match display values.
+   linear content, OETF-encoded in-shader so bins match display values —
+   including the levels remap (below), so the interactive histogram
+   reshapes live under a drag.
 5. **`outputEncode`** — working-space OETF (Adobe RGB 1998 TRC: pure
-   563/256 = 2.19921875 power, no linear segment — b3490eb). Display fast path writes the same kernel
+   563/256 = 2.19921875 power, no linear segment — b3490eb), then the
+   **levels remap** (interactive histogram, SwiftInvert-only): per channel
+   one movable control point (in→out, endpoints pinned, identity when
+   in == out; `levels_remap` MSL + the CPU mirror in `encodeOutput`;
+   derive clamps the point 0.02 off the endpoints). Display fast path writes the same kernel
    into an **rgba8unorm** texture (GPU quantization, 4× smaller readback,
    zero CPU conversion); export/tests use the float path.
 
@@ -266,7 +272,7 @@ returns **read-back buffers, never live textures** — intermediate textures
 are cached per size (≤4 MP; export sizes are not retained) and a later render
 overwrites them. Violating this segfaulted the concurrent test runner once.
 Uniform structs are mirrored byte-for-byte in `ShaderTypes.swift`;
-`LayoutTests` pins strides (Norm 48, Curve 256) and key offsets — update both
+`LayoutTests` pins strides (Norm 48, Curve 256, Levels 32) and key offsets — update both
 sides plus the asserts together.
 
 ### 5. Color management
@@ -308,7 +314,7 @@ verifies every stage boundary:
 Beyond parity, the suite covers the seams the fixtures reach only
 transitively, plus the app layer:
 - `SidecarCodecTests` + `HistoryLabelTests` are **drift-catchers**: each pins
-  `ExposureSettings`' stored-property count (45) and exercises every field —
+  `ExposureSettings`' stored-property count (48) and exercises every field —
   adding a settings field fails both until the decoder, `HistoryLabels`, and
   the tests' mutation lists all get their line (see the control checklist).
 - `ImagePipelineSeamTests`: the prepare/finalize cache split (a reused
@@ -360,8 +366,8 @@ values where needed):
 - NegPy's default lab sharpen (0.25 since 8bc9678; was 0.5 earlier in 0.38) is not implemented,
 - SwiftInvert-only controls: exposure stops, tone controls
   (shadows/highlights ± contrasts), overall contrast, temp/tint, 3-band
-  color grading, pre-saturation — all identity-at-default so the NegPy
-  fixtures still pass.
+  color grading, pre-saturation, the interactive-histogram levels remap —
+  all identity-at-default so the NegPy fixtures still pass.
 
 ## App layer (`Sources/SwiftInvert`)
 
@@ -394,6 +400,14 @@ values where needed):
   negcli and the parity suite never see profiles. `DefaultProfileTests` +
   `ProfileStoreTests` pin the built-in's field list, adjustments-only
   stripping, built-in protection, and persistence round-trip.
+- **Interactive Histogram** (`InteractiveHistogram.swift`, expand button
+  on the sidebar histogram → its own window, key-model capture at open):
+  per-channel levels remap by direct drag — grab a horizontal position
+  in the selected channel (the grab is inverse-mapped through the remap
+  in effect, so you grab what you SEE), drag its output; left stretches,
+  right compresses, endpoints pinned. One control point per channel
+  (`levelsRed/Green/Blue`, re-grab re-anchors); drags commit on release
+  via setControlEditing; per-channel + all reset buttons.
 - **Darkroom read-outs** (`Densitometry` in NegativeKit — pure measurement, no
   render path, so no parity surface): the **spot densitometer** (hover the
   canvas → D + zone in the control bar, with an 11-cell `ZoneStrip`) and the
@@ -475,7 +489,7 @@ values where needed):
    decoder** (sidecar back-compat), **plus `historyLabel`**
    (HistoryLabels.swift) — and `RenderParams` + its init if the kernel
    needs it. Two tripwires enforce this: `SidecarCodecTests` and
-   `HistoryLabelTests` both pin the stored-property count (45) and mutate
+   `HistoryLabelTests` both pin the stored-property count (48) and mutate
    every field, so `make test` fails until all the lists have their line.
 2. `deriveRenderParams`: map settings → params (fold into existing params
    where the algebra allows — see overall contrast/exposure — before adding

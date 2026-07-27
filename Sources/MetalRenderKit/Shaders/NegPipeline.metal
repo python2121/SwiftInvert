@@ -16,6 +16,21 @@ struct NormUniforms {
     float2 _pad;
 };
 
+// Display-domain levels remap (interactive histogram); mirrored in
+// ShaderTypes.swift — keep in sync.
+struct LevelsUniforms {
+    float4 levelsIn;
+    float4 levelsOut;
+};
+
+// One movable point (a → b), endpoints pinned: [0,a] stretches to [0,b],
+// [a,1] compresses to [b,1]. Exact identity when a == b (also the fast path);
+// derive clamps a,b off the endpoints so the slopes are finite.
+static inline float levels_remap(float e, float a, float b) {
+    if (a == b) { return e; }
+    return e <= a ? e * (b / a) : b + (e - a) * ((1.0f - b) / (1.0f - a));
+}
+
 struct CurveUniforms {
     float4 pivots;
     float4 slopes;
@@ -281,11 +296,16 @@ kernel void colorPop(
 kernel void outputEncode(
     texture2d<float, access::read> input [[texture(0)]],
     texture2d<float, access::write> output [[texture(1)]],
+    constant LevelsUniforms &lv [[buffer(0)]],
     uint2 gid [[thread_position_in_grid]]
 ) {
     if (gid.x >= input.get_width() || gid.y >= input.get_height()) { return; }
     float3 c = input.read(gid).rgb;
-    output.write(float4(oetf_encode(c.x), oetf_encode(c.y), oetf_encode(c.z), 1.0f), gid);
+    float3 e = float3(
+        levels_remap(oetf_encode(c.x), lv.levelsIn.x, lv.levelsOut.x),
+        levels_remap(oetf_encode(c.y), lv.levelsIn.y, lv.levelsOut.y),
+        levels_remap(oetf_encode(c.z), lv.levelsIn.z, lv.levelsOut.z));
+    output.write(float4(e, 1.0f), gid);
 }
 
 // ── Histogram: 4×256 bins (R, G, B, Rec.709 luma), reads the LINEAR curve
@@ -293,11 +313,17 @@ kernel void outputEncode(
 kernel void histogram256(
     texture2d<float, access::read> input [[texture(0)]],
     device atomic_uint *bins [[buffer(0)]],
+    constant LevelsUniforms &lv [[buffer(1)]],
     uint2 gid [[thread_position_in_grid]]
 ) {
     if (gid.x >= input.get_width() || gid.y >= input.get_height()) { return; }
     float3 raw = input.read(gid).rgb;
-    float3 color = float3(oetf_encode(raw.x), oetf_encode(raw.y), oetf_encode(raw.z));
+    // The levels remap applies here too, so the bins are the DISPLAYED
+    // values — the interactive histogram reshapes live as its point drags.
+    float3 color = float3(
+        levels_remap(oetf_encode(raw.x), lv.levelsIn.x, lv.levelsOut.x),
+        levels_remap(oetf_encode(raw.y), lv.levelsIn.y, lv.levelsOut.y),
+        levels_remap(oetf_encode(raw.z), lv.levelsIn.z, lv.levelsOut.z));
     float luma = dot(color, float3(0.2126f, 0.7152f, 0.0722f));
 
     uint binR = uint(clamp(color.r * 255.0f, 0.0f, 255.0f));

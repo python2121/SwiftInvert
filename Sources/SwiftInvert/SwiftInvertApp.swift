@@ -139,6 +139,12 @@ struct SwiftInvertApp: App {
             }
         }
 
+        // Sidebar histogram's expand button: per-channel levels remap panel
+        // (edits the key window's model, captured at open).
+        Window("Interactive Histogram", id: "interactive-histogram") {
+            InteractiveHistogramView(fallback: model)
+        }
+
         // File → Choose Default Settings…: profile picker + live editors.
         Window("Choose Default Settings", id: "choose-default-settings") {
             ProfilePickerView()
