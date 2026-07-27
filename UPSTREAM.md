@@ -48,8 +48,18 @@ impact.** The one `features/exposure/` hit is additive measurement math for
 a UI feature (below); `dump_fixtures.py` unaffected (its `density_histogram`
 import is signature-stable).
 
-**To port (proposed, not yet implemented — presentation layer, not
-pipeline):** `ae56f8b` **Zone system overlay** (0.44.0's headliner, Shift+Z):
+**PORTED 2026-07-27 (same day, user approved):** `ae56f8b` **Zone system
+overlay** — `ZoneGrid` (NegativeKit: grid + flood-fill region labels, closed-
+form tests incl. stride padding, concave-anchor and densitometer-ruler
+agreement), `ZoneOverlay` (SwiftUI Canvas: merged-region edges with dark
+underlay, bold numerals, paper ends red), computed from `DensitometerState`'s
+cached bytes per adopt/toggle, gated to the plain presentation like the
+probe. Toggle: "Zones" control-bar button + View menu + ⇧Z — implemented in
+the window key monitor with a first-responder text guard (a bare-letter menu
+equivalent would fire while typing; lesson from the profile-name field).
+Deviation from upstream, documented in code: integer-boundary box means
+instead of INTER_AREA (differences sit under the zone rounding step; no
+parity surface). 147 tests green. Original proposal, for the record:
 integer Adams zone per cell of a fixed grid (24 cells along the long edge)
 computed from the display-encoded frame via area-average downsample (the
 averaging damps grain — no extra smoothing); contiguous same-zone cells

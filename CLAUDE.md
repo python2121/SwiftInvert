@@ -404,7 +404,16 @@ values where needed):
   the **displayed rgba8 bitmap** (working-space-encoded, so the bytes already are the
   working-space values) rather than a GPU metric — `DensitometerState` caches
   the provider bytes once per render and is a separate `@Observable` so pointer
-  moves invalidate only the read-out label, never the canvas. NegPy's 120-bin
+  moves invalidate only the read-out label, never the canvas. The **zone
+  overlay** (NegPy ae56f8b port: `ZoneGrid` in NegativeKit + `ZoneOverlay`
+  view; "Zones" control-bar button / View menu / ⇧Z) shares that ruler AND
+  those cached bytes: integer zone per cell (24 along the long edge,
+  box-averaged), same-zone regions merged with one Roman numeral each
+  (anchor snapped to an owned cell), paper black/white numerals red. The
+  grid recomputes per adopt/toggle only, and hides in tool modes and
+  straighten previews (same rule as the probe). ⇧Z lives in the window key
+  monitor, NOT as a menu equivalent — a bare-letter equivalent would fire
+  while typing in text fields; the monitor checks the first responder. NegPy's 120-bin
   `density_histogram` is deliberately NOT ported: it exists to feed their H&D
   chart, which we don't ship.
 - **Edit history**: per-image undo/redo in AppModel (`historyEntries`/`historyIndex`,
@@ -434,7 +443,8 @@ values where needed):
   Choose Default Settings… / Export ⌘E / Show in Finder ⇧⌘R; Edit = Undo/Redo (replacing the system
   group — the ⌘Z shortcuts live HERE, not on HistoryPanel's buttons),
   Copy/Paste Adjustments ⇧⌘C/⇧⌘V (geometry never pasted), Reset All ⌥⌘R;
-  View = Show Library ⇧⌘L / Show Grid Lines ⇧⌘G / HQ Preview ⇧⌘P
+  View = Show Library ⇧⌘L / Show Grid Lines ⇧⌘G / Zone Overlay (⇧Z via the
+  key monitor) / HQ Preview ⇧⌘P
   (@AppStorage keys shared with the in-window controls); Image =
   Previous/Next Image ←/→ / Rotate Left/Right ⌘[/⌘] / Flip ⇧⌘H /
   Crop ⌘K / Crop for Analysis ⇧⌘K + clear items (tool toggles checkmark

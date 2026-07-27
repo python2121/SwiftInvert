@@ -7,6 +7,7 @@ struct SwiftInvertApp: App {
     // Same keys the in-window controls use, so menu toggles stay in sync.
     @AppStorage("libraryVisible") private var libraryVisible = true
     @AppStorage("showGridLines") private var showGridLines = false
+    @AppStorage("showZoneOverlay") private var showZoneOverlay = false
     @Environment(\.openWindow) private var openWindow
 
     init() {
@@ -70,6 +71,9 @@ struct SwiftInvertApp: App {
                     .keyboardShortcut("l", modifiers: [.command, .shift])
                 Toggle("Show Grid Lines", isOn: $showGridLines)
                     .keyboardShortcut("g", modifiers: [.command, .shift])
+                // ⇧Z is handled by the window key monitor (a bare-letter
+                // menu equivalent would fire while typing in text fields).
+                Toggle("Zone Overlay", isOn: $showZoneOverlay)
                 Toggle("HQ Preview", isOn: Binding(
                     get: { keyModel.hqPreview },
                     set: { keyModel.hqPreview = $0 }))
@@ -153,6 +157,7 @@ struct ContentView: View {
     @Bindable var model: AppModel
     @AppStorage("libraryWidth") private var libraryWidth = 320.0
     @AppStorage("libraryVisible") private var libraryVisible = true
+    @AppStorage("showZoneOverlay") private var showZoneOverlay = false
     @State private var dragStartWidth: Double?
     /// Local keyDown monitor: Escape/Return for the tool modes, ↑/↓ for frame
     /// navigation (menu items hold the ←/→ equivalents; an item takes only
@@ -204,7 +209,14 @@ struct ContentView: View {
                 let isAccept = event.keyCode == 36 || event.keyCode == 76
                 let isUp = event.keyCode == 126
                 let isDown = event.keyCode == 125
-                guard isEscape || isAccept || isUp || isDown else { return event }
+                // ⇧Z zone overlay lives HERE, not as a menu equivalent: a
+                // bare-letter equivalent intercepts before responders and
+                // would fire while typing in any text field — the monitor
+                // can check the first responder instead.
+                let mods = event.modifierFlags.intersection([.shift, .command, .option, .control])
+                let isZoneToggle = event.keyCode == 6 && mods == .shift
+                let isEditingText = event.window?.firstResponder is NSTextView
+                guard isEscape || isAccept || isUp || isDown || isZoneToggle else { return event }
                 // Monitors fire on the main thread; only Sendable values
                 // cross the isolation boundary (NSEvent is not).
                 let eventWindow = event.window
@@ -217,6 +229,11 @@ struct ContentView: View {
                     // (Return = default button, Escape = Cancel, arrows =
                     // its text fields).
                     guard model.exportRequest == nil else { return false }
+                    if isZoneToggle {
+                        guard !isEditingText, model.selection != nil else { return false }
+                        showZoneOverlay.toggle()
+                        return true
+                    }
                     if isUp || isDown {
                         // Same enablement as the Previous/Next menu items.
                         guard !model.files.isEmpty else { return false }

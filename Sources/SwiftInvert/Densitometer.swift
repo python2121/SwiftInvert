@@ -15,6 +15,13 @@ final class DensitometerState {
     /// The probed pixel, or nil when the pointer is off the image.
     var reading: Densitometry.Reading?
 
+    /// The zone-overlay grid for the adopted bitmap (nil while the overlay is
+    /// off — it's the only consumer, so don't compute for nobody). Changes
+    /// once per render/toggle, never on pointer moves, so reading it from the
+    /// canvas body doesn't undo this box's isolation purpose.
+    private(set) var zoneGrid: ZoneGrid.Grid?
+    @ObservationIgnored private var zoneGridEnabled = false
+
     @ObservationIgnored private var pixels: CFData?
     @ObservationIgnored private var width = 0
     @ObservationIgnored private var height = 0
@@ -29,12 +36,35 @@ final class DensitometerState {
             pixels = nil
             width = 0
             height = 0
+            recomputeZoneGrid()
             return
         }
         pixels = data
         width = image.width
         height = image.height
         bytesPerRow = image.bytesPerRow
+        recomputeZoneGrid()
+    }
+
+    /// Overlay visibility follows the toggle; the grid is (re)built from the
+    /// already-cached bytes, so flipping it on costs one grid pass, not a
+    /// render (upstream: "toggling costs a repaint").
+    func setZoneGridEnabled(_ enabled: Bool) {
+        guard zoneGridEnabled != enabled else { return }
+        zoneGridEnabled = enabled
+        recomputeZoneGrid()
+    }
+
+    private func recomputeZoneGrid() {
+        guard zoneGridEnabled, let pixels, width > 0, height > 0,
+            let base = CFDataGetBytePtr(pixels)
+        else {
+            if zoneGrid != nil { zoneGrid = nil }
+            return
+        }
+        let next = ZoneGrid.compute(
+            rgba8: base, width: width, height: height, bytesPerRow: bytesPerRow)
+        if next != zoneGrid { zoneGrid = next }
     }
 
     /// Probe at `u`,`v` — 0…1 across the displayed bitmap.

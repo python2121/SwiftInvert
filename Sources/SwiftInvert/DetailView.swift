@@ -7,6 +7,7 @@ struct DetailView: View {
 
     @AppStorage("showGridLines") private var showGridLines = false
     @AppStorage("gridLineType") private var gridLineType = GridLineType.thirds.rawValue
+    @AppStorage("showZoneOverlay") private var showZoneOverlay = false
 
     @State private var zoom: CGFloat = 1
     /// Desired crop box while in Crop & Straighten mode (rotated-space px;
@@ -26,8 +27,11 @@ struct DetailView: View {
             Divider()
             controlBar
         }
-        // Grab the rendered bytes once per render; the probe reads them.
+        // Grab the rendered bytes once per render; the probe reads them
+        // (and the zone grid rebuilds from them when its toggle is on).
         .onChange(of: model.displayImage) { _, new in densitometer.adopt(new) }
+        .onChange(of: showZoneOverlay) { _, on in densitometer.setZoneGridEnabled(on) }
+        .onAppear { densitometer.setZoneGridEnabled(showZoneOverlay) }
     }
 
     private var canvas: some View {
@@ -133,6 +137,23 @@ struct DetailView: View {
                                     lineWidth: 1))
                 }
                 .help("Preview at full source resolution (slower); off = 1536px proxy")
+                Button {
+                    showZoneOverlay.toggle()
+                } label: {
+                    Text("Zones")
+                        .font(.system(size: 10, weight: .semibold))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(showZoneOverlay ? Color.accentColor.opacity(0.3) : Color.primary.opacity(0.06)))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 4)
+                                .strokeBorder(
+                                    showZoneOverlay ? Color.accentColor : Color.secondary.opacity(0.4),
+                                    lineWidth: 1))
+                }
+                .help("Zone system overlay (⇧Z): Adams zones over the preview, same ruler as the densitometer")
             }
             .disabled(model.selection == nil)
 
@@ -276,6 +297,16 @@ struct DetailView: View {
                         showGridLines || model.straightenDragValue != nil
                     {
                         GridOverlay(type: type)
+                    }
+                    // Zone overlay only over the plain presentation — the
+                    // tool modes and straighten previews show transient
+                    // geometry whose pixels aren't the metered frame (same
+                    // rule as the densitometer probe).
+                    if showZoneOverlay, model.toolMode == .none, !zeroBase,
+                        model.straightenDragValue == nil,
+                        let zoneGrid = densitometer.zoneGrid
+                    {
+                        ZoneOverlay(grid: zoneGrid)
                     }
                 }
                 .frame(width: window.width, height: window.height)
