@@ -9,8 +9,8 @@ and appending a history entry.
 ## Last reviewed
 
 ```
-commit:   9722a9c  ("feat: filed carrier bevel flare, paper margin and 2-D edge roughness (#642)")
-reviewed: 2026-07-27
+commit:   31aea5c  ("chore: release 0.44.0 (#648)")
+reviewed: 2026-07-27 (second review this date)
 fixtures: Tests/Fixtures/ dumped from 0369b10 (2026-07-25, with the 127bcd7
           cast-removal estimators) — still valid; the only golden move since
           (6fd61c5) is Dye Mute's default, a feature we don't ship and the
@@ -40,6 +40,46 @@ updates this file. The manual procedure, for reference:
 6. Update the **Last reviewed** marker and append to the history below.
 
 ## Review history
+
+### 2026-07-27 (second) — through `31aea5c` (0.44.0 release, 5 commits)
+
+**Kernel status: untouched — no golden moves, no constants, no parity
+impact.** The one `features/exposure/` hit is additive measurement math for
+a UI feature (below); `dump_fixtures.py` unaffected (its `density_histogram`
+import is signature-stable).
+
+**To port (proposed, not yet implemented — presentation layer, not
+pipeline):** `ae56f8b` **Zone system overlay** (0.44.0's headliner, Shift+Z):
+integer Adams zone per cell of a fixed grid (24 cells along the long edge)
+computed from the display-encoded frame via area-average downsample (the
+averaging damps grain — no extra smoothing); contiguous same-zone cells
+merge into regions (shared edges simply not drawn), one bold Roman numeral
+per region with the label anchor snapped to a cell the region actually owns
+(a concave region's centroid can land outside it), paper black (0) and
+white (X) flagged red, dark underlay beneath the grid lines for readability
+over blown highlights; built once per render so toggling costs a repaint.
+Crucially it reads the SAME zone ruler as the sidebar zone strip and spot
+densitometer ("the three never disagree") — which we already ported
+(`Densitometry.zone(ofEncoded:)` over the displayed rgba8 bitmap, cached in
+`DensitometerState`). A Swift port is pure app-layer: grid + tiny
+connected-components over a ~24×16 int grid (no OpenCV needed), a SwiftUI
+canvas overlay, and a toggle; no parity surface, no fixture re-dump.
+Moderate effort (~half day incl. the pinned-to-picture pan/zoom mapping).
+
+**Not applicable:**
+- `f7f3972` chroma denoise edge-bloom fix (taps weighted by chroma
+  similarity as well as distance; slider renamed Chroma Denoise) — lab
+  denoise stage we don't ship. Divergence note updated: if denoise is ever
+  implemented, port THIS edge-aware version.
+- `b9b98c3` DNG export dropped + config-migration centralization (their
+  export formats/config plumbing; we never offered DNG),
+- `a8027af` thumbnail-cache clear in Manage Database (their DB tooling),
+- `31aea5c` release chore. (0.44.0 changelog's remaining entries — Dye Mute
+  0.25, glow/halation luma, paste re-meter, filed-carrier flare — were all
+  reviewed in the two prior entries.)
+
+**Still open (carried over):** `91a1b78` tunable Auto Density/Grade targets
+(user-initiated only); the on-scan Color Mixer band re-tune pass (ours).
 
 ### 2026-07-27 — through `9722a9c` (0.43.0 → 0.43.1+, 6 commits)
 
