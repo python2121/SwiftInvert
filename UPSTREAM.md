@@ -9,11 +9,12 @@ and appending a history entry.
 ## Last reviewed
 
 ```
-commit:   0e5b3f6  ("Fix macOS release builds for Intel + ARM runners (#633)")
-reviewed: 2026-07-26
+commit:   9722a9c  ("feat: filed carrier bevel flare, paper margin and 2-D edge roughness (#642)")
+reviewed: 2026-07-27
 fixtures: Tests/Fixtures/ dumped from 0369b10 (2026-07-25, with the 127bcd7
-          cast-removal estimators) — still valid; nothing in
-          0369b10..0e5b3f6 touches the pipeline.
+          cast-removal estimators) — still valid; the only golden move since
+          (6fd61c5) is Dye Mute's default, a feature we don't ship and the
+          dump configs don't touch.
 ```
 
 ## How to run a review
@@ -39,6 +40,40 @@ updates this file. The manual procedure, for reference:
 6. Update the **Last reviewed** marker and append to the history below.
 
 ## Review history
+
+### 2026-07-27 — through `9722a9c` (0.43.0 → 0.43.1+, 6 commits)
+
+**One golden move, and it's inside a recorded skip: `6fd61c5` lowers the
+Dye Mute default 0.5 → 0.25** (`lab/models.py` chroma_damping; relocation
+goldens regenerated — "less chroma damping on the default look"). This is
+the divergence baseline moving TOWARD us: upstream themselves flagged the
+0.5 default as tuned on the old ProPhoto gamut (2026-07-20 review) and have
+now halved it, walking their canonical look halfway back to our no-damping
+position. **Skip stands, reinforced**; reopening condition unchanged
+(visible oversaturation at hard grades on real rolls) — and if Dye Mute is
+ever ported, the reference default is now 0.25. Our fixtures are unaffected
+(damping is derivation-side and no dump config exercises it);
+`dump_fixtures.py` signatures unaffected.
+
+**Not applicable (each checked):**
+- `3ca00f2` glow/halation luma → Adobe RGB weights (0.2974/0.6273/0.0753):
+  fixes ONLY the glow/halation taps in `features/lab/` (stage we don't
+  ship). Verified the core analysis luma upstream is still Rec.709
+  (`domain/types.py` LUMA_R 0.2126 at the tip) — so our `K.lumaR/G/B`
+  mirror remains correct for the uses we ported (bounds/meters/histogram/
+  densitometry). Worth remembering if we ever add a halation-class effect:
+  luma taken on WORKING-encoded triplets must use working-space weights.
+- `5a00dd9` re-meter when pasted settings change the analysis region —
+  their paste can transfer the region; ours structurally can't (analysisRect
+  is in the `keepingGeometry` list, never pasted), so the bug has no
+  counterpart here.
+- `0a9d22a` slider commit baseline on external sync (their Qt settings-db
+  plumbing), `f783fd0` 0.43.1 release chore, `9722a9c` filed-carrier bevel
+  flare + paper margin + 2-D edge roughness (print finishing, out of scope).
+
+**Still open (carried over):** `91a1b78` tunable Auto Density/Grade targets
+(user-initiated only — see 2026-07-26 note); the on-scan Color Mixer band
+re-tune pass (ours, post-b3490eb).
 
 ### 2026-07-26 — through `0e5b3f6` (0.43.0 tail, 4 commits)
 
