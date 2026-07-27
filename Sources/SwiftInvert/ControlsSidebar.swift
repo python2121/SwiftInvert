@@ -49,20 +49,14 @@ struct ControlsSidebar: View {
                 if !adjustmentsCollapsed {
                     VStack(alignment: .leading, spacing: 10) {
                         // Pinned: histogram stays visible while controls scroll.
+                        // Double-click opens the interactive histogram (the
+                        // hover layer owns single clicks/moves).
                         HistogramView(model: model)
                             .padding(.horizontal, 12)
-                            .overlay(alignment: .topTrailing) {
-                                Button {
-                                    openWindow(id: "interactive-histogram")
-                                } label: {
-                                    Image(systemName: "arrow.up.left.and.arrow.down.right")
-                                        .font(.system(size: 9, weight: .semibold))
-                                }
-                                .buttonStyle(.borderless)
-                                .padding(.trailing, 16)
-                                .padding(.top, 2)
-                                .help("Interactive histogram: grab a channel's tones and drag to redistribute them")
+                            .onTapGesture(count: 2) {
+                                openWindow(id: "interactive-histogram")
                             }
+                            .help("Double-click for the interactive histogram: drag a channel's tones to redistribute them")
                         scrollingControls
                     }
                     .frame(minHeight: 210, maxHeight: .infinity)

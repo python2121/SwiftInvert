@@ -1,40 +1,47 @@
 import NegativeKit
 import SwiftUI
 
-/// The Interactive Histogram window: a large R/G/B histogram where each
-/// channel's tonal axis can be grabbed and dragged — the levels remap
-/// (`ExposureSettings.levelsRed/Green/Blue`). Grab a horizontal position in
-/// the selected channel, drag it: everything left stretches to fill,
-/// everything right compresses (endpoints pinned). Because the remap applies
-/// in the histogram256/outputEncode kernels, the histogram reshapes live
-/// under the drag.
+/// The Interactive Histogram window (double-click the sidebar histogram):
+/// a large R/G/B histogram where each channel's tonal axis is reshaped by
+/// dragging. A drag grabs a tone (or an existing anchor) and moves it;
+/// releasing PLANTS an anchor that stays fixed — later drags reshape only
+/// their own segment between neighbouring anchors. Anchors show as vertical
+/// lines with an ✕ below to remove them. The remap applies inside the
+/// histogram/encode kernels, so the plot re-bins live under the drag.
 struct InteractiveHistogramView: View {
     /// The window this histogram edits — captured from the key window when
     /// the panel opened (profile editors included), main model as fallback.
     let fallback: AppModel
     @State private var target: AppModel?
     @State private var channel: Channel = .red
-    /// The grab's input position (inverse-mapped through the remap in effect
-    /// at drag start); nil while not dragging.
-    @State private var dragInput: Double?
+    /// Index (into the channel's sorted anchors) of the anchor being
+    /// dragged; nil while idle.
+    @State private var dragIndex: Int?
+
+    /// Minimum normalized gap kept between neighbouring anchors on both axes.
+    private static let gap = 0.01
+    /// Grab tolerance around an existing anchor's line, normalized.
+    private static let grabTolerance = 0.015
 
     enum Channel: Int, CaseIterable, Identifiable {
         case red = 0, green, blue
         var id: Int { rawValue }
         var name: String { ["Red", "Green", "Blue"][rawValue] }
         var color: Color { [.red, .green, .blue][rawValue] }
-        var keyPath: WritableKeyPath<ExposureSettings, SIMD2<Double>> {
-            [\ExposureSettings.levelsRed, \.levelsGreen, \.levelsBlue][rawValue]
+        var keyPath: WritableKeyPath<ExposureSettings, [SIMD2<Double>]> {
+            switch self {
+            case .red: return \.levelsRed
+            case .green: return \.levelsGreen
+            case .blue: return \.levelsBlue
+            }
         }
     }
 
     private var model: AppModel { target ?? fallback }
 
-    private var point: SIMD2<Double> {
+    private var anchors: [SIMD2<Double>] {
         model.settings[keyPath: channel.keyPath]
     }
-
-    private var channelActive: Bool { point.x != point.y }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -50,32 +57,35 @@ struct InteractiveHistogramView: View {
                 Spacer()
                 Button("Reset \(channel.name)") {
                     model.pendingHistoryLabel = "\(channel.name) levels reset"
-                    model.settings[keyPath: channel.keyPath] = SIMD2(0.5, 0.5)
+                    model.settings[keyPath: channel.keyPath] = []
                 }
-                .disabled(!channelActive)
+                .disabled(anchors.isEmpty)
                 Button("Reset All") {
                     model.pendingHistoryLabel = "Levels reset"
                     var s = model.settings
-                    s.levelsRed = SIMD2(0.5, 0.5)
-                    s.levelsGreen = SIMD2(0.5, 0.5)
-                    s.levelsBlue = SIMD2(0.5, 0.5)
+                    s.levelsRed = []
+                    s.levelsGreen = []
+                    s.levelsBlue = []
                     model.settings = s
                 }
                 .disabled(
-                    model.settings.levelsRed == SIMD2(0.5, 0.5)
-                        && model.settings.levelsGreen == SIMD2(0.5, 0.5)
-                        && model.settings.levelsBlue == SIMD2(0.5, 0.5))
+                    model.settings.levelsRed.isEmpty && model.settings.levelsGreen.isEmpty
+                        && model.settings.levelsBlue.isEmpty)
             }
             plot
                 .frame(minHeight: 220)
-            Text("Drag horizontally in the plot: the grabbed tone moves, the left side stretches to fill, the right compresses. The histogram re-bins live.")
+            removalRow
+                .frame(height: 18)
+            Text("Drag in the plot to move tones: left of the grab stretches, right compresses. Release to plant an anchor — further drags work between anchors; ✕ removes one.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
         .padding(14)
-        .frame(minWidth: 520, minHeight: 320)
+        .frame(minWidth: 520, minHeight: 340)
         .onAppear { if target == nil { target = KeyModelTracker.shared.active ?? fallback } }
     }
+
+    // MARK: - Plot
 
     private var plot: some View {
         GeometryReader { geo in
@@ -83,60 +93,137 @@ struct InteractiveHistogramView: View {
                 RoundedRectangle(cornerRadius: 6).fill(Color.black.opacity(0.85))
                 Canvas { context, size in
                     guard let bins = model.histogram else { return }
-                    // Dim context channels behind the active one.
                     for ch in Channel.allCases where ch != channel {
                         drawChannel(context, size: size, bins: bins, channel: ch, opacity: 0.25)
                     }
                     drawChannel(context, size: size, bins: bins, channel: channel, opacity: 0.9)
-                    // The control point's output position (and its input
-                    // origin, faint) while the remap is active.
-                    if channelActive || dragInput != nil {
-                        let p = point
-                        var inLine = Path()
-                        inLine.move(to: CGPoint(x: p.x * size.width, y: 0))
-                        inLine.addLine(to: CGPoint(x: p.x * size.width, y: size.height))
-                        context.stroke(inLine, with: .color(.white.opacity(0.25)), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
-                        var outLine = Path()
-                        outLine.move(to: CGPoint(x: p.y * size.width, y: 0))
-                        outLine.addLine(to: CGPoint(x: p.y * size.width, y: size.height))
-                        context.stroke(outLine, with: .color(channel.color.opacity(0.9)), lineWidth: 1.5)
+                    // Anchor lines at their OUTPUT positions; the dragged
+                    // one also shows its input origin dashed.
+                    for (i, a) in anchors.enumerated() {
+                        var line = Path()
+                        line.move(to: CGPoint(x: a.y * size.width, y: 0))
+                        line.addLine(to: CGPoint(x: a.y * size.width, y: size.height))
+                        context.stroke(
+                            line,
+                            with: .color(channel.color.opacity(i == dragIndex ? 1.0 : 0.75)),
+                            lineWidth: i == dragIndex ? 2 : 1.2)
+                        if i == dragIndex {
+                            var inLine = Path()
+                            inLine.move(to: CGPoint(x: a.x * size.width, y: 0))
+                            inLine.addLine(to: CGPoint(x: a.x * size.width, y: size.height))
+                            context.stroke(
+                                inLine, with: .color(.white.opacity(0.3)),
+                                style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                        }
                     }
                 }
                 .padding(6)
             }
             .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { value in
-                        let width = max(geo.size.width - 12, 1)
-                        let x = min(max((value.location.x - 6) / width, 0), 1)
-                        if dragInput == nil {
-                            // The grab happens in the DISPLAYED (remapped)
-                            // histogram: invert the remap in effect to find
-                            // which input tone was grabbed, then drag its
-                            // output. Re-grabbing re-anchors the channel's
-                            // one control point.
-                            model.setControlEditing(true)
-                            dragInput = inverseRemap(Double(x), point: point)
-                        }
-                        guard let input = dragInput else { return }
-                        model.settings[keyPath: channel.keyPath] = SIMD2(
-                            min(max(input, ExposureKernel.levelsClamp), 1 - ExposureKernel.levelsClamp),
-                            min(max(Double(x), ExposureKernel.levelsClamp), 1 - ExposureKernel.levelsClamp))
-                    }
-                    .onEnded { _ in
-                        dragInput = nil
-                        model.setControlEditing(false)
-                    }
-            )
+            .gesture(dragGesture(plotWidth: max(geo.size.width - 12, 1)))
         }
     }
 
-    /// Displayed position → input position under the channel's current remap.
-    private func inverseRemap(_ x: Double, point p: SIMD2<Double>) -> Double {
-        let a = p.x, b = p.y
-        guard a != b, b > 0, b < 1 else { return x }
-        return x <= b ? x * a / b : a + (x - b) * (1 - a) / (1 - b)
+    private func dragGesture(plotWidth: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                let x = min(max(Double((value.location.x - 6) / plotWidth), 0), 1)
+                if dragIndex == nil {
+                    model.setControlEditing(true)
+                    dragIndex = grabOrPlantAnchor(at: x)
+                }
+                guard let i = dragIndex else { return }
+                moveAnchor(i, outputTo: x)
+            }
+            .onEnded { _ in
+                // The anchor stays where it was released — it's already in
+                // the settings; ending the drag just commits the history
+                // entry ("Red levels").
+                dragIndex = nil
+                model.setControlEditing(false)
+            }
+    }
+
+    /// Grab an existing anchor when the press lands near its line, else
+    /// plant a new one whose input is the tone currently DISPLAYED at the
+    /// press position (inverse of the remap in effect). At capacity the
+    /// nearest anchor is grabbed instead.
+    private func grabOrPlantAnchor(at x: Double) -> Int? {
+        let pts = anchors
+        if let nearest = pts.enumerated().min(by: { abs($0.1.y - x) < abs($1.1.y - x) }),
+            abs(nearest.1.y - x) <= Self.grabTolerance
+        {
+            return nearest.0
+        }
+        if pts.count >= ExposureKernel.levelsMaxPoints {
+            return pts.enumerated().min(by: { abs($0.1.y - x) < abs($1.1.y - x) })?.0
+        }
+        let input = inverseRemap(x, pts)
+        // Keep a workable gap to the neighbours on the input axis.
+        let lo = (pts.last(where: { $0.x < input })?.x ?? 0) + Self.gap
+        let hi = (pts.first(where: { $0.x > input })?.x ?? 1) - Self.gap
+        guard lo < hi else { return nil }
+        let clampedIn = min(max(input, max(lo, ExposureKernel.levelsClamp)), min(hi, 1 - ExposureKernel.levelsClamp))
+        var next = pts
+        let insertAt = next.firstIndex(where: { $0.x > clampedIn }) ?? next.count
+        next.insert(SIMD2(clampedIn, x), at: insertAt)
+        model.settings[keyPath: channel.keyPath] = next
+        return insertAt
+    }
+
+    /// Move anchor `i`'s output, clamped between its neighbours' outputs so
+    /// the map stays monotone and other anchors genuinely never move.
+    private func moveAnchor(_ i: Int, outputTo x: Double) {
+        var pts = anchors
+        guard pts.indices.contains(i) else { return }
+        let lo = (i > 0 ? pts[i - 1].y : 0) + Self.gap
+        let hi = (i < pts.count - 1 ? pts[i + 1].y : 1) - Self.gap
+        let y = min(max(x, max(lo, ExposureKernel.levelsClamp)), min(hi, 1 - ExposureKernel.levelsClamp))
+        guard pts[i].y != y else { return }
+        pts[i].y = y
+        model.settings[keyPath: channel.keyPath] = pts
+    }
+
+    /// Displayed position → input tone under the channel's current remap
+    /// (piecewise inverse; the map is monotone so this is well-defined).
+    private func inverseRemap(_ y: Double, _ pts: [SIMD2<Double>]) -> Double {
+        var x0 = 0.0, y0 = 0.0
+        for p in pts {
+            if y <= p.y {
+                let dy = p.y - y0
+                return dy < 1e-6 ? p.x : x0 + (y - y0) * (p.x - x0) / dy
+            }
+            x0 = p.x
+            y0 = p.y
+        }
+        let dy = 1 - y0
+        return dy < 1e-6 ? 1 : x0 + (y - y0) * (1 - x0) / dy
+    }
+
+    // MARK: - Anchor removal row
+
+    /// One ✕ under each anchor's line (spec: "a little x below all of the
+    /// anchor points").
+    private var removalRow: some View {
+        GeometryReader { geo in
+            let plotWidth = max(geo.size.width - 12, 1)
+            ForEach(Array(anchors.enumerated()), id: \.offset) { i, a in
+                Button {
+                    model.pendingHistoryLabel = "\(channel.name) anchor removed"
+                    var pts = anchors
+                    guard pts.indices.contains(i) else { return }
+                    pts.remove(at: i)
+                    model.settings[keyPath: channel.keyPath] = pts
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Remove this anchor")
+                .position(x: 6 + a.y * plotWidth, y: 9)
+            }
+        }
     }
 
     private func drawChannel(

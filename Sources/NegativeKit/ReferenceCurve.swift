@@ -153,34 +153,46 @@ public enum ReferenceCurve {
         return out
     }
 
+    /// Piecewise-linear levels remap through the channel's anchors (endpoints
+    /// (0,0)/(1,1) implicit) — mirrors the MSL `levels_remap` exactly, same
+    /// float arithmetic order. Anchors must be sanitized (sorted, monotone;
+    /// `ExposureKernel.sanitizeLevels`).
+    @inlinable
+    public static func levelsRemap(_ e: Float, _ points: [SIMD2<Float>]) -> Float {
+        var x0: Float = 0, y0: Float = 0
+        for p in points {
+            if e <= p.x {
+                return y0 + (e - x0) * (p.y - y0) / max(p.x - x0, 1e-4)
+            }
+            x0 = p.x
+            y0 = p.y
+        }
+        return y0 + (e - x0) * (1.0 - y0) / max(1.0 - x0, 1e-4)
+    }
+
     /// Working-space OETF encode over a whole buffer (final engine step),
-    /// with the optional per-channel display-domain levels remap (interactive
-    /// histogram) — mirrors the MSL `levels_remap` in outputEncode, same
-    /// float arithmetic order.
+    /// with the optional per-channel display-domain levels anchors
+    /// (interactive histogram).
     public static func encodeOutput(
         _ img: RGBImage,
-        levelsIn: SIMD3<Double> = SIMD3(repeating: 0.5),
-        levelsOut: SIMD3<Double> = SIMD3(repeating: 0.5)
+        levels: [[SIMD2<Double>]] = [[], [], []]
     ) -> RGBImage {
         var out = img
-        if levelsIn == levelsOut {
+        if levels.allSatisfy({ $0.isEmpty }) {
             out.pixels.withUnsafeMutableBufferPointer { buf in
                 for i in 0..<buf.count { buf[i] = WorkingOETF.encode(buf[i]) }
             }
             return out
         }
-        let a = SIMD3<Float>(levelsIn), b = SIMD3<Float>(levelsOut)
+        let pts: [[SIMD2<Float>]] = (0..<3).map { ch in
+            (ch < levels.count ? levels[ch] : []).map { SIMD2<Float>(Float($0.x), Float($0.y)) }
+        }
         out.pixels.withUnsafeMutableBufferPointer { buf in
             var i = 0
             while i < buf.count {
                 for ch in 0..<3 {
                     let e = WorkingOETF.encode(buf[i + ch])
-                    let aa = a[ch], bb = b[ch]
-                    if aa == bb {
-                        buf[i + ch] = e
-                    } else {
-                        buf[i + ch] = e <= aa ? e * (bb / aa) : bb + (e - aa) * ((1 - bb) / (1 - aa))
-                    }
+                    buf[i + ch] = pts[ch].isEmpty ? e : levelsRemap(e, pts[ch])
                 }
                 i += 3
             }
@@ -193,6 +205,6 @@ public enum ReferenceCurve {
         let params = ExposureKernel.deriveRenderParams(settings, analysis)
         let normalized = normalize(linearImage, bounds: params.finalBounds)
         let positive = applyPrintCurve(normalized, params: params)
-        return encodeOutput(positive, levelsIn: params.levelsIn, levelsOut: params.levelsOut)
+        return encodeOutput(positive, levels: params.levelsPoints)
     }
 }

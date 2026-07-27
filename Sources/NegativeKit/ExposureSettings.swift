@@ -94,15 +94,17 @@ public struct ExposureSettings: Codable, Equatable, Sendable {
     public var colorMids: SIMD3<Double> = .zero
     public var colorHighs: SIMD3<Double> = .zero
 
-    // Interactive-histogram levels remap (display-encoded domain): one movable
-    // control point per channel as (input, output) — [0,in]→[0,out] stretches,
-    // [in,1]→[out,1] compresses, endpoints pinned. in == out is identity (the
-    // point's position is otherwise meaningless, so any equal pair is off).
-    // Re-proportions one channel's histogram without touching the others —
-    // the drift the black-point handle introduces between channels.
-    public var levelsRed: SIMD2<Double> = SIMD2(0.5, 0.5)
-    public var levelsGreen: SIMD2<Double> = SIMD2(0.5, 0.5)
-    public var levelsBlue: SIMD2<Double> = SIMD2(0.5, 0.5)
+    // Interactive-histogram levels remap (display-encoded domain): anchors
+    // per channel as (input, output) pairs forming a piecewise-linear map
+    // with the endpoints pinned at 0 and 1. Empty = identity. Releasing a
+    // drag plants a fixed anchor; later drags reshape only their own segment
+    // (between neighbouring anchors). Re-proportions one channel's histogram
+    // without touching the others — the drift the black-point handle
+    // introduces between channels. Derive sanitizes (sorts by input, clamps
+    // off endpoints, enforces monotone outputs, caps at 8).
+    public var levelsRed: [SIMD2<Double>] = []
+    public var levelsGreen: [SIMD2<Double>] = []
+    public var levelsBlue: [SIMD2<Double>] = []
 
     // Orientation, baked into the pixels right after decode so analysis,
     // display-space rects, rendering and export all agree.
@@ -168,9 +170,18 @@ public struct ExposureSettings: Codable, Equatable, Sendable {
         colorShadows = (try? c.decode(SIMD3<Double>.self, forKey: .colorShadows)) ?? .zero
         colorMids = (try? c.decode(SIMD3<Double>.self, forKey: .colorMids)) ?? .zero
         colorHighs = (try? c.decode(SIMD3<Double>.self, forKey: .colorHighs)) ?? .zero
-        levelsRed = (try? c.decode(SIMD2<Double>.self, forKey: .levelsRed)) ?? SIMD2(0.5, 0.5)
-        levelsGreen = (try? c.decode(SIMD2<Double>.self, forKey: .levelsGreen)) ?? SIMD2(0.5, 0.5)
-        levelsBlue = (try? c.decode(SIMD2<Double>.self, forKey: .levelsBlue)) ?? SIMD2(0.5, 0.5)
+        // Anchor arrays; sidecars from the brief single-point era decode
+        // their one point (identity pairs drop), older sidecars to identity.
+        func levels(_ k: CodingKeys) -> [SIMD2<Double>] {
+            if let arr = try? c.decode([SIMD2<Double>].self, forKey: k) { return arr }
+            if let single = try? c.decode(SIMD2<Double>.self, forKey: k), single.x != single.y {
+                return [single]
+            }
+            return []
+        }
+        levelsRed = levels(.levelsRed)
+        levelsGreen = levels(.levelsGreen)
+        levelsBlue = levels(.levelsBlue)
         rotation = (try? c.decode(Int.self, forKey: .rotation)) ?? 0
         flipHorizontal = b(.flipHorizontal, false)
         fineRotation = d(.fineRotation, 0)
@@ -229,11 +240,10 @@ public struct RenderParams: Equatable, Sendable {
     public var shadowCMY: SIMD3<Double> = .zero
     public var midCMY: SIMD3<Double> = .zero
     public var highlightCMY: SIMD3<Double> = .zero
-    /// Display-domain levels remap per channel: input and output x of the one
-    /// control point, clamped away from the endpoints at derive time so the
-    /// kernel's segment slopes are finite. in == out = identity.
-    public var levelsIn: SIMD3<Double> = SIMD3(repeating: 0.5)
-    public var levelsOut: SIMD3<Double> = SIMD3(repeating: 0.5)
+    /// Display-domain levels anchors per channel (R, G, B), sanitized at
+    /// derive time: sorted by input, clamped off the endpoints, monotone
+    /// outputs, ≤ 8 per channel. Empty = identity.
+    public var levelsPoints: [[SIMD2<Double>]] = [[], [], []]
 
     public init(
         finalBounds: LogNegativeBounds, slopes: SIMD3<Double>, pivots: SIMD3<Double>,
@@ -245,8 +255,7 @@ public struct RenderParams: Equatable, Sendable {
         preSaturation: Double = 1.0, trueBlack: Bool = false,
         shadowCMY: SIMD3<Double> = .zero, midCMY: SIMD3<Double> = .zero,
         highlightCMY: SIMD3<Double> = .zero,
-        levelsIn: SIMD3<Double> = SIMD3(repeating: 0.5),
-        levelsOut: SIMD3<Double> = SIMD3(repeating: 0.5)
+        levelsPoints: [[SIMD2<Double>]] = [[], [], []]
     ) {
         self.finalBounds = finalBounds
         self.slopes = slopes
@@ -273,8 +282,7 @@ public struct RenderParams: Equatable, Sendable {
         self.shadowCMY = shadowCMY
         self.midCMY = midCMY
         self.highlightCMY = highlightCMY
-        self.levelsIn = levelsIn
-        self.levelsOut = levelsOut
+        self.levelsPoints = levelsPoints
     }
 }
 
@@ -463,18 +471,39 @@ public enum ExposureKernel {
             shadowCMY: settings.colorShadows * K.cmyMaxDensity,
             midCMY: settings.colorMids * K.cmyMaxDensity,
             highlightCMY: settings.colorHighs * K.cmyMaxDensity,
-            // Levels points clamped off the endpoints: the kernel divides by
-            // in and (1 − in), and a point AT an endpoint would crush the
-            // whole channel to a constant anyway.
-            levelsIn: clampLevels(SIMD3(settings.levelsRed.x, settings.levelsGreen.x, settings.levelsBlue.x)),
-            levelsOut: clampLevels(SIMD3(settings.levelsRed.y, settings.levelsGreen.y, settings.levelsBlue.y))
+            levelsPoints: [
+                sanitizeLevels(settings.levelsRed),
+                sanitizeLevels(settings.levelsGreen),
+                sanitizeLevels(settings.levelsBlue),
+            ]
         )
     }
 
     /// Levels endpoint guard band (both axes, both ends).
     public static let levelsClamp = 0.02
+    /// Max anchors per channel (the GPU buffer's fixed capacity).
+    public static let levelsMaxPoints = 8
 
-    private static func clampLevels(_ v: SIMD3<Double>) -> SIMD3<Double> {
-        v.clamped(lowerBound: SIMD3(repeating: levelsClamp), upperBound: SIMD3(repeating: 1.0 - levelsClamp))
+    /// Anchor hygiene the kernel relies on: sorted by input, clamped off the
+    /// endpoints, inputs strictly increasing (dupes dropped), outputs
+    /// non-decreasing (the map stays monotone whatever the UI hands over),
+    /// capped at `levelsMaxPoints`.
+    public static func sanitizeLevels(_ points: [SIMD2<Double>]) -> [SIMD2<Double>] {
+        guard !points.isEmpty else { return [] }
+        let lo = levelsClamp, hi = 1.0 - levelsClamp
+        var out: [SIMD2<Double>] = []
+        var lastX = -1.0, lastY = 0.0
+        for p in points.sorted(by: { $0.x < $1.x }) {
+            let x = min(max(p.x, lo), hi)
+            guard x > lastX + 1e-4 else { continue }
+            let y = min(max(p.y, max(lo, lastY)), hi)
+            out.append(SIMD2(x, y))
+            lastX = x
+            lastY = y
+            if out.count == levelsMaxPoints { break }
+        }
+        // All identity pairs (within noise) → empty, so the kernels' empty
+        // fast path stays authoritative for "no remap".
+        return out.allSatisfy { abs($0.x - $0.y) < 1e-9 } ? [] : out
     }
 }

@@ -16,19 +16,30 @@ struct NormUniforms {
     float2 _pad;
 };
 
-// Display-domain levels remap (interactive histogram); mirrored in
-// ShaderTypes.swift — keep in sync.
-struct LevelsUniforms {
-    float4 levelsIn;
-    float4 levelsOut;
-};
+// Display-domain levels remap (interactive histogram): piecewise-linear
+// through per-channel anchors, endpoints (0,0)/(1,1) implicit. The buffer is
+// 51 flat floats — per channel c: [c*16 + 0..7] anchor inputs, [c*16 + 8..15]
+// anchor outputs, [48 + c] anchor count — packed by UniformsBuilder
+// .levelsBuffer (LEVELS_BUFFER_FLOATS mirrored there; LayoutTests pins it).
+// Anchors arrive sanitized (sorted, clamped off endpoints, monotone outputs),
+// so segment widths are positive; the max() is a belt-and-braces guard.
+#define LEVELS_BUFFER_FLOATS 51
 
-// One movable point (a → b), endpoints pinned: [0,a] stretches to [0,b],
-// [a,1] compresses to [b,1]. Exact identity when a == b (also the fast path);
-// derive clamps a,b off the endpoints so the slopes are finite.
-static inline float levels_remap(float e, float a, float b) {
-    if (a == b) { return e; }
-    return e <= a ? e * (b / a) : b + (e - a) * ((1.0f - b) / (1.0f - a));
+static inline float levels_remap(float e, constant float *lv, int channel) {
+    int count = int(lv[48 + channel]);
+    if (count == 0) { return e; }
+    constant float *xs = lv + channel * 16;
+    constant float *ys = xs + 8;
+    float x0 = 0.0f, y0 = 0.0f;
+    for (int i = 0; i < count; i++) {
+        float x1 = xs[i], y1 = ys[i];
+        if (e <= x1) {
+            return y0 + (e - x0) * (y1 - y0) / max(x1 - x0, 1e-4f);
+        }
+        x0 = x1;
+        y0 = y1;
+    }
+    return y0 + (e - x0) * (1.0f - y0) / max(1.0f - x0, 1e-4f);
 }
 
 struct CurveUniforms {
@@ -296,15 +307,15 @@ kernel void colorPop(
 kernel void outputEncode(
     texture2d<float, access::read> input [[texture(0)]],
     texture2d<float, access::write> output [[texture(1)]],
-    constant LevelsUniforms &lv [[buffer(0)]],
+    constant float *lv [[buffer(0)]],
     uint2 gid [[thread_position_in_grid]]
 ) {
     if (gid.x >= input.get_width() || gid.y >= input.get_height()) { return; }
     float3 c = input.read(gid).rgb;
     float3 e = float3(
-        levels_remap(oetf_encode(c.x), lv.levelsIn.x, lv.levelsOut.x),
-        levels_remap(oetf_encode(c.y), lv.levelsIn.y, lv.levelsOut.y),
-        levels_remap(oetf_encode(c.z), lv.levelsIn.z, lv.levelsOut.z));
+        levels_remap(oetf_encode(c.x), lv, 0),
+        levels_remap(oetf_encode(c.y), lv, 1),
+        levels_remap(oetf_encode(c.z), lv, 2));
     output.write(float4(e, 1.0f), gid);
 }
 
@@ -313,17 +324,17 @@ kernel void outputEncode(
 kernel void histogram256(
     texture2d<float, access::read> input [[texture(0)]],
     device atomic_uint *bins [[buffer(0)]],
-    constant LevelsUniforms &lv [[buffer(1)]],
+    constant float *lv [[buffer(1)]],
     uint2 gid [[thread_position_in_grid]]
 ) {
     if (gid.x >= input.get_width() || gid.y >= input.get_height()) { return; }
     float3 raw = input.read(gid).rgb;
     // The levels remap applies here too, so the bins are the DISPLAYED
-    // values — the interactive histogram reshapes live as its point drags.
+    // values — the interactive histogram reshapes live as anchors drag.
     float3 color = float3(
-        levels_remap(oetf_encode(raw.x), lv.levelsIn.x, lv.levelsOut.x),
-        levels_remap(oetf_encode(raw.y), lv.levelsIn.y, lv.levelsOut.y),
-        levels_remap(oetf_encode(raw.z), lv.levelsIn.z, lv.levelsOut.z));
+        levels_remap(oetf_encode(raw.x), lv, 0),
+        levels_remap(oetf_encode(raw.y), lv, 1),
+        levels_remap(oetf_encode(raw.z), lv, 2));
     float luma = dot(color, float3(0.2126f, 0.7152f, 0.0722f));
 
     uint binR = uint(clamp(color.r * 255.0f, 0.0f, 255.0f));

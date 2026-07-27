@@ -261,9 +261,12 @@ One command buffer, passes in order (`RenderPipeline.render` /
 5. **`outputEncode`** — working-space OETF (Adobe RGB 1998 TRC: pure
    563/256 = 2.19921875 power, no linear segment — b3490eb), then the
    **levels remap** (interactive histogram, SwiftInvert-only): per channel
-   one movable control point (in→out, endpoints pinned, identity when
-   in == out; `levels_remap` MSL + the CPU mirror in `encodeOutput`;
-   derive clamps the point 0.02 off the endpoints). Display fast path writes the same kernel
+   a piecewise-linear map through user-planted anchors (input→output
+   pairs, endpoints pinned, empty = identity; `levels_remap` MSL + the CPU
+   mirror `ReferenceCurve.levelsRemap`; `sanitizeLevels` at derive sorts,
+   clamps 0.02 off the endpoints, forces monotone outputs, caps at 8;
+   uniforms travel as a flat 51-float buffer — layout documented at both
+   ends). Display fast path writes the same kernel
    into an **rgba8unorm** texture (GPU quantization, 4× smaller readback,
    zero CPU conversion); export/tests use the float path.
 
@@ -272,7 +275,7 @@ returns **read-back buffers, never live textures** — intermediate textures
 are cached per size (≤4 MP; export sizes are not retained) and a later render
 overwrites them. Violating this segfaulted the concurrent test runner once.
 Uniform structs are mirrored byte-for-byte in `ShaderTypes.swift`;
-`LayoutTests` pins strides (Norm 48, Curve 256, Levels 32) and key offsets — update both
+`LayoutTests` pins strides (Norm 48, Curve 256) plus the 51-float levels-buffer length and key offsets — update both
 sides plus the asserts together.
 
 ### 5. Color management
@@ -400,14 +403,17 @@ values where needed):
   negcli and the parity suite never see profiles. `DefaultProfileTests` +
   `ProfileStoreTests` pin the built-in's field list, adjustments-only
   stripping, built-in protection, and persistence round-trip.
-- **Interactive Histogram** (`InteractiveHistogram.swift`, expand button
-  on the sidebar histogram → its own window, key-model capture at open):
-  per-channel levels remap by direct drag — grab a horizontal position
-  in the selected channel (the grab is inverse-mapped through the remap
-  in effect, so you grab what you SEE), drag its output; left stretches,
-  right compresses, endpoints pinned. One control point per channel
-  (`levelsRed/Green/Blue`, re-grab re-anchors); drags commit on release
-  via setControlEditing; per-channel + all reset buttons.
+- **Interactive Histogram** (`InteractiveHistogram.swift`, double-click
+  the sidebar histogram → its own window, key-model capture at open):
+  per-channel levels remap by direct drag. A drag grabs a tone (the grab
+  position is inverse-mapped through the remap in effect, so you grab
+  what you SEE — pressing near an existing anchor's line grabs THAT
+  anchor) and moves its output; releasing PLANTS a fixed anchor, and
+  later drags reshape only their own segment between neighbours. Anchors
+  render as vertical lines with an ✕ below to remove; outputs clamp
+  between neighbours so the map stays monotone; ≤ 8 per channel
+  (`levelsRed/Green/Blue` anchor arrays). Drags commit on release via
+  setControlEditing; per-channel + all reset buttons.
 - **Darkroom read-outs** (`Densitometry` in NegativeKit — pure measurement, no
   render path, so no parity surface): the **spot densitometer** (hover the
   canvas → D + zone in the control bar, with an 11-cell `ZoneStrip`) and the

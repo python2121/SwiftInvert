@@ -44,8 +44,13 @@ enum Fixtures2 {
         #expect(MemoryLayout<CurveUniforms>.offset(of: \.vibrance) == 208)
         #expect(MemoryLayout<CurveUniforms>.offset(of: \.saturation) == 212)
         #expect(MemoryLayout<CurveUniforms>.offset(of: \.preSaturation) == 216)
-        #expect(MemoryLayout<LevelsUniforms>.stride == 32)
-        #expect(MemoryLayout<LevelsUniforms>.offset(of: \.levelsOut) == 16)
+        // Flat levels buffer: must match LEVELS_BUFFER_FLOATS in the MSL.
+        #expect(UniformsBuilder.levelsBufferFloats == 51)
+        #expect(UniformsBuilder.levelsBuffer(RenderParams(
+            finalBounds: LogNegativeBounds(floors: SIMD3(-2, -2, -2), ceils: SIMD3(-1, -1, -1)),
+            slopes: SIMD3(repeating: 3), pivots: .zero, curvatures: .zero, cmyOffsets: .zero,
+            toeEff: 0, shoulderEff: 0, toeWidth: 2.5, shoulderWidth: 2.5, dMin: 0, vStar: 0.5
+        )).count == 51)
     }
 }
 
@@ -188,15 +193,15 @@ enum Fixtures2 {
         let analysis = ExposureKernel.analyze(linearImage: input, analysisBuffer: 0.05)
 
         var settings = ExposureSettings()
-        settings.levelsRed = SIMD2(0.2, 0.45)
-        settings.levelsGreen = SIMD2(0.7, 0.55)
-        settings.levelsBlue = SIMD2(0.35, 0.35)  // identity point off-centre
+        settings.levelsRed = [SIMD2(0.2, 0.45), SIMD2(0.7, 0.8)]  // two anchors
+        settings.levelsGreen = [SIMD2(0.7, 0.55)]
+        settings.levelsBlue = []  // identity channel
         let params = ExposureKernel.deriveRenderParams(settings, analysis)
 
         let cpu = ReferenceCurve.encodeOutput(
             ReferenceCurve.applyPrintCurve(
                 ReferenceCurve.normalize(input, bounds: params.finalBounds), params: params),
-            levelsIn: params.levelsIn, levelsOut: params.levelsOut)
+            levels: params.levelsPoints)
         let source = try pipeline.upload(input)
         let result = try pipeline.render(source: source, params: params)
 

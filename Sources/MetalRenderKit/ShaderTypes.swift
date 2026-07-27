@@ -51,14 +51,6 @@ public struct CurveUniforms {
     public var bandSaturations: SIMD4<Float>
 }
 
-/// Display-domain levels remap (interactive histogram): one control point per
-/// channel, (in, out) per lane; in == out = identity. Consumed by BOTH
-/// histogram256 and outputEncode so the binned histogram always matches the
-/// encoded output.
-public struct LevelsUniforms {
-    public var levelsIn: SIMD4<Float>
-    public var levelsOut: SIMD4<Float>
-}
 
 /// RenderParams (NegativeKit's per-slider derivation) → GPU uniform packing.
 /// The same single-source-of-truth role as NegPy's _upload_unified_uniforms.
@@ -115,7 +107,23 @@ public enum UniformsBuilder {
         )
     }
 
-    public static func levelsUniforms(_ params: RenderParams) -> LevelsUniforms {
-        LevelsUniforms(levelsIn: f4(params.levelsIn), levelsOut: f4(params.levelsOut))
+    /// Flat float layout consumed by `levels_remap` in NegPipeline.metal
+    /// (LEVELS_BUFFER_FLOATS there — keep in sync; LayoutTests pins it):
+    /// per channel c, [c*16 + 0..7] anchor inputs, [c*16 + 8..15] anchor
+    /// outputs, [48 + c] anchor count. Anchors come pre-sanitized from
+    /// deriveRenderParams (sorted, monotone, ≤ 8).
+    public static let levelsBufferFloats = 51
+
+    public static func levelsBuffer(_ params: RenderParams) -> [Float] {
+        var buf = [Float](repeating: 0, count: levelsBufferFloats)
+        for ch in 0..<3 {
+            let points = ch < params.levelsPoints.count ? params.levelsPoints[ch] : []
+            for (i, p) in points.prefix(8).enumerated() {
+                buf[ch * 16 + i] = Float(p.x)
+                buf[ch * 16 + 8 + i] = Float(p.y)
+            }
+            buf[48 + ch] = Float(min(points.count, 8))
+        }
+        return buf
     }
 }

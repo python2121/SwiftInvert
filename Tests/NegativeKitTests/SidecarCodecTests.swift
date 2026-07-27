@@ -53,9 +53,9 @@ import Testing
         s.colorShadows = SIMD3(0.1, -0.2, 0.3)
         s.colorMids = SIMD3(-0.1, 0.2, -0.3)
         s.colorHighs = SIMD3(0.05, 0.15, -0.25)
-        s.levelsRed = SIMD2(0.2, 0.35)
-        s.levelsGreen = SIMD2(0.6, 0.5)
-        s.levelsBlue = SIMD2(0.4, 0.45)
+        s.levelsRed = [SIMD2(0.2, 0.35), SIMD2(0.7, 0.75)]
+        s.levelsGreen = [SIMD2(0.6, 0.5)]
+        s.levelsBlue = [SIMD2(0.4, 0.45)]
         s.rotation = 90
         s.flipHorizontal = true
         s.fineRotation = 1.5
