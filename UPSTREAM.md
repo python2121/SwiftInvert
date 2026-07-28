@@ -9,8 +9,8 @@ and appending a history entry.
 ## Last reviewed
 
 ```
-commit:   31aea5c  ("chore: release 0.44.0 (#648)")
-reviewed: 2026-07-27 (second review this date)
+commit:   e4bc450  ("Test strip: density x grade grid on the preview (#661)")
+reviewed: 2026-07-28
 fixtures: Tests/Fixtures/ dumped from 0369b10 (2026-07-25, with the 127bcd7
           cast-removal estimators) — still valid; the only golden move since
           (6fd61c5) is Dye Mute's default, a feature we don't ship and the
@@ -40,6 +40,40 @@ updates this file. The manual procedure, for reference:
 6. Update the **Last reviewed** marker and append to the history below.
 
 ## Review history
+
+### 2026-07-28 — through `e4bc450` (0.44.0 → 0.45.0, 6 commits)
+
+**Kernel status: untouched — no golden moves, no constants.** The two
+`features/exposure|process/` hits are additive UI-feature math and capture
+gating; `dump_fixtures.py` unaffected.
+
+**To port (proposed, not yet implemented — presentation layer, not
+pipeline):** `e4bc450` **Test strip** (0.45.0's headliner, Shift+T): the
+frame printed as a 6×6 grid of REAL renders — Print Density 0.4…1.9 in
+steps of 0.3 left to right, Grade R55…R180 in steps of 25 top to bottom —
+so the diagonals read light-to-dark and soft-to-hard like a split-filter
+test strip; click a patch to commit its density+grade. Design decisions
+worth keeping: ladders are ABSOLUTE (strips comparable frame to frame,
+both straddle the defaults inside slider ranges), Auto Density/Grade stay
+untouched on pick (the patches were rendered under them), always
+preview-res, session-only state cleared by any real edit, NO gridlines
+(reads as one print; only the hovered patch outlines), current-settings
+rung accented on the axis labels. Their new `analysis.py` helpers
+(`strip_cells`/`strip_mosaic`/`strip_patch_rect`/`strip_cell_at`/
+`strip_nearest_cell`) are pure grid math — a Swift port is app-layer:
+36 derive+renders at preview size is ~150–250 ms here (our slider path is
+~5 ms/frame), one mosaic texture or 36 draws, hit-test + commit. No
+parity surface, no fixture re-dump. Moderate effort (~half day).
+
+**Not applicable:** `6073a98` sensor-profile gating when linear raw is off
+(crosstalk/capture stack), `44f2a74` BEFORE-badge sync (their compare UI),
+`d06f45f` auto-crop rebate + Rebate Trim (their camera-scan auto-crop
+detection; we ship none), `9ef7732` settings-picker default-values fix
+(their preset picker), `acf9ca5` IR-removal mottling on noisy IR planes
+(retouch).
+
+**Still open (carried over):** `91a1b78` tunable Auto Density/Grade targets
+(user-initiated only); the on-scan Color Mixer band re-tune pass (ours).
 
 ### 2026-07-27 (second) — through `31aea5c` (0.44.0 release, 5 commits)
 
