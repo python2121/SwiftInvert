@@ -139,21 +139,6 @@ public enum ReferenceCurve {
                     let m = (ve.x + ve.y + ve.z) / 3.0
                     dens = dMinRGB + SIMD3(repeating: m) + params.printSaturation * (ve - SIMD3(repeating: m))
                 }
-                // Dye Separation: signed, per-pixel spread-masked (NegPy
-                // de79e13). The sign flips which pixels the mask selects, not
-                // just the direction: positive targets low spread (muted),
-                // negative high spread (already separated). The sigmoid is
-                // rescaled so the mask is exactly 0/1 at spread 0.
-                if params.dyeSeparation != 0.0 {
-                    let ve = dens - dMinRGB
-                    let spread = max(ve.x, max(ve.y, ve.z)) - min(ve.x, min(ve.y, ve.z))
-                    let s = 2.0 * CurveLogic.sigmoid(spread / K.dyeSeparationSpreadScale) - 1.0
-                    let mask = params.dyeSeparation >= 0 ? (1.0 - s) : s
-                    let k = 1.0 + params.dyeSeparation * mask
-                    let m = (ve.x + ve.y + ve.z) / 3.0
-                    dens = dMinRGB + SIMD3(repeating: m) + k * (ve - SIMD3(repeating: m))
-                }
-
                 for ch in 0..<3 {
                     var t = pow(10.0, -dens[ch])
                     if params.trueBlack {

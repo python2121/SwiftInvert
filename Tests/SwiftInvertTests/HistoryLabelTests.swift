@@ -37,7 +37,6 @@ import Testing
         ("overallContrast", { $0.overallContrast = 0.3 }),
         ("vibrance", { $0.vibrance = 1.2 }),
         ("printSaturation", { $0.printSaturation = 1.3 }),
-        ("dyeSeparation", { $0.dyeSeparation = 0.25 }),
         ("saturation", { $0.saturation = 0.9 }),
         ("redHue", { $0.redHue = -0.25 }),
         ("redSaturation", { $0.redSaturation = 1.1 }),

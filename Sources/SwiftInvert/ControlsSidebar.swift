@@ -231,13 +231,9 @@ struct ControlsSidebar: View {
                             range: 0...2, format: "%.2f", defaultValue: 1.0,
                             help: "Density-space saturation: pushes the three dye densities apart after the print curve, so its effect scales with what the curve left in each channel.")
                         LabeledSlider(
-                            label: "Dye Separation", value: $model.settings.dyeSeparation,
-                            range: -0.5...0.5, format: "%.2f", defaultValue: 0,
-                            help: "Signed: right spreads muted pixels' dyes apart (vibrance), left pulls already-vivid ones together (anti-vibrance). Each direction targets only its own pixels.")
-                        LabeledSlider(
                             label: "Vibrance", value: $model.settings.vibrance,
                             range: 0...2, format: "%.2f", defaultValue: 1.0,
-                            help: "Boost muted colors more than already-saturated ones (Lab-space; Dye Separation is the density-space successor).")
+                            help: "Boost muted colors more than already-saturated ones (Lab-space; Print Saturation is the density-space counterpart).")
                         LabeledSlider(
                             label: "Saturation", value: $model.settings.saturation,
                             range: 0...2, format: "%.2f", defaultValue: 1.0,

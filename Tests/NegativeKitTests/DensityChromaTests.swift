@@ -3,10 +3,12 @@ import Testing
 
 @testable import NegativeKit
 
-/// Print Saturation + Dye Separation (NegPy 0.45 chroma-stack rebuild):
-/// density-space ops after the H&D curve. Property tests on the CPU
-/// reference — identity at defaults, neutral preservation, direction, and
-/// the sign-selects-the-population contract.
+/// Print Saturation (NegPy 0.45 chroma-stack rebuild; upstream's surviving
+/// density-space control, renamed dye_separation in 3fb5ca8): a density-space
+/// op after the H&D curve. Property tests on the CPU reference — identity at
+/// default, neutral preservation, and direction. (The per-pixel spread-masked
+/// Dye Separation ported alongside it was retired the same day upstream
+/// deleted it as redundant.)
 @Suite struct DensityChromaTests {
     /// A tiny params set with fixed bounds so pixel values are predictable.
     private func params(_ mutate: (inout RenderParams) -> Void = { _ in }) -> RenderParams {
@@ -37,24 +39,19 @@ import Testing
         max(d.x, max(d.y, d.z)) - min(d.x, min(d.y, d.z))
     }
 
-    @Test func defaultsAreIdentity() {
+    @Test func defaultIsIdentity() {
         let base = params()
-        let active = params {
-            $0.printSaturation = 1.0
-            $0.dyeSeparation = 0
-        }
+        let active = params { $0.printSaturation = 1.0 }
         let px = SIMD3(0.3, 0.45, 0.6)
         #expect(print1(px, base) == print1(px, active))
     }
 
-    /// Neutral pixels (equal channels) never move under either control.
+    /// Neutral pixels (equal channels) never move at any strength.
     @Test func neutralsAreInvariant() {
         let neutral = SIMD3(repeating: 0.5)
         let base = print1(neutral, params())
         for mutate in [{ (p: inout RenderParams) in p.printSaturation = 1.8 },
-                       { p in p.printSaturation = 0.3 },
-                       { p in p.dyeSeparation = 0.5 },
-                       { p in p.dyeSeparation = -0.5 }] {
+                       { p in p.printSaturation = 0.3 }] {
             let moved = print1(neutral, params(mutate))
             #expect(abs(moved.x - base.x) < 1e-9 && abs(moved.y - base.y) < 1e-9 && abs(moved.z - base.z) < 1e-9)
         }
@@ -73,38 +70,23 @@ import Testing
         #expect(sZero < 1e-6)
     }
 
-    /// The sign flips the mask's TARGET population: + moves muted pixels and
-    /// barely touches separated ones; − does the reverse.
-    @Test func dyeSeparationSignSelectsPopulation() {
-        let muted = SIMD3(0.44, 0.46, 0.48)  // small channel spread
-        let vivid = SIMD3(0.25, 0.45, 0.7)  // large spread
-
-        let mutedBase = spread(densities(muted, params()))
-        let vividBase = spread(densities(vivid, params()))
-        #expect(vividBase > mutedBase * 3)
-
-        let plus = params { $0.dyeSeparation = 0.5 }
-        let mutedPlus = spread(densities(muted, plus))
-        let vividPlus = spread(densities(vivid, plus))
-        #expect(mutedPlus > mutedBase * 1.25, "positive must spread muted pixels (\(mutedBase) → \(mutedPlus))")
-        // Vivid pixels sit where the + mask has rolled off: relative change small.
-        #expect(abs(vividPlus - vividBase) / vividBase < 0.12, "positive should barely touch vivid pixels")
-
-        let minus = params { $0.dyeSeparation = -0.5 }
-        let mutedMinus = spread(densities(muted, minus))
-        let vividMinus = spread(densities(vivid, minus))
-        #expect(vividMinus < vividBase * 0.85, "negative must compress vivid pixels (\(vividBase) → \(vividMinus))")
-        #expect(abs(mutedMinus - mutedBase) / max(mutedBase, 1e-9) < 0.12, "negative should barely touch muted pixels")
-    }
-
     @Test func sidecarRoundTripAndLegacyDefaults() throws {
         var s = ExposureSettings()
         s.printSaturation = 1.4
-        s.dyeSeparation = -0.3
         let back = try JSONDecoder().decode(ExposureSettings.self, from: JSONEncoder().encode(s))
         #expect(back == s)
         let legacy = try JSONDecoder().decode(ExposureSettings.self, from: Data("{}".utf8))
         #expect(legacy.printSaturation == 1.0)
-        #expect(legacy.dyeSeparation == 0)
+    }
+
+    /// Retired-key compat: sidecars from the day the per-pixel Dye Separation
+    /// existed carry a dyeSeparation key; it must be ignored (value dropped),
+    /// mirroring NegPy 3fb5ca8's migration.
+    @Test func retiredDyeSeparationKeyIsIgnored() throws {
+        let old = Data(#"{"printSaturation": 1.2, "dyeSeparation": -0.3}"#.utf8)
+        let decoded = try JSONDecoder().decode(ExposureSettings.self, from: old)
+        var expected = ExposureSettings()
+        expected.printSaturation = 1.2
+        #expect(decoded == expected)
     }
 }

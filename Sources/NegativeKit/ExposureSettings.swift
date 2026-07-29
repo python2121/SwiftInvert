@@ -73,17 +73,15 @@ public struct ExposureSettings: Codable, Equatable, Sendable {
     public var blueHue: Double = 0
     public var blueSaturation: Double = 1.0
 
-    // Density-space chroma (NegPy 0.45 chroma-stack rebuild, 7bc8bdc/de79e13),
-    // both applied AFTER the full H&D curve on density above paper base:
+    // Density-space chroma (NegPy 0.45 chroma-stack rebuild, 7bc8bdc),
+    // applied AFTER the full H&D curve on density above paper base:
     // printSaturation scales all three dye densities' deviation from their
     // achromatic mean (the global reduction of NegPy's saturation matrix —
     // per-channel trims deliberately not ported, see the per-layer-trims
-    // skip); dyeSeparation is signed and per-pixel spread-masked — positive
-    // spreads muted pixels' dyes apart (vibrance), negative pulls
-    // already-separated ones together (anti-vibrance); the sign flips which
-    // pixels the mask targets, not just the direction.
+    // skip). NegPy 3fb5ca8 renamed theirs "Dye Separation" after deleting
+    // the per-pixel spread-masked control of that name (which we ported
+    // and retired the same day — measured redundant with this, r≈0.95).
     public var printSaturation: Double = 1.0
-    public var dyeSeparation: Double = 0
 
     // Pre-saturation (Negative Lab Pro concept): scales per-pixel density
     // deviations from neutral in normalized log space BEFORE the print curve,
@@ -177,7 +175,6 @@ public struct ExposureSettings: Codable, Equatable, Sendable {
         blueHue = d(.blueHue, 0)
         blueSaturation = d(.blueSaturation, 1.0)
         printSaturation = d(.printSaturation, 1.0)
-        dyeSeparation = d(.dyeSeparation, 0)
         preSaturation = d(.preSaturation, 1.15)
         temp = d(.temp, 0)
         tint = d(.tint, 0)
@@ -248,9 +245,8 @@ public struct RenderParams: Equatable, Sendable {
     public var bandSaturations: SIMD4<Double> = SIMD4(repeating: 1.0)
     /// Pre-curve density-deviation gain (1.0 = off).
     public var preSaturation: Double = 1.0
-    /// Post-curve density-space chroma (1.0 / 0.0 = off).
+    /// Post-curve density-space chroma (1.0 = off).
     public var printSaturation: Double = 1.0
-    public var dyeSeparation: Double = 0
     /// Black point compensation (paper Dmax → display black).
     public var trueBlack: Bool = false
     // Per-band CMY density offsets (already scaled to density units).
@@ -270,7 +266,7 @@ public struct RenderParams: Equatable, Sendable {
         highlightContrast: Double = 0, vibrance: Double = 1.0, saturation: Double = 1.0,
         bandHues: SIMD4<Double> = .zero, bandSaturations: SIMD4<Double> = SIMD4(repeating: 1.0),
         preSaturation: Double = 1.0, printSaturation: Double = 1.0,
-        dyeSeparation: Double = 0, trueBlack: Bool = false,
+        trueBlack: Bool = false,
         shadowCMY: SIMD3<Double> = .zero, midCMY: SIMD3<Double> = .zero,
         highlightCMY: SIMD3<Double> = .zero,
         levelsPoints: [[SIMD2<Double>]] = [[], [], []]
@@ -297,7 +293,6 @@ public struct RenderParams: Equatable, Sendable {
         self.bandSaturations = bandSaturations
         self.preSaturation = preSaturation
         self.printSaturation = printSaturation
-        self.dyeSeparation = dyeSeparation
         self.trueBlack = trueBlack
         self.shadowCMY = shadowCMY
         self.midCMY = midCMY
@@ -486,7 +481,6 @@ public enum ExposureKernel {
                 settings.greenSaturation, settings.blueSaturation),
             preSaturation: settings.preSaturation,
             printSaturation: min(max(settings.printSaturation, 0.0), K.printSaturationMax),
-            dyeSeparation: min(max(settings.dyeSeparation, -0.5), 0.5),
             trueBlack: settings.trueBlack,
             // Band sliders ±1 → ±cmy_max_density print-density offsets
             // (NegPy's shadow/highlight CMY scale, plus a mids band).

@@ -49,11 +49,6 @@ public struct CurveUniforms {
     // Color-mixer bands, R/Y/G/B lanes.
     public var bandHues: SIMD4<Float>
     public var bandSaturations: SIMD4<Float>
-    // Signed per-pixel dye separation (0 = off); pads keep 16-byte stride.
-    public var dyeSeparation: Float
-    public var _pad1: Float = 0
-    public var _pad2: Float = 0
-    public var _pad3: Float = 0
 }
 
 
@@ -109,8 +104,7 @@ public enum UniformsBuilder {
             preSaturation: Float(params.preSaturation),
             printSaturation: Float(params.printSaturation),
             bandHues: SIMD4<Float>(params.bandHues),
-            bandSaturations: SIMD4<Float>(params.bandSaturations),
-            dyeSeparation: Float(params.dyeSeparation)
+            bandSaturations: SIMD4<Float>(params.bandSaturations)
         )
     }
 

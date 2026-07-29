@@ -48,6 +48,83 @@ updates this file. The manual procedure, for reference:
 
 ## Review history
 
+### 2026-07-29 (second) — through `723e2c5` (0.45.0 release, 12 commits)
+
+**Headline: upstream DELETED the per-pixel Dye Separation — the control we
+ported this same morning — after measuring it redundant with Print
+Saturation.** The three-commit saga (`3ca2229` → `1d02071` → `3fb5ca8`)
+ends with only the matrix-slot density saturation surviving, renamed
+**dye_separation** (default 1.0, slider 0.25–1.75, per-channel trims). The
+range's golden-file touch is comment-only (default annotations; no numeric
+move — both retired states were identity).
+
+The saga, for the record (each step supersedes the last; only the end
+state matters for porting):
+- `3ca2229` measured the mask's problem: the 0.4 spread gate put the
+  sigmoid half-point at 0.44 D spread — the p90 of real frames — so ~90%
+  of pixels sat on the mask's flat top and the control acted as a
+  near-uniform gain; per-pixel deltas correlated r=0.94/0.97 against
+  Print Saturation on two real frames ("a second Print Saturation").
+  Fix: gate 0.4 → 0.12 (median-spread calibrated), correlation → 0.64/0.75.
+- `156252a` widened the desktop slider; `1d02071` gave the positive branch
+  a ×3 gain (muted pixels have tiny deviations by selection, so k−1 barely
+  moved them) and returned the slider to ±0.5.
+- `3fb5ca8` concluded "the two density-domain colour controls read the
+  same on real frames" and deleted the per-pixel block from BOTH engines
+  (kernel block, WGSL constant, UBO slot, `dye_separation_spread_scale`
+  gone); `density_saturation`(+trims) renamed `dye_separation`(+trims);
+  their sidecar migration DROPS retired per-pixel values.
+
+**PORTED (RETIRED) 2026-07-29 (same day, user approved) — the per-pixel
+`dyeSeparation` is gone, converging on the end state.** Our port (this
+morning, UPSTREAM entry below) was the ORIGINAL 0.4-gate variant —
+precisely the one upstream measured as r≈0.95 redundant with our
+`printSaturation`; porting the intermediate fixes just to land where
+upstream started from would have been churn. Removed: the kernel block
+from BOTH `ReferenceCurve.swift` and `NegPipeline.metal`,
+`K.dyeSeparationSpreadScale` + the `DYE_SEPARATION_SCALE` MSL literal
+(that constants-sync point is closed), the CurveUniforms field + pads
+(stride 272 → 256, LayoutTests re-pinned), the settings field + decoder
+line + history label + UI slider (tripwires 50 → 49). Mirroring
+upstream's migration, a sidecar `dyeSeparation` key from the field's
+hours-long lifetime decodes IGNORED — pinned by a new
+DensityChromaTests retired-key test (the suite's dye-separation
+behavioral cases dropped with the control; the sign-selects-population
+contract is upstream history now). The Lab vibrance help text now points
+at Print Saturation as the density-space counterpart. `printSaturation`
+STAYS under our name — a recorded cosmetic divergence (upstream calls
+the survivor Dye Separation; renaming would collide with the retired key
+in same-day sidecars). UI range kept 0–2 (upstream 0.25–1.75; derive
+clamp 0–3 unchanged). Per-channel trims remain not-ported (recorded
+skip). NO fixture re-dump (identity in every dump config). All 167 tests
+green (incl. GPU/CPU parity with printSaturation 1.4 active); bench
+4.0 ms/frame steady state; app renders headlessly. CLAUDE.md updated —
+including its tripwire counts, which had gone stale at 48 during the
+morning port (now 49) — and the constants-sync list.
+
+**Carried port candidate updated:** `db37476` widens the **colour
+ring-around** (item 3, still to port) to 2cc steps out to ±4cc — 1cc
+rungs were unreadable on a preview-sized mosaic. `RING_CC_STEP` 0.05 →
+0.1; any port should use the new spec.
+
+**Not applicable:** `4f4d7a1` broken live view no longer kills the
+capture session (camera scanning), `4ee5267`/`7dc7903` Analysis-panel
+info button + guide-window centring (their Qt help UI), `111492b` IR
+channels from 64-bit HDRi RAW DNGs (retouch/IR loading), `35b6994`
+crosstalk Separation → Strength slider rename (their crosstalk UI/docs —
+renamed to avoid colliding with the NEW Dye Separation; no math),
+`156252a` desktop slider range (superseded by `3fb5ca8`), `2f91a98`
+version bump/discord URL, `723e2c5` user-guide churn.
+
+**dump_fixtures.py:** still broken ≥de79e13 (lab_color `apply_vibrance`
+import — carried); the `3fb5ca8` `apply_characteristic_curve` signature
+change is benign for the script (no saturation kwargs passed; new
+`dye_separation` default 1.0 is identity).
+
+**Still open (carried over):** colour ring-around (`b646e23` + `db37476`
+spec); `91a1b78` tunable Auto Density/Grade targets (user-initiated
+only); the on-scan Color Mixer band re-tune pass (ours).
+
 ### 2026-07-29 — through `de79e13` (0.45.0-dev, 9 commits)
 
 **The chroma stack was rebuilt upstream across three commits, with TWO

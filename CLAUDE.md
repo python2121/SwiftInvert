@@ -230,13 +230,13 @@ One command buffer, passes in order (`RenderPipeline.render` /
       **3-band color** (same masks, `wM = max(1−wS−wH,0)`; NegPy's 2-band
       regional CMY generalized) → shoulder softplus toward `d_min_eff`
       (paper white) → toe softplus toward `d_max_eff` (paper black) →
-      **density-space chroma** (NegPy 0.45 ports, both on density above
-      paper base, identity at defaults: Print Saturation = uniform k
-      around the per-pixel achromatic mean — the global reduction of
-      NegPy's saturation matrix, per-channel trims not ported; then Dye
-      Separation = signed spread-masked k, sign selects the target
-      population — the mask sigmoid's spread scale 0.4 is
-      `K.dyeSeparationSpreadScale`, duplicated as an MSL literal).
+      **Print Saturation** (NegPy 0.45 port, on density above paper base,
+      identity at default 1.0): uniform k around the per-pixel achromatic
+      mean — the global reduction of NegPy's saturation matrix (their
+      surviving density-space control, renamed dye_separation in 3fb5ca8;
+      per-channel trims not ported; the per-pixel spread-masked Dye
+      Separation was ported and retired 2026-07-29 when upstream deleted
+      it as redundant — its sidecar key decodes ignored).
    c. `t = 10^−D`; **True Black** (BPC, optional): `t → (t−b)/(1−b)` with
       `b = 10^−dMax` referenced to the *physical* d_max so toe lifts survive
       (negative toe raises the clip point); clamp [0,1] → **linear
@@ -324,7 +324,7 @@ verifies every stage boundary:
 Beyond parity, the suite covers the seams the fixtures reach only
 transitively, plus the app layer:
 - `SidecarCodecTests` + `HistoryLabelTests` are **drift-catchers**: each pins
-  `ExposureSettings`' stored-property count (48) and exercises every field —
+  `ExposureSettings`' stored-property count (49) and exercises every field —
   adding a settings field fails both until the decoder, `HistoryLabels`, and
   the tests' mutation lists all get their line (see the control checklist).
 - `ImagePipelineSeamTests`: the prepare/finalize cache split (a reused
@@ -375,10 +375,11 @@ values where needed):
 - default analysis buffer **0.10** vs NegPy 0.05 (tests pass 0.05 explicitly),
 - NegPy's default lab sharpen (0.25 since 8bc9678; was 0.5 earlier in 0.38) is not implemented,
 - **vibrance is SwiftInvert-maintained since NegPy de79e13** (upstream
-  deleted Lab Vibrance in favour of a density-space signed Dye Separation;
-  ours stays for sidecar compat, identity in every parity config — the
-  lab_color vibrance fixture is frozen at the 0369b10 dump and cannot be
-  re-dumped from newer NegPy),
+  deleted Lab Vibrance in favour of a density-space signed Dye Separation —
+  which they then also deleted in 3fb5ca8, leaving only the matrix-slot
+  control we ship as Print Saturation; ours stays for sidecar compat,
+  identity in every parity config — the lab_color vibrance fixture is
+  frozen at the 0369b10 dump and cannot be re-dumped from newer NegPy),
 - SwiftInvert-only controls: exposure stops, tone controls
   (shadows/highlights ± contrasts), overall contrast, temp/tint, 3-band
   color grading, pre-saturation, the interactive-histogram levels remap —
@@ -526,7 +527,7 @@ values where needed):
    decoder** (sidecar back-compat), **plus `historyLabel`**
    (HistoryLabels.swift) — and `RenderParams` + its init if the kernel
    needs it. Two tripwires enforce this: `SidecarCodecTests` and
-   `HistoryLabelTests` both pin the stored-property count (48) and mutate
+   `HistoryLabelTests` both pin the stored-property count (49) and mutate
    every field, so `make test` fails until all the lists have their line.
 2. `deriveRenderParams`: map settings → params (fold into existing params
    where the algebra allows — see overall contrast/exposure — before adding
@@ -548,9 +549,8 @@ values where needed):
 
 - `K` (`ExposureConstants.swift`) is the single Swift source; the MSL
   duplicates: tone anchors/sharpness (`TONE_SHARPNESS`, `SHADOW_ANCHOR`,
-  `HIGHLIGHT_ANCHOR`), Lab matrices/eps/kappa/white, the working-space
-  OETF exponent (0.45470693 in MSL = 256/563), and
-  `DYE_SEPARATION_SCALE` (= K.dyeSeparationSpreadScale 0.4).
+  `HIGHLIGHT_ANCHOR`), Lab matrices/eps/kappa/white, and the working-space
+  OETF exponent (0.45470693 in MSL = 256/563).
   GPU/CPU parity tests catch drift but update them together.
 - If NegPy's `EXPOSURE_CONSTANTS` change deliberately: update `K`, re-dump
   fixtures, re-run `make test`.
