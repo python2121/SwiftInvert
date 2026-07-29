@@ -164,6 +164,15 @@ struct ControlsSidebar: View {
                         // it names the negative's own contrast and the grade
                         // that usually suits it.
                         NegativeCharacterRow(densityRange: model.densityRange)
+                        Button {
+                            model.toggleTestStrip()
+                        } label: {
+                            Label("Test Strip", systemImage: "square.grid.3x3")
+                        }
+                        .buttonStyle(SidebarButtonStyle(
+                            active: model.testStrip != nil || model.testStripBuilding))
+                        .disabled(model.selection == nil)
+                        .help("Print the frame as a 5×5 grid — Brightness across, Grade down (⇧T). Click a patch to keep it; Escape clears.")
                     }
                     .padding(6)
                 }

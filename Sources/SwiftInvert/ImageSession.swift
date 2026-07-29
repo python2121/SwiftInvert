@@ -230,6 +230,40 @@ actor ImageSession {
     /// but touching NONE of the cache tower (orientation/prepared/textures),
     /// so precomputing the base never evicts the committed orientation's
     /// caches — which would put ~150ms back on the next slider tick.
+    /// The 5×5 test-strip mosaic: one analysis, one uploaded source, then a
+    /// derive+render per patch (density/grade never touch the analysis, so
+    /// the warm cache tower is reused — ~25 × the slider-tick cost). Always
+    /// the preview proxy, never HQ (upstream rule: 25 full-res renders would
+    /// take ages and each patch shows at a fifth of the frame's width).
+    /// Assembled incrementally so only mosaic + one tile are ever held.
+    func renderTestStrip(settings: ExposureSettings) throws -> CGImage {
+        let (image, analysis) = try prepare(settings: settings)
+        clearHQ()
+        let source = try sourceTexture(image: image, settings: settings, uncropped: false)
+        var mosaic: [UInt8] = []
+        var w = 0, h = 0
+        for cell in TestStrip.cells {
+            var s = settings
+            s.density = cell.density
+            s.grade = cell.grade
+            let params = ExposureKernel.deriveRenderParams(s, analysis)
+            let result = try pipeline.renderDisplay(
+                source: source, params: params, computeHistogram: false)
+            if mosaic.isEmpty {
+                w = result.width
+                h = result.height
+                mosaic = [UInt8](repeating: 0, count: result.rgba.count)
+            }
+            TestStrip.copyPatch(
+                tile: result.rgba, into: &mosaic, width: w, height: h,
+                bytesPerRow: w * 4, row: cell.row, col: cell.col)
+        }
+        guard let cg = ImageConversion.cgImage(rgba8: mosaic, width: w, height: h) else {
+            throw RenderError.resource("test strip CGImage")
+        }
+        return cg
+    }
+
     func renderDetached(settings: ExposureSettings) throws -> RenderOutput {
         if basePreview == nil {
             basePreview = try RawDecoder().decode(url: url, quality: .preview, maxLongEdge: 1536)

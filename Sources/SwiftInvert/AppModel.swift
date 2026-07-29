@@ -103,6 +103,7 @@ final class AppModel {
     var toolMode: ToolMode = .none {
         didSet {
             guard oldValue != toolMode else { return }
+            clearTestStrip()
             if toolMode == .crop {
                 // Snapshot for Escape-cancel: mid-mode straighten commits
                 // mutate settings live, so cancel restores this pair.
@@ -556,6 +557,7 @@ final class AppModel {
 
     private func openSelection() {
         renderTask?.cancel()
+        clearTestStrip()
         toolMode = .none
         showingBaseline = false
         displayImage = nil
@@ -608,6 +610,7 @@ final class AppModel {
     }
 
     private func settingsChanged() {
+        clearTestStrip()  // the patches no longer reflect the settings
         // Every settings edit in the profile editor updates the shared draft
         // (geometry stripped — crop/rotate in the editor stays view-local).
         if isProfileEditor { profileDraft = settings.adjustmentsOnly }
@@ -620,7 +623,12 @@ final class AppModel {
     /// button in the canvas control bar). Session-only by design: a persisted
     /// flag would silently make every launch pay full-res render costs.
     var hqPreview = false {
-        didSet { if oldValue != hqPreview { scheduleRender() } }
+        didSet {
+            if oldValue != hqPreview {
+                clearTestStrip()
+                scheduleRender()
+            }
+        }
     }
 
     /// Latest-wins render coalescing: one render in flight; a change during a
@@ -718,6 +726,73 @@ final class AppModel {
         settings = ExposureSettings()
     }
 
+    // MARK: - Test strip (NegPy e4bc450 port)
+
+    /// The assembled 5×5 proof over the current frame, or nil. Session-only
+    /// display state: any real edit, navigation, tool mode or baseline peek
+    /// clears it (the patches would no longer reflect the settings).
+    struct TestStripState {
+        let image: CGImage
+        /// Settings the strip was built from (its non-density/grade context).
+        let baseSettings: ExposureSettings
+    }
+    var testStrip: TestStripState?
+    @ObservationIgnored private var testStripTask: Task<Void, Never>?
+    /// Guards against a stale build finishing after a newer toggle: only the
+    /// generation that started a task may publish or reset its state.
+    @ObservationIgnored private var testStripGeneration = 0
+
+    /// True while the strip is building (the toggle shows active immediately).
+    var testStripBuilding = false
+
+    func toggleTestStrip() {
+        if testStrip != nil || testStripTask != nil {
+            clearTestStrip()
+            return
+        }
+        guard let session, selection != nil, toolMode == .none, !showingBaseline else { return }
+        let snapshot = settings
+        testStripGeneration += 1
+        let generation = testStripGeneration
+        testStripBuilding = true
+        testStripTask = Task { [weak self] in
+            let image = try? await session.renderTestStrip(settings: snapshot)
+            guard let self, self.testStripGeneration == generation else { return }
+            self.testStripBuilding = false
+            self.testStripTask = nil
+            // Publish only if nothing changed underneath the build.
+            guard !Task.isCancelled, let image, self.settings == snapshot,
+                self.toolMode == .none, !self.showingBaseline
+            else { return }
+            self.testStrip = TestStripState(image: image, baseSettings: snapshot)
+        }
+    }
+
+    func clearTestStrip() {
+        testStripGeneration += 1
+        testStripTask?.cancel()
+        testStripTask = nil
+        if testStripBuilding { testStripBuilding = false }
+        if testStrip != nil { testStrip = nil }
+    }
+
+    /// Commit a patch's density+grade as one history entry. Auto exposure /
+    /// auto contrast stay untouched — the patches were rendered under them
+    /// (upstream rule), so toggling them would render something other than
+    /// the clicked patch.
+    func pickTestStripCell(row: Int, col: Int) {
+        guard testStrip != nil,
+            TestStrip.gradesByRow.indices.contains(row),
+            TestStrip.densitiesByColumn.indices.contains(col)
+        else { return }
+        pendingHistoryLabel = "Test strip pick"
+        var s = settings
+        s.density = TestStrip.densitiesByColumn[col]
+        s.grade = TestStrip.gradesByRow[row]
+        settings = s  // didSet clears the strip; explicit clear below covers
+        clearTestStrip()  // picking the patch that IS the current settings
+    }
+
     // MARK: - Baseline (press-and-hold "before") preview
 
     /// True while the long-press comparison shows the stock conversion.
@@ -736,6 +811,7 @@ final class AppModel {
 
     func setBaselinePreview(_ on: Bool) {
         guard on != showingBaseline else { return }
+        if on { clearTestStrip() }
         showingBaseline = on
         scheduleRender()
     }

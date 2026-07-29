@@ -279,3 +279,52 @@ enum Fixtures2 {
         #expect(total == 64 * 64 * 4)
     }
 }
+
+/// Test-strip end-to-end invariant on the GPU: every mosaic patch must be
+/// byte-identical to a full render at that patch's density+grade, cropped to
+/// the same rect ("each patch is a real render at its own settings").
+@Suite struct TestStripRenderTests {
+    @Test func patchesEqualFullRendersAtTheirSettings() throws {
+        let pipeline = try #require(GPU.pipeline, "Metal unavailable")
+        let pixels = try Fixtures2.floats("synthetic64/input.bin")
+        let input = RGBImage(pixels: pixels, width: 64, height: 64)
+        let analysis = ExposureKernel.analyze(linearImage: input, analysisBuffer: 0.05)
+        let base = ExposureSettings()
+        let source = try pipeline.upload(input)
+
+        // Assemble the mosaic the way ImageSession.renderTestStrip does.
+        let w = 64, h = 64
+        var mosaic = [UInt8](repeating: 0, count: w * h * 4)
+        for cell in TestStrip.cells {
+            var s = base
+            s.density = cell.density
+            s.grade = cell.grade
+            let params = ExposureKernel.deriveRenderParams(s, analysis)
+            let tile = try pipeline.renderDisplay(
+                source: source, params: params, computeHistogram: false)
+            TestStrip.copyPatch(
+                tile: tile.rgba, into: &mosaic, width: w, height: h,
+                bytesPerRow: w * 4, row: cell.row, col: cell.col)
+        }
+
+        // Spot-check corner + centre patches against fresh full renders.
+        for (row, col) in [(0, 0), (2, 2), (4, 4), (0, 4), (4, 0)] {
+            var s = base
+            s.density = TestStrip.densitiesByColumn[col]
+            s.grade = TestStrip.gradesByRow[row]
+            let params = ExposureKernel.deriveRenderParams(s, analysis)
+            let full = try pipeline.renderDisplay(
+                source: source, params: params, computeHistogram: false)
+            let r = TestStrip.patchRect(width: w, height: h, row: row, col: col)
+            for y in r.y0..<r.y1 {
+                for x in r.x0..<r.x1 {
+                    let i = y * w * 4 + x * 4
+                    #expect(
+                        mosaic[i] == full.rgba[i] && mosaic[i + 1] == full.rgba[i + 1]
+                            && mosaic[i + 2] == full.rgba[i + 2],
+                        "patch (\(row),\(col)) differs at (\(x),\(y))")
+                }
+            }
+        }
+    }
+}

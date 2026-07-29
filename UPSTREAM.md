@@ -103,11 +103,23 @@ call.
    yellow, absolute ladder centred on neutral; click a patch to keep its
    filtration; shares the canvas with the test strip. Pairs naturally with
    the carried test-strip port.
-4. **Test strip** (carried from 2026-07-28, spec REVISED upstream): now a
-   **5×5 grid with ladders centred on the defaults** — density 0.4…1.6
-   step 0.3, grade R75…R155 step 20 — so the current settings are one of
-   the patches; still absolute, preview-res, session-only, cleared by any
-   edit.
+4. **Test strip — PORTED 2026-07-29** (same day, user approved; revised
+   5×5 spec): `TestStrip` grid math + incremental mosaic assembly in
+   NegativeKit (tiling/hit-test/nearest-rung/assembly all closed-form
+   tested), `ImageSession.renderTestStrip` reusing the warm cache tower
+   (one analysis, one source upload, 25 derive+renderDisplay passes,
+   ~150–250 ms, never HQ), canvas presentation with upstream's rules (no
+   gridlines, hovered-patch outline, bold axis labels, current-rung
+   accent), Print-group button + ⇧T (key monitor, text-field-guarded) +
+   Escape-clears-first. Click = one history entry setting density+grade;
+   auto toggles untouched (patches were rendered under them); cleared by
+   any edit/navigation/tool/baseline/HQ change, stale builds fenced by a
+   generation counter. One documented presentation divergence: columns
+   mirrored so the image BRIGHTENS left→right (our "right = brighter"
+   slider convention; upstream draws density ascending).
+   TestStripRenderTests pins the core invariant end-to-end on the GPU:
+   every mosaic patch is byte-identical to a full render at that patch's
+   settings. 167 tests green.
 
 **Noted, not proposed:** `38aa023` step wedge (21-step transmission wedge
 printed through the frame's settings under their curve chart — tied to the

@@ -221,8 +221,10 @@ struct ContentView: View {
                 // can check the first responder instead.
                 let mods = event.modifierFlags.intersection([.shift, .command, .option, .control])
                 let isZoneToggle = event.keyCode == 6 && mods == .shift
+                let isStripToggle = event.keyCode == 17 && mods == .shift
                 let isEditingText = event.window?.firstResponder is NSTextView
-                guard isEscape || isAccept || isUp || isDown || isZoneToggle else { return event }
+                guard isEscape || isAccept || isUp || isDown || isZoneToggle || isStripToggle
+                else { return event }
                 // Monitors fire on the main thread; only Sendable values
                 // cross the isolation boundary (NSEvent is not).
                 let eventWindow = event.window
@@ -238,6 +240,17 @@ struct ContentView: View {
                     if isZoneToggle {
                         guard !isEditingText, model.selection != nil else { return false }
                         showZoneOverlay.toggle()
+                        return true
+                    }
+                    if isStripToggle {
+                        guard !isEditingText, model.selection != nil else { return false }
+                        model.toggleTestStrip()
+                        return true
+                    }
+                    // Escape clears a showing/building test strip before its
+                    // other meanings (tool modes can't coexist with it).
+                    if isEscape, model.testStrip != nil || model.testStripBuilding {
+                        model.clearTestStrip()
                         return true
                     }
                     if isUp || isDown {

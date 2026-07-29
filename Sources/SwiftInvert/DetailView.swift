@@ -308,6 +308,15 @@ struct DetailView: View {
                     {
                         ZoneOverlay(grid: zoneGrid)
                     }
+                    // Test strip: replaces the visible frame (drawn opaque
+                    // over it) until a patch is picked or it's dismissed.
+                    // Same plain-presentation rule; AppModel clears it on
+                    // any tool/baseline/HQ/settings change.
+                    if let strip = model.testStrip, model.toolMode == .none,
+                        !zeroBase, model.straightenDragValue == nil
+                    {
+                        TestStripLayer(strip: strip, model: model)
+                    }
                 }
                 .frame(width: window.width, height: window.height)
                 .clipped()

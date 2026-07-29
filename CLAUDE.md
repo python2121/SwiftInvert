@@ -426,6 +426,21 @@ values where needed):
   between neighbours so the map stays monotone; ≤ 8 per channel
   (`levelsRed/Green/Blue` anchor arrays). Drags commit on release via
   setControlEditing; per-channel + all reset buttons.
+- **Test strip** (NegPy e4bc450 port: `TestStrip` math in NegativeKit,
+  `ImageSession.renderTestStrip` — one analysis + one uploaded source +
+  25 derive/renderDisplay passes, mosaic assembled incrementally, always
+  the preview proxy — `TestStripLayer` presentation, Print-group button +
+  ⇧T in the key monitor): the frame as a 5×5 grid of REAL renders,
+  Brightness across (mirrored from upstream's density order to match our
+  right-=-brighter convention), Grade R75–R155 down, ladders absolute and
+  centred on the defaults so the current settings are a patch. Click a
+  patch → one history entry ("Test strip pick") setting density+grade
+  (auto toggles untouched — patches rendered under them); session-only
+  state cleared by ANY edit/navigation/tool/baseline/HQ change (guarded
+  by a generation counter against stale builds); Escape clears first.
+  No gridlines — only the hovered patch outlines; the current-settings
+  rung is accented. TestStripRenderTests pins patch == full render at
+  that patch's settings, byte-identical.
 - **Darkroom read-outs** (`Densitometry` in NegativeKit — pure measurement, no
   render path, so no parity surface): the **spot densitometer** (hover the
   canvas → D + zone in the control bar, with an 11-cell `ZoneStrip`) and the
