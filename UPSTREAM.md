@@ -9,12 +9,16 @@ and appending a history entry.
 ## Last reviewed
 
 ```
-commit:   e4bc450  ("Test strip: density x grade grid on the preview (#661)")
-reviewed: 2026-07-28
+commit:   de79e13  ("Replace Dye Mute and Lab Vibrance with a signed Dye Separation (#676)")
+reviewed: 2026-07-29
 fixtures: Tests/Fixtures/ dumped from 0369b10 (2026-07-25, with the 127bcd7
-          cast-removal estimators) — still valid; the only golden move since
-          (6fd61c5) is Dye Mute's default, a feature we don't ship and the
-          dump configs don't touch.
+          cast-removal estimators) — still valid for OUR pipeline (the range's
+          golden moves are the Dye Mute/Lab Vibrance retirement, both identity
+          in our dump configs). BUT dump_fixtures.py is BROKEN against
+          ≥de79e13: it imports lab.logic.apply_vibrance, which was DELETED.
+          Before any re-dump past de79e13, adapt the script's lab_color case
+          (apply_saturation survives; vibrance has no upstream function
+          anymore) or pin the checkout ≤9b04748.
 ```
 
 ## How to run a review
@@ -40,6 +44,79 @@ updates this file. The manual procedure, for reference:
 6. Update the **Last reviewed** marker and append to the history below.
 
 ## Review history
+
+### 2026-07-29 — through `de79e13` (0.45.0-dev, 9 commits)
+
+**The chroma stack was rebuilt upstream across three commits, with TWO
+golden moves — the biggest pipeline reshape since 127bcd7.** End state:
+
+- `7bc8bdc` **Print Saturation** (`density_saturation`, default 1.0, +
+  per-channel trims): density-space saturation — an achromatic-projection
+  matrix `k·I + (1−k)·J` composed into the paper dye-crosstalk matrix slot,
+  applied to density-above-base AFTER the H&D curve, so its push scales
+  with what the curve left in each channel (shoulder-compressed channels
+  move less) and composes per paper.
+- `c0d6ff0` (golden move) folded Dye Mute into that density-space slot as a
+  grade-coupled damping of `density_saturation` (default OFF, was 0.25) and
+  renamed Lab Saturation → **Chroma**.
+- `de79e13` (golden move) **replaced Dye Mute AND Lab Vibrance with one
+  signed `dye_separation`** (−0.5…+0.5, default 0): a per-pixel
+  spread-masked rescale of dye-density separation inside the print-curve
+  kernel — positive boosts muted pixels (vibrance), negative compresses
+  already-separated ones (true anti-vibrance, which Lab never had); the
+  sign flips the mask's TARGET population, not just the direction.
+  Lab Vibrance is deleted (LabUniforms shrank; `apply_vibrance` gone).
+
+**Bookkeeping — two records close/change:**
+- The **Dye Mute skip is CLOSED, vindicated**: the control we declined
+  (2026-07-17, reaffirmed 2026-07-27) no longer exists upstream; its
+  default had already been walked 0.5 → 0.25 → off before deletion.
+- Our **Lab vibrance now has NO upstream counterpart** (their vibrance is
+  the density-space Dye Separation). Ours stays for sidecar compat and is
+  identity in every parity config — recorded as a SwiftInvert-maintained
+  control unless/until we converge on Dye Separation.
+
+**To port (proposed, not yet implemented):**
+1. **Dye Separation** (`de79e13`) — the successor to Lab Vibrance; signed,
+   identity at 0. Port = new control through the full checklist (settings
+   + printCurve both sides: per-pixel spread sigmoid mask in MSL + CPU
+   mirror, new CurveUniforms field) with GPU-parity tests; NO fixture
+   re-dump (identity default). Medium effort. If ported, our Lab vibrance
+   becomes legacy (kept for old sidecars, UI could hide it).
+2. **Print Saturation** (`7bc8bdc` as later simplified) — portable WITHOUT
+   the papers stack (our dye matrix is identity, so it reduces to the
+   saturation matrix alone on density-above-base). Identity at 1.0; same
+   checklist shape; medium effort; no re-dump. NOTE: does NOT supersede our
+   preSaturation (recorded divergence — pre-curve separation gain feeding
+   the per-channel curves; different placement, different effect).
+3. **Colour ring-around** (`b646e23`, Shift+F) — the RA4 filtration proof:
+   5×5 mosaic of real renders stepping ±2cc in 1cc steps on magenta and
+   yellow, absolute ladder centred on neutral; click a patch to keep its
+   filtration; shares the canvas with the test strip. Pairs naturally with
+   the carried test-strip port.
+4. **Test strip** (carried from 2026-07-28, spec REVISED upstream): now a
+   **5×5 grid with ladders centred on the defaults** — density 0.4…1.6
+   step 0.3, grade R75…R155 step 20 — so the current settings are one of
+   the patches; still absolute, preview-res, session-only, cleared by any
+   edit.
+
+**Noted, not proposed:** `38aa023` step wedge (21-step transmission wedge
+printed through the frame's settings under their curve chart — tied to the
+H&D/Analysis panel we deliberately don't ship, same rationale as the
+density_histogram skip); `64b6e79`/`9b04748` grain-focuser loupe (2×
+unsmoothed loupe + acutance figure, preview/full-res badge — UI tool; the
+acutance read-out is the interesting fragment if we ever want a sharpness
+aid).
+
+**Not applicable:** `da9a033` contact-sheet tiles at proof scale (feature
+we don't ship), `717db98` hide _IR TIFF sidecars from the contact sheet
+(retouch/scan stack).
+
+**dump_fixtures.py: BROKEN ≥de79e13** — see the Last reviewed block; adapt
+the lab_color case before any re-dump past this range.
+
+**Still open (carried over):** `91a1b78` tunable Auto Density/Grade targets
+(user-initiated only); the on-scan Color Mixer band re-tune pass (ours).
 
 ### 2026-07-28 — through `e4bc450` (0.44.0 → 0.45.0, 6 commits)
 

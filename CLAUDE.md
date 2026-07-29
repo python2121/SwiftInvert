@@ -367,6 +367,11 @@ values where needed):
   pass is still worth doing,
 - default analysis buffer **0.10** vs NegPy 0.05 (tests pass 0.05 explicitly),
 - NegPy's default lab sharpen (0.25 since 8bc9678; was 0.5 earlier in 0.38) is not implemented,
+- **vibrance is SwiftInvert-maintained since NegPy de79e13** (upstream
+  deleted Lab Vibrance in favour of a density-space signed Dye Separation;
+  ours stays for sidecar compat, identity in every parity config — the
+  lab_color vibrance fixture is frozen at the 0369b10 dump and cannot be
+  re-dumped from newer NegPy),
 - SwiftInvert-only controls: exposure stops, tone controls
   (shadows/highlights ± contrasts), overall contrast, temp/tint, 3-band
   color grading, pre-saturation, the interactive-histogram levels remap —
