@@ -9,16 +9,19 @@ and appending a history entry.
 ## Last reviewed
 
 ```
-commit:   de79e13  ("Replace Dye Mute and Lab Vibrance with a signed Dye Separation (#676)")
+commit:   723e2c5  ("update USER guide" — 0.45.0 release tip)
 reviewed: 2026-07-29
 fixtures: Tests/Fixtures/ dumped from 0369b10 (2026-07-25, with the 127bcd7
-          cast-removal estimators) — still valid for OUR pipeline (the range's
-          golden moves are the Dye Mute/Lab Vibrance retirement, both identity
-          in our dump configs). BUT dump_fixtures.py is BROKEN against
-          ≥de79e13: it imports lab.logic.apply_vibrance, which was DELETED.
-          Before any re-dump past de79e13, adapt the script's lab_color case
-          (apply_saturation survives; vibrance has no upstream function
-          anymore) or pin the checkout ≤9b04748.
+          cast-removal estimators) — still valid for OUR pipeline (all golden
+          movement since is identity in our dump configs; the 723e2c5-range
+          golden diff is comment-only). dump_fixtures.py remains BROKEN
+          against ≥de79e13: it imports lab.logic.apply_vibrance, which was
+          DELETED. Before any re-dump past de79e13, adapt the script's
+          lab_color case (apply_saturation survives; vibrance has no upstream
+          function anymore) or pin the checkout ≤9b04748. The 3fb5ca8
+          apply_characteristic_curve signature change (density_saturation
+          gone; dye_separation repurposed, default 1.0 = identity) is BENIGN
+          for the script — it passes neither kwarg.
 ```
 
 ## How to run a review

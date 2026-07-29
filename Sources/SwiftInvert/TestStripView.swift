@@ -17,13 +17,26 @@ struct TestStripLayer: View {
     var body: some View {
         GeometryReader { geo in
             ZStack {
-                Image(decorative: strip.image, scale: 1.0)
-                    .resizable()
-                    .interpolation(.high)
-                chrome(size: geo.size)
+                if let preview = strip.preview {
+                    // Preview stage: ONE patch's look, full frame. Click →
+                    // back to the grid; double-click → keep it.
+                    Image(decorative: preview.image, scale: 1.0)
+                        .resizable()
+                        .interpolation(.high)
+                    previewBadge(preview)
+                } else {
+                    Image(decorative: strip.image, scale: 1.0)
+                        .resizable()
+                        .interpolation(.high)
+                    chrome(size: geo.size)
+                }
             }
             .contentShape(Rectangle())
             .onContinuousHover(coordinateSpace: .local) { phase in
+                guard strip.preview == nil else {
+                    if hovered != nil { hovered = nil }
+                    return
+                }
                 switch phase {
                 case .active(let p):
                     let cell = TestStrip.cell(
@@ -34,14 +47,51 @@ struct TestStripLayer: View {
                     hovered = nil
                 }
             }
+            // Double = confirm, single = preview / back-to-grid. exclusively()
+            // holds singles for the double-click interval — the right trade
+            // here, since a mis-fired confirm would commit settings.
             .gesture(
-                SpatialTapGesture(coordinateSpace: .local).onEnded { value in
-                    let cell = TestStrip.cell(
-                        atX: min(max(value.location.x / geo.size.width, 0), 1),
-                        y: min(max(value.location.y / geo.size.height, 0), 1))
-                    model.pickTestStripCell(row: cell.row, col: cell.col)
-                }
+                SpatialTapGesture(count: 2, coordinateSpace: .local)
+                    .onEnded { value in
+                        let cell = cellAt(value.location, in: geo.size)
+                        model.confirmTestStripCell(row: cell.row, col: cell.col)
+                    }
+                    .exclusively(
+                        before: SpatialTapGesture(coordinateSpace: .local).onEnded { value in
+                            if strip.preview != nil {
+                                model.returnToTestStripGrid()
+                            } else {
+                                let cell = cellAt(value.location, in: geo.size)
+                                model.previewTestStripCell(row: cell.row, col: cell.col)
+                            }
+                        })
             )
+        }
+    }
+
+    /// The patch a point maps to: grid position in grid stage, the previewed
+    /// patch itself while previewing (a double-click anywhere confirms it).
+    private func cellAt(_ p: CGPoint, in size: CGSize) -> (row: Int, col: Int) {
+        if let preview = strip.preview { return (preview.row, preview.col) }
+        return TestStrip.cell(
+            atX: min(max(p.x / size.width, 0), 1),
+            y: min(max(p.y / size.height, 0), 1))
+    }
+
+    private func previewBadge(_ preview: (row: Int, col: Int, image: CGImage)) -> some View {
+        VStack {
+            Spacer()
+            Text(
+                "Brightness \(String(format: "%.1f", 2.0 - TestStrip.densitiesByColumn[preview.col]))"
+                    + " · Grade R\(Int(TestStrip.gradesByRow[preview.row]))"
+                    + "  —  double-click to keep, click to compare others, Esc to cancel"
+            )
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(Capsule().fill(Color.black.opacity(0.65)))
+            .padding(.bottom, 10)
         }
     }
 

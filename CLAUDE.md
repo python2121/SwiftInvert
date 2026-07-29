@@ -433,9 +433,13 @@ values where needed):
   ⇧T in the key monitor): the frame as a 5×5 grid of REAL renders,
   Brightness across (mirrored from upstream's density order to match our
   right-=-brighter convention), Grade R75–R155 down, ladders absolute and
-  centred on the defaults so the current settings are a patch. Click a
-  patch → one history entry ("Test strip pick") setting density+grade
-  (auto toggles untouched — patches rendered under them); session-only
+  centred on the defaults so the current settings are a patch. Two-stage
+  picking: single-click a patch → full-frame PREVIEW of that look (one
+  warm-tower render; click again = back to the grid to compare others),
+  double-click (grid or preview) → one history entry ("Test strip pick")
+  setting density+grade (auto toggles untouched — patches rendered under
+  them); singles are held for the double-click interval on purpose (a
+  mis-fired confirm would commit settings); session-only
   state cleared by ANY edit/navigation/tool/baseline/HQ change (guarded
   by a generation counter against stale builds); Escape clears first.
   No gridlines — only the hovered patch outlines; the current-settings

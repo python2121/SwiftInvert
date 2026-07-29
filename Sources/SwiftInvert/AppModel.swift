@@ -731,10 +731,15 @@ final class AppModel {
     /// The assembled 5×5 proof over the current frame, or nil. Session-only
     /// display state: any real edit, navigation, tool mode or baseline peek
     /// clears it (the patches would no longer reflect the settings).
+    /// Two-stage picking: single-click a patch → full-frame PREVIEW of that
+    /// patch's settings (click again to return to the grid, click other
+    /// patches to compare); double-click → commit.
     struct TestStripState {
         let image: CGImage
         /// Settings the strip was built from (its non-density/grade context).
         let baseSettings: ExposureSettings
+        /// Full-frame preview of one patch (nil = the grid is showing).
+        var preview: (row: Int, col: Int, image: CGImage)?
     }
     var testStrip: TestStripState?
     @ObservationIgnored private var testStripTask: Task<Void, Never>?
@@ -776,11 +781,38 @@ final class AppModel {
         if testStrip != nil { testStrip = nil }
     }
 
-    /// Commit a patch's density+grade as one history entry. Auto exposure /
-    /// auto contrast stay untouched — the patches were rendered under them
-    /// (upstream rule), so toggling them would render something other than
-    /// the clicked patch.
-    func pickTestStripCell(row: Int, col: Int) {
+    /// Single click on a patch: render THAT look full-frame (the preview
+    /// stage) so candidates can be compared at full size before committing.
+    /// One derive+render on the warm tower (~a slider tick).
+    func previewTestStripCell(row: Int, col: Int) {
+        guard let strip = testStrip, let session,
+            TestStrip.gradesByRow.indices.contains(row),
+            TestStrip.densitiesByColumn.indices.contains(col)
+        else { return }
+        var s = strip.baseSettings
+        s.density = TestStrip.densitiesByColumn[col]
+        s.grade = TestStrip.gradesByRow[row]
+        let generation = testStripGeneration
+        Task { [weak self] in
+            guard let output = try? await session.render(settings: s) else { return }
+            guard let self, self.testStripGeneration == generation,
+                self.testStrip != nil
+            else { return }
+            self.testStrip?.preview = (row, col, output.image)
+        }
+    }
+
+    /// Click while previewing: back to the grid to try another patch.
+    func returnToTestStripGrid() {
+        guard testStrip?.preview != nil else { return }
+        testStrip?.preview = nil
+    }
+
+    /// Double click (grid or preview): commit the patch's density+grade as
+    /// one history entry. Auto exposure / auto contrast stay untouched — the
+    /// patches were rendered under them (upstream rule), so toggling them
+    /// would render something other than the clicked patch.
+    func confirmTestStripCell(row: Int, col: Int) {
         guard testStrip != nil,
             TestStrip.gradesByRow.indices.contains(row),
             TestStrip.densitiesByColumn.indices.contains(col)
