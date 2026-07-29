@@ -125,6 +125,12 @@ public enum K {
     // reference tone, v → v + k·(v − v*), folded into slopes/pivots/curvatures
     // (no shader involvement). Slider range −1…+2 → k ∈ [−0.5, +1].
     public static let overallContrastMax = 0.5
+    // Dye Separation mask sigmoid half-point, in density units of the
+    // per-pixel dye-density spread (NegPy dye_separation_spread_scale;
+    // duplicated as a literal in NegPipeline.metal — change both).
+    public static let dyeSeparationSpreadScale = 0.4
+    // Print Saturation's matrix-coefficient clamp (NegPy per_channel_density_saturation).
+    public static let printSaturationMax = 3.0
     // One photographic stop in log10 density.
     public static let log10Two = 0.3010299956639812
 

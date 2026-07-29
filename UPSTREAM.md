@@ -76,19 +76,28 @@ golden moves — the biggest pipeline reshape since 127bcd7.** End state:
   identity in every parity config — recorded as a SwiftInvert-maintained
   control unless/until we converge on Dye Separation.
 
-**To port (proposed, not yet implemented):**
-1. **Dye Separation** (`de79e13`) — the successor to Lab Vibrance; signed,
-   identity at 0. Port = new control through the full checklist (settings
-   + printCurve both sides: per-pixel spread sigmoid mask in MSL + CPU
-   mirror, new CurveUniforms field) with GPU-parity tests; NO fixture
-   re-dump (identity default). Medium effort. If ported, our Lab vibrance
-   becomes legacy (kept for old sidecars, UI could hide it).
-2. **Print Saturation** (`7bc8bdc` as later simplified) — portable WITHOUT
-   the papers stack (our dye matrix is identity, so it reduces to the
-   saturation matrix alone on density-above-base). Identity at 1.0; same
-   checklist shape; medium effort; no re-dump. NOTE: does NOT supersede our
-   preSaturation (recorded divergence — pre-curve separation gain feeding
-   the per-channel curves; different placement, different effect).
+**PORTED 2026-07-29 (same day, user approved) — items 1 and 2:**
+**Print Saturation** (`printSaturation`, default 1.0, UI 0–2, derive clamp
+0–3) and **Dye Separation** (`dyeSeparation`, signed ±0.5) landed through
+the full control checklist: settings + decoder + history labels (tripwire
+counts 48 → 50), derive passthrough, printCurve BOTH sides — after the toe
+softplus, on density above paper base, Print Saturation as the uniform-k
+mean-deviation reduction of NegPy's saturation matrix (identity dye matrix
+here; per-channel trims NOT ported, consistent with the recorded
+per-layer-trims skip), Dye Separation with the exact spread-sigmoid mask
+(`2·σ(spread/0.4) − 1`, sign selects the population; scale =
+K.dyeSeparationSpreadScale, MSL literal — new constants sync point).
+CurveUniforms grew via the ex-pad slot + a tail field (stride 256 → 272,
+pinned in LayoutTests). DensityChromaTests: identity at defaults, neutral
+invariance, k-direction on density spread, the sign-selects-population
+contract both ways, sidecar round-trip; the tone-controls GPU-parity case
+now runs with both active. No fixture re-dump (identity in every dump
+config; all 160 tests green incl. NegPy fixture parity). Bench steady-state
+unchanged (~4 ms/frame). Lab vibrance stays visible for now (its help text
+points at Dye Separation as the successor); hide/deprecate is a future UX
+call.
+
+**Still to port (proposed, not yet implemented):**
 3. **Colour ring-around** (`b646e23`, Shift+F) — the RA4 filtration proof:
    5×5 mosaic of real renders stepping ±2cc in 1cc steps on magenta and
    yellow, absolute ladder centred on neutral; click a patch to keep its

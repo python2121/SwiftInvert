@@ -44,11 +44,16 @@ public struct CurveUniforms {
     public var vibrance: Float
     public var saturation: Float
     public var preSaturation: Float
-    // Pad so the band vectors land on a 16-byte boundary (matches MSL).
-    public var _pad0: Float = 0
+    // Post-curve density-space chroma (rides the ex-pad slot: layout stable).
+    public var printSaturation: Float
     // Color-mixer bands, R/Y/G/B lanes.
     public var bandHues: SIMD4<Float>
     public var bandSaturations: SIMD4<Float>
+    // Signed per-pixel dye separation (0 = off); pads keep 16-byte stride.
+    public var dyeSeparation: Float
+    public var _pad1: Float = 0
+    public var _pad2: Float = 0
+    public var _pad3: Float = 0
 }
 
 
@@ -102,8 +107,10 @@ public enum UniformsBuilder {
             vibrance: Float(params.vibrance),
             saturation: Float(params.saturation),
             preSaturation: Float(params.preSaturation),
+            printSaturation: Float(params.printSaturation),
             bandHues: SIMD4<Float>(params.bandHues),
-            bandSaturations: SIMD4<Float>(params.bandSaturations)
+            bandSaturations: SIMD4<Float>(params.bandSaturations),
+            dyeSeparation: Float(params.dyeSeparation)
         )
     }
 

@@ -98,6 +98,7 @@ public enum ReferenceCurve {
                         buf[i + ch] = Float(m + preSat * (Double(buf[i + ch]) - m))
                     }
                 }
+                var dens = SIMD3<Double>()
                 for ch in 0..<3 {
                     let val = Double(buf[i + ch]) + params.cmyOffsets[ch]
                     var v = params.slopes[ch] * (val - params.pivots[ch]) + params.curvatures[ch] * val * val
@@ -127,8 +128,34 @@ public enum ReferenceCurve {
                     }
 
                     let v1 = dMinEff[ch] + CurveLogic.softplus(aHl * (v - dMinEff[ch])) / aHl
-                    let density = dMaxEff[ch] - CurveLogic.softplus(aSh * (dMaxEff[ch] - v1)) / aSh
-                    var t = pow(10.0, -density)
+                    dens[ch] = dMaxEff[ch] - CurveLogic.softplus(aSh * (dMaxEff[ch] - v1)) / aSh
+                }
+
+                // Print Saturation: uniform k around the achromatic mean of
+                // density above paper base — the global reduction of NegPy's
+                // saturation matrix (identity dye matrix here; NegPy 7bc8bdc).
+                if params.printSaturation != 1.0 {
+                    let ve = dens - dMinRGB
+                    let m = (ve.x + ve.y + ve.z) / 3.0
+                    dens = dMinRGB + SIMD3(repeating: m) + params.printSaturation * (ve - SIMD3(repeating: m))
+                }
+                // Dye Separation: signed, per-pixel spread-masked (NegPy
+                // de79e13). The sign flips which pixels the mask selects, not
+                // just the direction: positive targets low spread (muted),
+                // negative high spread (already separated). The sigmoid is
+                // rescaled so the mask is exactly 0/1 at spread 0.
+                if params.dyeSeparation != 0.0 {
+                    let ve = dens - dMinRGB
+                    let spread = max(ve.x, max(ve.y, ve.z)) - min(ve.x, min(ve.y, ve.z))
+                    let s = 2.0 * CurveLogic.sigmoid(spread / K.dyeSeparationSpreadScale) - 1.0
+                    let mask = params.dyeSeparation >= 0 ? (1.0 - s) : s
+                    let k = 1.0 + params.dyeSeparation * mask
+                    let m = (ve.x + ve.y + ve.z) / 3.0
+                    dens = dMinRGB + SIMD3(repeating: m) + k * (ve - SIMD3(repeating: m))
+                }
+
+                for ch in 0..<3 {
+                    var t = pow(10.0, -dens[ch])
                     if params.trueBlack {
                         t = (t - bpcBlack) / (1.0 - bpcBlack)
                     }

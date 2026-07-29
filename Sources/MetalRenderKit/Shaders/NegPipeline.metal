@@ -79,12 +79,21 @@ struct CurveUniforms {
     float saturation;
     // Pre-curve density-deviation gain (1.0 = off).
     float preSaturation;
-    // Pad so the band vectors land on a 16-byte boundary (matches Swift).
-    float _pad0;
+    // Post-curve density-space chroma (rides the ex-pad slot: layout stable).
+    float printSaturation;
     // Color-mixer bands, R/Y/G/B lanes (0 / 1.0 = off).
     float4 bandHues;
     float4 bandSaturations;
+    // Signed per-pixel dye separation (0 = off); pads keep 16-byte stride.
+    float dyeSeparation;
+    float _pad1;
+    float _pad2;
+    float _pad3;
 };
+
+// Dye Separation mask sigmoid half-point — K.dyeSeparationSpreadScale
+// (NegPy dye_separation_spread_scale); keep in sync.
+constant float DYE_SEPARATION_SCALE = 0.4f;
 
 // Color-mixer band constants — must match LabColor.bandCentersDeg /
 // bandHalfWidthsDeg (order: Red, Yellow, Green, Blue).
@@ -236,6 +245,28 @@ kernel void printCurve(
 
         float v1 = d_min_eff[ch] + softplus(a_hl * (v - d_min_eff[ch])) / a_hl;
         dens[ch] = d_max_eff[ch] - softplus(a_sh * (d_max_eff[ch] - v1)) / a_sh;
+    }
+
+    // Print Saturation: uniform k around the achromatic mean of density
+    // above paper base — the global reduction of NegPy's saturation matrix
+    // (identity dye matrix here; mirrors ReferenceCurve).
+    if (p.printSaturation != 1.0f) {
+        float3 ve = dens - p.dMinRGB.xyz;
+        float m = (ve.x + ve.y + ve.z) / 3.0f;
+        dens = p.dMinRGB.xyz + float3(m) + p.printSaturation * (ve - float3(m));
+    }
+    // Dye Separation: signed, per-pixel spread-masked. The sign flips which
+    // pixels the mask selects, not just the direction: positive targets low
+    // spread (muted), negative targets high spread (already separated).
+    // The sigmoid is rescaled so the mask is exactly 0/1 at spread 0.
+    if (p.dyeSeparation != 0.0f) {
+        float3 ve = dens - p.dMinRGB.xyz;
+        float spread = max(ve.x, max(ve.y, ve.z)) - min(ve.x, min(ve.y, ve.z));
+        float s = 2.0f * fast_sigmoid(spread / DYE_SEPARATION_SCALE) - 1.0f;
+        float mask = p.dyeSeparation >= 0.0f ? (1.0f - s) : s;
+        float k = 1.0f + p.dyeSeparation * mask;
+        float m = (ve.x + ve.y + ve.z) / 3.0f;
+        dens = p.dMinRGB.xyz + float3(m) + k * (ve - float3(m));
     }
 
     float3 transmittance = pow(float3(10.0f), -dens);

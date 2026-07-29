@@ -229,7 +229,14 @@ One command buffer, passes in order (`RenderPipeline.render` /
       parallel form: shadows/highlights lifts + anchor-pivoted contrasts) →
       **3-band color** (same masks, `wM = max(1−wS−wH,0)`; NegPy's 2-band
       regional CMY generalized) → shoulder softplus toward `d_min_eff`
-      (paper white) → toe softplus toward `d_max_eff` (paper black).
+      (paper white) → toe softplus toward `d_max_eff` (paper black) →
+      **density-space chroma** (NegPy 0.45 ports, both on density above
+      paper base, identity at defaults: Print Saturation = uniform k
+      around the per-pixel achromatic mean — the global reduction of
+      NegPy's saturation matrix, per-channel trims not ported; then Dye
+      Separation = signed spread-masked k, sign selects the target
+      population — the mask sigmoid's spread scale 0.4 is
+      `K.dyeSeparationSpreadScale`, duplicated as an MSL literal).
    c. `t = 10^−D`; **True Black** (BPC, optional): `t → (t−b)/(1−b)` with
       `b = 10^−dMax` referenced to the *physical* d_max so toe lifts survive
       (negative toe raises the clip point); clamp [0,1] → **linear
@@ -523,7 +530,8 @@ values where needed):
 - `K` (`ExposureConstants.swift`) is the single Swift source; the MSL
   duplicates: tone anchors/sharpness (`TONE_SHARPNESS`, `SHADOW_ANCHOR`,
   `HIGHLIGHT_ANCHOR`), Lab matrices/eps/kappa/white, the working-space
-  OETF exponent (0.45470693 in MSL = 256/563).
+  OETF exponent (0.45470693 in MSL = 256/563), and
+  `DYE_SEPARATION_SCALE` (= K.dyeSeparationSpreadScale 0.4).
   GPU/CPU parity tests catch drift but update them together.
 - If NegPy's `EXPOSURE_CONSTANTS` change deliberately: update `K`, re-dump
   fixtures, re-run `make test`.
