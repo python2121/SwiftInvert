@@ -79,11 +79,12 @@ struct TestStripLayer: View {
     }
 
     private func previewBadge(_ preview: (row: Int, col: Int, image: CGImage)) -> some View {
-        VStack {
+        let cell = TestStrip.cell(row: preview.row, col: preview.col, orientation: strip.orientation)
+        return VStack {
             Spacer()
             Text(
-                "Brightness \(String(format: "%.1f", 2.0 - TestStrip.densitiesByColumn[preview.col]))"
-                    + " · Grade R\(Int(TestStrip.gradesByRow[preview.row]))"
+                "Brightness \(String(format: "%.1f", 2.0 - cell.density))"
+                    + " · Grade R\(Int(cell.grade))"
                     + "  —  double-click to keep, click to compare others, Esc to cancel"
             )
             .font(.caption.weight(.semibold))
@@ -95,32 +96,50 @@ struct TestStripLayer: View {
         }
     }
 
+    /// One display axis slot's label under the current orientation: whichever
+    /// ladder value is constant along that column/row, with the accent when
+    /// it's the rung nearest the strip's base settings.
+    private func axisLabel(colOrRow index: Int, isColumn: Bool) -> (text: String, accented: Bool) {
+        let a = isColumn
+            ? TestStrip.cell(row: 0, col: index, orientation: strip.orientation)
+            : TestStrip.cell(row: index, col: 0, orientation: strip.orientation)
+        let b = isColumn
+            ? TestStrip.cell(row: 1, col: index, orientation: strip.orientation)
+            : TestStrip.cell(row: index, col: 1, orientation: strip.orientation)
+        let nearest = TestStrip.nearestCell(
+            density: strip.baseSettings.density, grade: strip.baseSettings.grade)
+        if a.density == b.density {
+            return (
+                String(format: "%.1f", 2.0 - a.density),
+                a.density == TestStrip.densitiesByColumn[nearest.col])
+        }
+        return ("R\(Int(a.grade))", a.grade == TestStrip.gradesByRow[nearest.row])
+    }
+
     private func chrome(size: CGSize) -> some View {
         Canvas { context, _ in
             let cellW = size.width / CGFloat(TestStrip.cols)
             let cellH = size.height / CGFloat(TestStrip.rows)
-            let accent = TestStrip.nearestCell(
-                density: strip.baseSettings.density, grade: strip.baseSettings.grade)
             let fontSize = min(max(min(cellW, cellH) * 0.14, 10), 16)
 
-            // Axis labels: Brightness along the top edge of each column,
-            // Grade down the left edge of each row (bold, dark underlay via
-            // shadow — same treatment as the zone overlay numerals).
+            // Axis labels along the top (columns) and left (rows) — which
+            // ladder each axis carries follows the orientation (bold, dark
+            // underlay via shadow — same treatment as the zone numerals).
             var shadowed = context
             shadowed.addFilter(.shadow(color: .black.opacity(0.85), radius: 1.5))
-            for (c, density) in TestStrip.densitiesByColumn.enumerated() {
-                let accented = c == accent.col
-                let text = Text(String(format: "%.1f", 2.0 - density))
+            for c in 0..<TestStrip.cols {
+                let label = axisLabel(colOrRow: c, isColumn: true)
+                let text = Text(label.text)
                     .font(.system(size: fontSize, weight: .bold))
-                    .foregroundStyle(accented ? Color.accentColor : .white)
+                    .foregroundStyle(label.accented ? Color.accentColor : .white)
                 shadowed.draw(
                     text, at: CGPoint(x: (CGFloat(c) + 0.5) * cellW, y: fontSize * 0.9))
             }
-            for (r, grade) in TestStrip.gradesByRow.enumerated() {
-                let accented = r == accent.row
-                let text = Text("R\(Int(grade))")
+            for r in 0..<TestStrip.rows {
+                let label = axisLabel(colOrRow: r, isColumn: false)
+                let text = Text(label.text)
                     .font(.system(size: fontSize, weight: .bold))
-                    .foregroundStyle(accented ? Color.accentColor : .white)
+                    .foregroundStyle(label.accented ? Color.accentColor : .white)
                 shadowed.draw(
                     text, at: CGPoint(x: fontSize * 1.2, y: (CGFloat(r) + 0.5) * cellH))
             }

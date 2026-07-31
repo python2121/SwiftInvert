@@ -29,11 +29,35 @@ public enum TestStrip {
 
     /// Every patch, row-major (the render order).
     public static var cells: [Cell] {
-        gradesByRow.enumerated().flatMap { r, g in
-            densitiesByColumn.enumerated().map { c, d in
-                Cell(row: r, col: c, density: d, grade: g)
-            }
+        cells(orientation: 0)
+    }
+
+    /// The ladder turned by `orientation` × 90° clockwise (NegPy a2455ab):
+    /// the 5×5 grid stays put over the frame; what rotates is which axis
+    /// carries density vs grade and their directions, so the dense/hard end
+    /// lands on a different part of the frame. Cell(row, col) is the DISPLAY
+    /// position; its density/grade come from the rotated logical grid.
+    /// The grid is square (rows == cols), which the rotation relies on.
+    public static func cells(orientation: Int) -> [Cell] {
+        (0..<rows).flatMap { r in
+            (0..<cols).map { c in cell(row: r, col: c, orientation: orientation) }
         }
+    }
+
+    /// One display cell's ladder values under `orientation`.
+    public static func cell(row: Int, col: Int, orientation: Int) -> Cell {
+        let n = cols  // == rows; the rotation needs the grid square
+        let o = ((orientation % 4) + 4) % 4
+        let (gradeIdx, densityIdx): (Int, Int)
+        switch o {
+        case 1: (gradeIdx, densityIdx) = (n - 1 - col, row)
+        case 2: (gradeIdx, densityIdx) = (n - 1 - row, n - 1 - col)
+        case 3: (gradeIdx, densityIdx) = (col, n - 1 - row)
+        default: (gradeIdx, densityIdx) = (row, col)
+        }
+        return Cell(
+            row: row, col: col,
+            density: densitiesByColumn[densityIdx], grade: gradesByRow[gradeIdx])
     }
 
     /// Integer split of `extent` into `divisions` (NegPy `_strip_bounds`):

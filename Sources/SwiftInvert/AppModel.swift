@@ -235,9 +235,17 @@ final class AppModel {
     }
 
     func rotateClockwise() {
+        if testStripOwnsRotation {
+            rotateTestStripLadder(clockwise: true)
+            return
+        }
         pendingHistoryLabel = "Rotate 90° CW"
         settings.rotation = ((settings.rotation + 90) % 360 + 360) % 360 }
     func rotateCounterclockwise() {
+        if testStripOwnsRotation {
+            rotateTestStripLadder(clockwise: false)
+            return
+        }
         pendingHistoryLabel = "Rotate 90° CCW"
         settings.rotation = ((settings.rotation - 90) % 360 + 360) % 360 }
     func flipHorizontal() {
@@ -738,6 +746,8 @@ final class AppModel {
         let image: CGImage
         /// Settings the strip was built from (its non-density/grade context).
         let baseSettings: ExposureSettings
+        /// Ladder orientation the mosaic was assembled with (0–3 × 90° CW).
+        let orientation: Int
         /// Full-frame preview of one patch (nil = the grid is showing).
         var preview: (row: Int, col: Int, image: CGImage)?
     }
@@ -750,6 +760,22 @@ final class AppModel {
     /// True while the strip is building (the toggle shows active immediately).
     var testStripBuilding = false
 
+    /// Ladder orientation (0–3 × 90° CW; a2455ab): while a strip is up the
+    /// rotate buttons and ⌘[/⌘] turn the LADDER, not the image — the
+    /// dense/hard end lands on a different part of the frame. Sticky for the
+    /// session; the mosaic rebuilds from the warm tower (~a strip build).
+    private(set) var testStripOrientation = 0
+
+    /// True when the rotate commands should turn the ladder instead of the
+    /// image (a strip is showing or building).
+    var testStripOwnsRotation: Bool { testStrip != nil || testStripTask != nil }
+
+    func rotateTestStripLadder(clockwise: Bool) {
+        testStripOrientation = ((testStripOrientation + (clockwise ? 1 : 3)) % 4)
+        clearTestStrip()
+        toggleTestStrip()
+    }
+
     func toggleTestStrip() {
         if testStrip != nil || testStripTask != nil {
             clearTestStrip()
@@ -760,8 +786,9 @@ final class AppModel {
         testStripGeneration += 1
         let generation = testStripGeneration
         testStripBuilding = true
+        let orientation = testStripOrientation
         testStripTask = Task { [weak self] in
-            let image = try? await session.renderTestStrip(settings: snapshot)
+            let image = try? await session.renderTestStrip(settings: snapshot, orientation: orientation)
             guard let self, self.testStripGeneration == generation else { return }
             self.testStripBuilding = false
             self.testStripTask = nil
@@ -769,7 +796,7 @@ final class AppModel {
             guard !Task.isCancelled, let image, self.settings == snapshot,
                 self.toolMode == .none, !self.showingBaseline
             else { return }
-            self.testStrip = TestStripState(image: image, baseSettings: snapshot)
+            self.testStrip = TestStripState(image: image, baseSettings: snapshot, orientation: orientation)
         }
     }
 
@@ -789,9 +816,10 @@ final class AppModel {
             TestStrip.gradesByRow.indices.contains(row),
             TestStrip.densitiesByColumn.indices.contains(col)
         else { return }
+        let cell = TestStrip.cell(row: row, col: col, orientation: strip.orientation)
         var s = strip.baseSettings
-        s.density = TestStrip.densitiesByColumn[col]
-        s.grade = TestStrip.gradesByRow[row]
+        s.density = cell.density
+        s.grade = cell.grade
         let generation = testStripGeneration
         Task { [weak self] in
             guard let output = try? await session.render(settings: s) else { return }
@@ -813,14 +841,15 @@ final class AppModel {
     /// patches were rendered under them (upstream rule), so toggling them
     /// would render something other than the clicked patch.
     func confirmTestStripCell(row: Int, col: Int) {
-        guard testStrip != nil,
+        guard let strip = testStrip,
             TestStrip.gradesByRow.indices.contains(row),
             TestStrip.densitiesByColumn.indices.contains(col)
         else { return }
+        let cell = TestStrip.cell(row: row, col: col, orientation: strip.orientation)
         pendingHistoryLabel = "Test strip pick"
         var s = settings
-        s.density = TestStrip.densitiesByColumn[col]
-        s.grade = TestStrip.gradesByRow[row]
+        s.density = cell.density
+        s.grade = cell.grade
         settings = s  // didSet clears the strip; explicit clear below covers
         clearTestStrip()  // picking the patch that IS the current settings
     }

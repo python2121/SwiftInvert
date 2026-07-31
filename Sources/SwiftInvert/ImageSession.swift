@@ -236,13 +236,13 @@ actor ImageSession {
     /// the preview proxy, never HQ (upstream rule: 25 full-res renders would
     /// take ages and each patch shows at a fifth of the frame's width).
     /// Assembled incrementally so only mosaic + one tile are ever held.
-    func renderTestStrip(settings: ExposureSettings) throws -> CGImage {
+    func renderTestStrip(settings: ExposureSettings, orientation: Int) throws -> CGImage {
         let (image, analysis) = try prepare(settings: settings)
         clearHQ()
         let source = try sourceTexture(image: image, settings: settings, uncropped: false)
         var mosaic: [UInt8] = []
         var w = 0, h = 0
-        for cell in TestStrip.cells {
+        for cell in TestStrip.cells(orientation: orientation) {
             var s = settings
             s.density = cell.density
             s.grade = cell.grade

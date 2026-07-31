@@ -92,3 +92,51 @@ import Testing
         }
     }
 }
+
+/// Ladder rotation (NegPy a2455ab): the 5×5 display grid stays put; the
+/// logical (density × grade) assignment rotates beneath it.
+@Suite struct TestStripRotationTests {
+    /// Every orientation is a bijection onto the full ladder: all 25
+    /// (density, grade) pairs appear exactly once.
+    @Test(arguments: [0, 1, 2, 3])
+    func orientationCoversLadderExactlyOnce(o: Int) {
+        let cells = TestStrip.cells(orientation: o)
+        #expect(cells.count == 25)
+        let pairs = Set(cells.map { "\($0.density)|\($0.grade)" })
+        #expect(pairs.count == 25)
+    }
+
+    @Test func orientationZeroIsTheBaseline() {
+        #expect(TestStrip.cells(orientation: 0) == TestStrip.cells)
+        // And 4 wraps to 0, -1 to 3.
+        #expect(TestStrip.cells(orientation: 4) == TestStrip.cells(orientation: 0))
+        #expect(TestStrip.cells(orientation: -1) == TestStrip.cells(orientation: 3))
+    }
+
+    /// One clockwise turn: the top-left corner receives what was at the
+    /// bottom-left (standard 90° CW rotation of the logical grid).
+    @Test func clockwiseTurnMovesCorners() {
+        let base = TestStrip.cell(row: TestStrip.rows - 1, col: 0, orientation: 0)
+        let turned = TestStrip.cell(row: 0, col: 0, orientation: 1)
+        #expect(turned.density == base.density && turned.grade == base.grade)
+    }
+
+    /// Each display axis carries exactly ONE ladder under every orientation
+    /// (all cells in a column share density or all share grade — what the
+    /// axis labels rely on).
+    @Test(arguments: [0, 1, 2, 3])
+    func axesStayPure(o: Int) {
+        for c in 0..<TestStrip.cols {
+            let column = (0..<TestStrip.rows).map { TestStrip.cell(row: $0, col: c, orientation: o) }
+            let sameDensity = column.allSatisfy { $0.density == column[0].density }
+            let sameGrade = column.allSatisfy { $0.grade == column[0].grade }
+            #expect(sameDensity != sameGrade, "column \(c) at o=\(o) must carry exactly one ladder")
+        }
+        for r in 0..<TestStrip.rows {
+            let row = (0..<TestStrip.cols).map { TestStrip.cell(row: r, col: $0, orientation: o) }
+            let sameDensity = row.allSatisfy { $0.density == row[0].density }
+            let sameGrade = row.allSatisfy { $0.grade == row[0].grade }
+            #expect(sameDensity != sameGrade, "row \(r) at o=\(o) must carry exactly one ladder")
+        }
+    }
+}

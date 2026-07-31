@@ -91,13 +91,14 @@ max < 0.02) guards the path their transposed-matrix bug hid in.
    achromatic mean). Only meaningful when printSaturation ≠ 1 (grey out at
    1.0, like upstream). Kernel both sides + one constant (their c0
    reference spread); no re-dump. Medium.
-3. **Proof-ladder rotation** (`a2455ab`): while the test strip (or their
-   ring-around) is up, the 90° rotate buttons and [ / ] turn the LADDER
-   instead of the image — the dense/hard end lands on a different part of
-   the frame, axis labels follow, and all four orientations assemble from
-   the SAME renders, so turning is instant. Clean follow-on to our
-   2026-07-29 test-strip port (our mosaic assembly would gain an
-   orientation parameter; renders already cached). Small-medium.
+3. **Proof-ladder rotation** (`a2455ab`) — **PORTED 2026-07-30** (same
+   day): TestStrip gained orientation 0–3 (logical grid rotated under the
+   fixed display grid; bijection + axis-purity tested per orientation),
+   rotate buttons/⌘[/⌘] intercepted while a strip is up or building,
+   labels/preview badge/picks orientation-aware, orientation sticky for
+   the session. Documented divergence: upstream assembles all four
+   orientations from cached tiles; we re-render from the warm tower
+   (~one strip build) instead of retaining 25 preview-size tiles.
 
 **Noted:** the ring-around spec at the tip is now ±4cc in 2cc steps (was
 ±2cc/1cc when first proposed) — still carried as an open candidate.

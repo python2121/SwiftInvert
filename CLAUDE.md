@@ -453,8 +453,14 @@ values where needed):
   state cleared by ANY edit/navigation/tool/baseline/HQ change (guarded
   by a generation counter against stale builds); Escape clears first.
   No gridlines — only the hovered patch outlines; the current-settings
-  rung is accented. TestStripRenderTests pins patch == full render at
-  that patch's settings, byte-identical.
+  rung is accented. While a strip is up the rotate buttons and ⌘[/⌘]
+  turn the LADDER, not the image (a2455ab port): orientation 0–3 rotates
+  the logical density×grade assignment under the fixed display grid,
+  labels/picks follow, mosaic rebuilds from the warm tower (upstream
+  caches all four assemblies; we re-render — same UX at ~a strip build,
+  no 25-tile retention). TestStripRenderTests pins patch == full render
+  at that patch's settings, byte-identical; rotation tests pin the
+  bijection and axis purity per orientation.
 - **Darkroom read-outs** (`Densitometry` in NegativeKit — pure measurement, no
   render path, so no parity surface): the **spot densitometer** (hover the
   canvas → D + zone in the control bar, with an 11-cell `ZoneStrip`) and the
