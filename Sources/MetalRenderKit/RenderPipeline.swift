@@ -44,7 +44,7 @@ public final class RenderPipeline: @unchecked Sendable {
         let w: Int
         let h: Int
     }
-    private var intermediates: [SizeKey: (normalized: MTLTexture, linear: MTLTexture, encoded: MTLTexture)] = [:]
+    private var intermediates: [SizeKey: (normalized: MTLTexture, linear: MTLTexture, encoded: MTLTexture?)] = [:]
     /// Display-path encode target: same encode kernel writing into rgba8unorm —
     /// the GPU quantizes for free and readback is 4× smaller with no CPU repack.
     private var display8: [SizeKey: MTLTexture] = [:]
@@ -100,15 +100,20 @@ public final class RenderPipeline: @unchecked Sendable {
     /// Upload an interleaved RGB float image as rgba32float.
     public func upload(_ image: RGBImage) throws -> MTLTexture {
         let tex = try makeTexture(width: image.width, height: image.height, usage: [.shaderRead])
-        var rgba = [Float](repeating: 1, count: image.width * image.height * 4)
-        image.pixels.withUnsafeBufferPointer { src in
-            rgba.withUnsafeMutableBufferPointer { dst in
-                for i in 0..<(image.width * image.height) {
+        let n = image.width * image.height
+        // No pre-fill: every lane is written below (alpha = 1, matching the
+        // old repeating:1 fill byte-for-byte, without touching 4·n floats
+        // twice — at export size the redundant fill alone was ~10 ms).
+        let rgba = [Float](unsafeUninitializedCapacity: n * 4) { dst, count in
+            image.pixels.withUnsafeBufferPointer { src in
+                for i in 0..<n {
                     dst[i * 4] = src[i * 3]
                     dst[i * 4 + 1] = src[i * 3 + 1]
                     dst[i * 4 + 2] = src[i * 3 + 2]
+                    dst[i * 4 + 3] = 1
                 }
             }
+            count = n * 4
         }
         rgba.withUnsafeBufferPointer { buf in
             tex.replace(
@@ -157,18 +162,30 @@ public final class RenderPipeline: @unchecked Sendable {
         public let histogram: [UInt32]  // R,G,B,Luma × 256
     }
 
-    private func intermediatesFor(width w: Int, height h: Int) throws
-        -> (normalized: MTLTexture, linear: MTLTexture, encoded: MTLTexture)
+    /// The float `encoded` target is created only when asked for (the
+    /// display path encodes into its own rgba8 texture and never touches
+    /// it — allocating it eagerly parked ~25 MB per cached size for nothing).
+    private func intermediatesFor(width w: Int, height h: Int, needEncoded: Bool) throws
+        -> (normalized: MTLTexture, linear: MTLTexture, encoded: MTLTexture?)
     {
         let key = SizeKey(w: w, h: h)
-        if let cached = intermediates[key] { return cached }
-        let set = (
-            normalized: try makeTexture(width: w, height: h),
-            linear: try makeTexture(width: w, height: h),
-            encoded: try makeTexture(width: w, height: h)
-        )
+        var set: (normalized: MTLTexture, linear: MTLTexture, encoded: MTLTexture?)
+        if let cached = intermediates[key] {
+            set = cached
+        } else {
+            set = (
+                normalized: try makeTexture(width: w, height: h),
+                linear: try makeTexture(width: w, height: h),
+                encoded: nil
+            )
+        }
+        if needEncoded && set.encoded == nil {
+            set.encoded = try makeTexture(width: w, height: h)
+        }
         if w * h <= maxCachedPixels {
-            if intermediates.count >= 4 { intermediates.removeAll() }  // crop-size churn cap
+            if intermediates[key] == nil && intermediates.count >= 4 {
+                intermediates.removeAll()  // crop-size churn cap
+            }
             intermediates[key] = set
         }
         return set
@@ -184,7 +201,8 @@ public final class RenderPipeline: @unchecked Sendable {
         renderLock.lock()
         defer { renderLock.unlock() }
         let w = source.width, h = source.height
-        let (normalized, linear, encoded) = try intermediatesFor(width: w, height: h)
+        let (normalized, linear, encodedOpt) = try intermediatesFor(width: w, height: h, needEncoded: true)
+        let encoded = encodedOpt!
 
         var normU = UniformsBuilder.normUniforms(params)
         var curveU = UniformsBuilder.curveUniforms(params)
@@ -249,9 +267,11 @@ public final class RenderPipeline: @unchecked Sendable {
     }
 
     /// Convenience: full CPU-image → CPU-image render.
-    public func render(image: RGBImage, params: RenderParams) throws -> (encoded: RGBImage, histogram: [UInt32]) {
+    public func render(
+        image: RGBImage, params: RenderParams, computeHistogram: Bool = true
+    ) throws -> (encoded: RGBImage, histogram: [UInt32]) {
         let source = try upload(image)
-        let result = try render(source: source, params: params)
+        let result = try render(source: source, params: params, computeHistogram: computeHistogram)
         return (result.encoded, result.histogram)
     }
 
@@ -276,7 +296,7 @@ public final class RenderPipeline: @unchecked Sendable {
         renderLock.lock()
         defer { renderLock.unlock() }
         let w = source.width, h = source.height
-        let (normalized, linear, _) = try intermediatesFor(width: w, height: h)
+        let (normalized, linear, _) = try intermediatesFor(width: w, height: h, needEncoded: false)
 
         let key = SizeKey(w: w, h: h)
         let encoded8: MTLTexture

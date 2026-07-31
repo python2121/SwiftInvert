@@ -147,7 +147,7 @@ do {
         let params = ExposureKernel.deriveRenderParams(settings, analysis)
         let tAnalyze = -start.timeIntervalSinceNow - tDecode
         let pipeline = try RenderPipeline()
-        let (encoded, _) = try pipeline.render(image: img, params: params)
+        let (encoded, _) = try pipeline.render(image: img, params: params, computeHistogram: false)
         let tRender = -start.timeIntervalSinceNow - tDecode - tAnalyze
         try writeTIFF16(encoded, to: URL(fileURLWithPath: output), romm: true)
         print(
@@ -167,7 +167,7 @@ do {
         let analysis = ExposureKernel.analyze(linearImage: img)
         let params = ExposureKernel.deriveRenderParams(settings, analysis)
         let pipeline = try RenderPipeline()
-        let (encoded, _) = try pipeline.render(image: img, params: params)
+        let (encoded, _) = try pipeline.render(image: img, params: params, computeHistogram: false)
 
         // Negative character reads the pre-offset range — the same value the
         // curve's grade logic reads (NegPy's norm_density_range).

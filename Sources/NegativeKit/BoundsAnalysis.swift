@@ -63,8 +63,10 @@ public enum BoundsAnalysis {
     }
 
     /// One ascending sort per channel — the expensive half of the percentile
-    /// sampling.
-    static func sortedChannels(grid: RGBImage) -> [[Float]] {
+    /// sampling. Public so `prepare` can share the sorts with the other
+    /// percentile meters (shadowRefs): the sorted arrays are a pure function
+    /// of the grid, so every consumer sees identical bytes.
+    public static func sortedChannels(grid: RGBImage) -> [[Float]] {
         let n = grid.width * grid.height
         var channels: [[Float]] = [[], [], []]
         for c in 0..<3 {
@@ -188,7 +190,16 @@ public enum BoundsAnalysis {
     public static func analyze(
         grid: RGBImage, lumaRangeClip: Double = 0.0, colorRangeClip: Double = K.baseColorClip
     ) -> LogNegativeBounds {
-        let channels = sortedChannels(grid: grid)
+        analyze(grid: grid, channelsSorted: sortedChannels(grid: grid),
+            lumaRangeClip: lumaRangeClip, colorRangeClip: colorRangeClip)
+    }
+
+    /// Same analysis with the caller's pre-sorted channels (shared with the
+    /// other percentile meters — one sort pass per prepare, not two).
+    public static func analyze(
+        grid: RGBImage, channelsSorted channels: [[Float]],
+        lumaRangeClip: Double = 0.0, colorRangeClip: Double = K.baseColorClip
+    ) -> LogNegativeBounds {
         let (floors, ceils) = sampleLogBounds(channelsSorted: channels, percentileClip: lumaRangeClip, base: K.baseLumaClip)
         let colour = sampleLogBounds(channelsSorted: channels, percentileClip: colorRangeClip, base: 0.0)
         var cFloors = colour.floors

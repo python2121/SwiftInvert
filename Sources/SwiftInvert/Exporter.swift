@@ -69,16 +69,16 @@ struct ExportOptions: Codable, Equatable {
         return dir.appendingPathComponent(name).appendingPathExtension(format.fileExtension)
     }
 
-    static func loadSticky() -> ExportOptions {
-        guard let data = UserDefaults.standard.data(forKey: "exportOptions"),
+    static func loadSticky(defaults: UserDefaults = .standard) -> ExportOptions {
+        guard let data = defaults.data(forKey: "exportOptions"),
             let options = try? JSONDecoder().decode(ExportOptions.self, from: data)
         else { return ExportOptions() }
         return options
     }
 
-    func saveSticky() {
+    func saveSticky(defaults: UserDefaults = .standard) {
         if let data = try? JSONEncoder().encode(self) {
-            UserDefaults.standard.set(data, forKey: "exportOptions")
+            defaults.set(data, forKey: "exportOptions")
         }
     }
 }

@@ -62,16 +62,17 @@ public enum Meters {
 
     /// measure_shadow_refs_from_log: P98 per channel of the raw log grid.
     public static func shadowRefs(grid: RGBImage) -> SIMD3<Double> {
-        let n = grid.width * grid.height
-        var refs = SIMD3<Double>()
-        for c in 0..<3 {
-            var v = [Float](repeating: 0, count: n)
-            grid.pixels.withUnsafeBufferPointer { src in
-                for i in 0..<n { v[i] = src[i * 3 + c] }
-            }
-            refs[c] = Stats.percentile(v, K.shadowNeutralPercentile)
-        }
-        return refs
+        shadowRefs(channelsSorted: BoundsAnalysis.sortedChannels(grid: grid))
+    }
+
+    /// Same refs from pre-sorted channels (bit-identical: the percentile is
+    /// deterministic on the sorted array, which is a pure function of the
+    /// grid — shared with BoundsAnalysis so prepare sorts once).
+    public static func shadowRefs(channelsSorted: [[Float]]) -> SIMD3<Double> {
+        SIMD3(
+            Stats.percentileOfSorted(channelsSorted[0], K.shadowNeutralPercentile),
+            Stats.percentileOfSorted(channelsSorted[1], K.shadowNeutralPercentile),
+            Stats.percentileOfSorted(channelsSorted[2], K.shadowNeutralPercentile))
     }
 
     /// Pairwise-RMS distance from the neutral axis (rotation-symmetric around
@@ -131,13 +132,20 @@ public enum Meters {
             }
         }
 
-        func bandRefs(
-            _ lo: Double, _ hi: Double, _ chromaVals: [Float], _ capVal: Double
-        ) -> (refs: SIMD3<Double>, medianChroma: Double, count: Int)? {
+        // Band membership depends only on the (immutable) luma — compute
+        // each band's indices ONCE and reuse across both passes (pass 2
+        // used to rescan all n pixels per band for identical sets).
+        func bandIndices(_ lo: Double, _ hi: Double) -> [Int] {
             let loF = Float(lo), hiF = Float(hi)
             var indices: [Int] = []
             indices.reserveCapacity(n / 4)
             for i in 0..<n where luma[i] >= loF && luma[i] <= hiF { indices.append(i) }
+            return indices
+        }
+
+        func bandRefs(
+            _ indices: [Int], _ chromaVals: [Float], _ capVal: Double
+        ) -> (refs: SIMD3<Double>, medianChroma: Double, count: Int)? {
             guard indices.count >= K.neutralAxisMinPixels else { return nil }
             var bandChroma = [Float](repeating: 0, count: indices.count)
             for (k, i) in indices.enumerated() { bandChroma[k] = chromaVals[i] }
@@ -173,8 +181,10 @@ public enum Meters {
         }
 
         let mb = K.neutralAxisMidBand, sb = K.neutralAxisShadowBand, hb = K.neutralAxisHighlightBand
-        guard let mid1 = bandRefs(mb.0, mb.1, chroma, K.neutralAxisFirstPassCap),
-            let sh1 = bandRefs(sb.0, sb.1, chroma, K.neutralAxisFirstPassCap)
+        let mbIdx = bandIndices(mb.0, mb.1)
+        let sbIdx = bandIndices(sb.0, sb.1)
+        guard let mid1 = bandRefs(mbIdx, chroma, K.neutralAxisFirstPassCap),
+            let sh1 = bandRefs(sbIdx, chroma, K.neutralAxisFirstPassCap)
         else { return nil }
 
         // Affine R/B→G correction implied by the pass-1 mid+shadow refs, then
@@ -205,10 +215,10 @@ public enum Meters {
         }
 
         let cap = K.neutralAxisChromaCap
-        guard let mid = bandRefs(mb.0, mb.1, chroma2, cap),
-            let shadow = bandRefs(sb.0, sb.1, chroma2, cap)
+        guard let mid = bandRefs(mbIdx, chroma2, cap),
+            let shadow = bandRefs(sbIdx, chroma2, cap)
         else { return nil }
-        let highlight = bandRefs(hb.0, hb.1, chroma2, cap)
+        let highlight = bandRefs(bandIndices(hb.0, hb.1), chroma2, cap)
 
         // Confidence: corrected tightness of the grey sets × midtone sample
         // size × mid↔shadow deviation agreement (a dead zone passes plausible

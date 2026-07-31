@@ -238,7 +238,6 @@ actor ImageSession {
     /// Assembled incrementally so only mosaic + one tile are ever held.
     func renderTestStrip(settings: ExposureSettings, orientation: Int) throws -> CGImage {
         let (image, analysis) = try prepare(settings: settings)
-        clearHQ()
         let source = try sourceTexture(image: image, settings: settings, uncropped: false)
         var mosaic: [UInt8] = []
         var w = 0, h = 0
@@ -268,19 +267,31 @@ actor ImageSession {
         if basePreview == nil {
             basePreview = try RawDecoder().decode(url: url, quality: .preview, maxLongEdge: 1536)
         }
-        // Same metering rule as prepare(): the current fine rotation never
-        // re-meters; a manual region pins the meter to its drawn angle.
-        let meterImage = basePreview!.oriented(
-            rotationCW: settings.rotation, flipHorizontal: settings.flipHorizontal,
-            fineRotation: Self.meterAngle(settings))
-        let oriented = abs(settings.fineRotation) > 0.005
-            ? basePreview!.oriented(
+        // Analysis is fine-rotation-independent by design, so when the
+        // cached analysis's keys match these settings (the common case:
+        // the straighten 0°-base differs from the last render only in
+        // fineRotation), reuse it read-only — byte-identical, and it turns
+        // the ~175 ms background prepare into zero. Cache misses fall back
+        // to a fresh detached computation that touches no cache state.
+        let mKey = MeterKey(
+            rotation: settings.rotation, flipHorizontal: settings.flipHorizontal,
+            meterAngle: Self.meterAngle(settings))
+        let pKey = PreparedKey(analysisRect: settings.analysisRect, cropRect: settings.cropRect)
+        let analysis: ExposureAnalysis
+        if mKey == meterKey, pKey == preparedKey, let cached = self.analysis {
+            analysis = cached
+        } else {
+            let meterImage = basePreview!.oriented(
                 rotationCW: settings.rotation, flipHorizontal: settings.flipHorizontal,
-                fineRotation: settings.fineRotation)
-            : meterImage
-        let prepared = ExposureKernel.prepare(
-            linearImage: meterImage, cropRect: settings.cropRect, analysisRect: settings.analysisRect)
-        let analysis = ExposureKernel.finalize(prepared)
+                fineRotation: mKey.meterAngle)
+            let prepared = ExposureKernel.prepare(
+                linearImage: meterImage, cropRect: settings.cropRect,
+                analysisRect: settings.analysisRect)
+            analysis = ExposureKernel.finalize(prepared)
+        }
+        let oriented = basePreview!.oriented(
+            rotationCW: settings.rotation, flipHorizontal: settings.flipHorizontal,
+            fineRotation: settings.fineRotation)
         let params = ExposureKernel.deriveRenderParams(settings, analysis)
         let image = settings.cropRect.map { oriented.cropped(to: $0) } ?? oriented
         let source = try pipeline.upload(image)
@@ -321,7 +332,7 @@ actor ImageSession {
                 fineRotation: settings.fineRotation)
         if let crop = settings.cropRect { full = full.cropped(to: crop) }
         let params = ExposureKernel.deriveRenderParams(settings, analysis)
-        let (encoded, _) = try pipeline.render(image: full, params: params)
+        let encoded = try pipeline.render(image: full, params: params, computeHistogram: false).encoded
         return encoded
     }
 }

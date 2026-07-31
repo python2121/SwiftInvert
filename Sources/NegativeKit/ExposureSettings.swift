@@ -366,14 +366,18 @@ public enum ExposureKernel {
             metered = linearImage.cropped(to: rect)
         }
         let grid = Prefilter.prefilterLogGrid(metered, analysisBuffer: buffer)
-        let base = BoundsAnalysis.analyze(grid: grid)
+        // One sort pass per channel, shared by the bounds percentiles and the
+        // shadow refs (identical inputs → identical bytes; the sort was the
+        // biggest single line item in prepare).
+        let channels = BoundsAnalysis.sortedChannels(grid: grid)
+        let base = BoundsAnalysis.analyze(grid: grid, channelsSorted: channels)
         return Prepared(
             grid: grid,
             baseBounds: base,
             // Anchor reads against the per-frame base (luma_source_bounds).
             anchor: Meters.anchor(grid: grid, bounds: base),
             texturalRange: Meters.texturalRange(grid: grid),
-            shadowRefs: Meters.shadowRefs(grid: grid)
+            shadowRefs: Meters.shadowRefs(channelsSorted: channels)
         )
     }
 

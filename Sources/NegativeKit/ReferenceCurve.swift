@@ -195,6 +195,25 @@ public enum ReferenceCurve {
         return y0 + (e - x0) * (1.0 - y0) / max(1.0 - x0, 1e-4)
     }
 
+    /// Piecewise inverse of `levelsRemap` (the map is monotone, so this is
+    /// well-defined): displayed position → input tone under the anchors in
+    /// effect. The interactive histogram grabs through this — if it drifts
+    /// from the forward map, planting an anchor makes the tone jump under
+    /// the cursor.
+    public static func levelsInverseRemap(_ y: Double, _ points: [SIMD2<Double>]) -> Double {
+        var x0 = 0.0, y0 = 0.0
+        for p in points {
+            if y <= p.y {
+                let dy = p.y - y0
+                return dy < 1e-6 ? p.x : x0 + (y - y0) * (p.x - x0) / dy
+            }
+            x0 = p.x
+            y0 = p.y
+        }
+        let dy = 1.0 - y0
+        return dy < 1e-6 ? 1.0 : x0 + (y - y0) * (1.0 - x0) / dy
+    }
+
     /// Working-space OETF encode over a whole buffer (final engine step),
     /// with the optional per-channel display-domain levels anchors
     /// (interactive histogram).
