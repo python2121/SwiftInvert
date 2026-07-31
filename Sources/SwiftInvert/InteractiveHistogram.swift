@@ -11,8 +11,15 @@ import SwiftUI
 struct InteractiveHistogramView: View {
     /// The window this histogram edits — captured from the key window when
     /// the panel opened (profile editors included), main model as fallback.
+    /// Held WEAKLY: a closed profile editor's model must not be kept alive
+    /// (or silently edited) by this panel.
+    final class WeakModel {
+        weak var value: AppModel?
+        init(_ value: AppModel?) { self.value = value }
+    }
+
     let fallback: AppModel
-    @State private var target: AppModel?
+    @State private var target = WeakModel(nil)
     @State private var channel: Channel = .red
     /// Index (into the channel's sorted anchors) of the anchor being
     /// dragged; nil while idle.
@@ -37,7 +44,7 @@ struct InteractiveHistogramView: View {
         }
     }
 
-    private var model: AppModel { target ?? fallback }
+    private var model: AppModel { target.value ?? fallback }
 
     private var anchors: [SIMD2<Double>] {
         model.settings[keyPath: channel.keyPath]
@@ -82,7 +89,7 @@ struct InteractiveHistogramView: View {
         }
         .padding(14)
         .frame(minWidth: 520, minHeight: 340)
-        .onAppear { if target == nil { target = KeyModelTracker.shared.active ?? fallback } }
+        .onAppear { if target.value == nil { target = WeakModel(KeyModelTracker.shared.active ?? fallback) } }
     }
 
     // MARK: - Plot
@@ -129,8 +136,13 @@ struct InteractiveHistogramView: View {
             .onChanged { value in
                 let x = min(max(Double((value.location.x - 6) / plotWidth), 0), 1)
                 if dragIndex == nil {
+                    // Enter the editing state ONLY once a grab/plant succeeds:
+                    // a failed plant (no room between anchors) must not
+                    // increment the edit count — repeated ticks would wedge
+                    // it above zero and stop history commits for the session.
+                    guard let planted = grabOrPlantAnchor(at: x) else { return }
                     model.setControlEditing(true)
-                    dragIndex = grabOrPlantAnchor(at: x)
+                    dragIndex = planted
                 }
                 guard let i = dragIndex else { return }
                 moveAnchor(i, outputTo: x)
@@ -138,7 +150,9 @@ struct InteractiveHistogramView: View {
             .onEnded { _ in
                 // The anchor stays where it was released — it's already in
                 // the settings; ending the drag just commits the history
-                // entry ("Red levels").
+                // entry ("Red levels"). Only balanced with a successful
+                // grab (see onChanged).
+                guard dragIndex != nil else { return }
                 dragIndex = nil
                 model.setControlEditing(false)
             }
@@ -184,20 +198,10 @@ struct InteractiveHistogramView: View {
         model.settings[keyPath: channel.keyPath] = pts
     }
 
-    /// Displayed position → input tone under the channel's current remap
-    /// (piecewise inverse; the map is monotone so this is well-defined).
+    /// Displayed position → input tone (ReferenceCurve.levelsInverseRemap —
+    /// the tested inverse of the kernel's forward map).
     private func inverseRemap(_ y: Double, _ pts: [SIMD2<Double>]) -> Double {
-        var x0 = 0.0, y0 = 0.0
-        for p in pts {
-            if y <= p.y {
-                let dy = p.y - y0
-                return dy < 1e-6 ? p.x : x0 + (y - y0) * (p.x - x0) / dy
-            }
-            x0 = p.x
-            y0 = p.y
-        }
-        let dy = 1 - y0
-        return dy < 1e-6 ? 1 : x0 + (y - y0) * (1 - x0) / dy
+        ReferenceCurve.levelsInverseRemap(y, pts)
     }
 
     // MARK: - Anchor removal row

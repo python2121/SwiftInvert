@@ -298,6 +298,20 @@ final class AppModel {
     @ObservationIgnored weak var hostWindow: NSWindow?
 
     let thumbnails = ThumbnailStore()
+
+    /// Process-wide render pipeline (see init) — compiled once, shared by
+    /// the main window and every profile-editor window.
+    private static let sharedPipelineResult: Result<RenderPipeline, Error> = Result {
+        try RenderPipeline()
+    }
+    private static var sharedPipeline: RenderPipeline? {
+        try? sharedPipelineResult.get()
+    }
+    private static var sharedPipelineError: String? {
+        if case .failure(let e) = sharedPipelineResult { return "\(e)" }
+        return nil
+    }
+
     private var pipeline: RenderPipeline?
     private var session: ImageSession?
     /// Recently-visited sessions, oldest first, including the active one.
@@ -418,6 +432,14 @@ final class AppModel {
         pendingHistoryLabel = nil
     }
 
+    /// True when an edit is newer than the current history entry (the 0.7 s
+    /// debounce window) — undo can flush-and-revert it, so the menu item
+    /// must stay enabled even at history index 0.
+    var hasUncommittedEdit: Bool {
+        !historyEntries.isEmpty && historyEntries.indices.contains(historyIndex)
+            && historyEntries[historyIndex].settings != settings
+    }
+
     func undo() {
         guard selection != nil else { return }
         historyCommitTask?.cancel()
@@ -431,14 +453,23 @@ final class AppModel {
     }
 
     func redo() {
-        guard canRedo else { return }
+        guard selection != nil else { return }
         historyCommitTask?.cancel()
+        // An in-flight (uncommitted) edit truncates the redo tail — flushing
+        // it first is what makes that true (silently redoing over it would
+        // discard the edit AND resurrect a tail the edit invalidated).
+        if !historyEntries.isEmpty, historyEntries[historyIndex].settings != settings {
+            commitHistory()
+            return
+        }
+        guard canRedo else { return }
         historyIndex += 1
         applyHistorySettings()
     }
 
     func jumpToHistory(_ index: Int) {
         guard index >= 0, index < historyEntries.count, index != historyIndex else { return }
+        pendingHistoryLabel = nil  // an armed named label must not mislabel a later edit
         historyCommitTask?.cancel()
         historyIndex = index
         applyHistorySettings()
@@ -481,12 +512,15 @@ final class AppModel {
             }
         }
         // The pipeline must exist before the folder restore: scanFolder sets the
-        // selection, whose didSet immediately kicks the first render.
-        do {
-            pipeline = try RenderPipeline()
-        } catch {
-            statusMessage = "Metal unavailable: \(error)"
-            NSLog("SwiftInvert: RenderPipeline init failed: \(error)")
+        // selection, whose didSet immediately kicks the first render. ONE
+        // pipeline serves every AppModel (profile editors included):
+        // RenderPipeline is built for sharing — render() is lock-serialized
+        // and returns read-back buffers only — and a per-window pipeline
+        // meant recompiling the shaders and duplicating the texture caches
+        // on every editor open.
+        pipeline = Self.sharedPipeline
+        if pipeline == nil {
+            statusMessage = "Metal unavailable: \(Self.sharedPipelineError ?? "unknown")"
         }
         if let path = UserDefaults.standard.string(forKey: "libraryFolder") {
             let url = URL(fileURLWithPath: path)
@@ -566,6 +600,10 @@ final class AppModel {
     private func openSelection() {
         renderTask?.cancel()
         clearTestStrip()
+        // Route a live crop mode through the CANCEL path: committing here
+        // would apply the OLD image's crop box to the NEW image's settings
+        // (DetailView's mode-exit handler runs after the switch).
+        if toolMode == .crop { cropModeCancelled = true }
         toolMode = .none
         showingBaseline = false
         displayImage = nil
@@ -723,15 +761,23 @@ final class AppModel {
     /// geometry (crop, analysis region, orientation, straighten) — the frame
     /// re-analyzes and renders exactly as on first open with no sidecar.
     func resetSettings() {
+        let before = settings
         pendingHistoryLabel = "Reset all"
         settings = DefaultProfile.settings
+        // No-op (already at defaults): didSet never fired, so nothing will
+        // consume the label — disarm it or the NEXT edit commits as "Reset
+        // all". (When the reset DID change something, the label must
+        // survive until the debounced commit reads it.)
+        if before == settings { pendingHistoryLabel = nil }
     }
 
     /// Cancel the default profile too: the untouched stock (NegPy-neutral)
     /// conversion, for starting an edit from scratch.
     func resetToStock() {
+        let before = settings
         pendingHistoryLabel = "Start from scratch"
         settings = ExposureSettings()
+        if before == settings { pendingHistoryLabel = nil }  // no-op: disarm
     }
 
     // MARK: - Test strip (NegPy e4bc450 port)
@@ -782,6 +828,10 @@ final class AppModel {
             return
         }
         guard let session, selection != nil, toolMode == .none, !showingBaseline else { return }
+        // The strip and its patch previews are proxy-renders by design
+        // (25 full-res renders would take ages); leaving HQ nominally on
+        // while its tier gets evicted underneath would lie — flip it off.
+        if hqPreview { hqPreview = false }
         let snapshot = settings
         testStripGeneration += 1
         let generation = testStripGeneration
@@ -850,8 +900,10 @@ final class AppModel {
         var s = settings
         s.density = cell.density
         s.grade = cell.grade
+        let before = settings
         settings = s  // didSet clears the strip; explicit clear below covers
         clearTestStrip()  // picking the patch that IS the current settings
+        if before == settings { pendingHistoryLabel = nil }  // no-op pick: disarm
     }
 
     // MARK: - Baseline (press-and-hold "before") preview
@@ -962,8 +1014,10 @@ final class AppModel {
 
     func pasteAdjustments() {
         guard let source = copiedAdjustments, selection != nil else { return }
+        let before = settings
         pendingHistoryLabel = "Paste adjustments"
         settings = mergedAdjustments(source, keepingGeometryOf: settings)
+        if before == settings { pendingHistoryLabel = nil }  // no-op paste: disarm
     }
 
     /// Edit > Paste Adjustments to Selection: apply to every multi-selected

@@ -27,11 +27,19 @@ public struct NormalizedRect: Codable, Equatable, Sendable {
     /// Pixel ROI (x0, y0, x1, y1) with NegPy's truncating mapping
     /// (resolve_analysis_region: int(min·dim)…int(max·dim)); nil when the rect
     /// is degenerate (< 2 px in either axis), so a stray click can't blank analysis.
+    ///
+    /// Clamped to the frame BEFORE the degeneracy check: only the drag
+    /// initializer guarantees [0,1] — a rect from a hand-edited or corrupt
+    /// sidecar can sit off-frame, and checking the unclamped span used to
+    /// pass a negative-dimension ROI through to `cropped` (fatal). For
+    /// in-frame rects the two orders are identical.
     public func pixelROI(width w: Int, height h: Int) -> (x0: Int, y0: Int, x1: Int, y1: Int)? {
-        let x0 = Int(x * Double(w)), x1 = Int((x + width) * Double(w))
-        let y0 = Int(y * Double(h)), y1 = Int((y + height) * Double(h))
+        let x0 = max(Int(x * Double(w)), 0)
+        let y0 = max(Int(y * Double(h)), 0)
+        let x1 = min(Int((x + width) * Double(w)), w)
+        let y1 = min(Int((y + height) * Double(h)), h)
         guard x1 - x0 >= 2, y1 - y0 >= 2 else { return nil }
-        return (max(x0, 0), max(y0, 0), min(x1, w), min(y1, h))
+        return (x0, y0, x1, y1)
     }
 }
 

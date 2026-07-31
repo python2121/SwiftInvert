@@ -227,6 +227,7 @@ struct DetailView: View {
             let probeActive =
                 !cropMode && !zeroBase && model.toolMode == .none
                 && model.straightenDragValue == nil
+                && model.testStrip == nil  // the strip covers the probed bitmap
             let inscribed = RGBImage.inscribedRectSize(
                 width: Double(image.width), height: Double(image.height), radians: radians)
             // Crop mode fits the ROTATED frame's bounding box so the whole
@@ -352,6 +353,7 @@ struct DetailView: View {
             .onTapGesture(count: 2) {
                 withAnimation(.easeOut(duration: 0.15)) { resetZoom() }
             }
+            .onChange(of: model.selection) { _, _ in cropBox = nil }
             .onChange(of: model.toolMode) { old, new in
                 if old == .crop {
                     if model.cropModeCancelled {

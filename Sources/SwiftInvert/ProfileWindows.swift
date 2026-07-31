@@ -208,8 +208,16 @@ struct ProfileEditorView: View {
                     }
                 }
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel", role: .cancel) { dismiss() }
-                        .help("Close without saving the profile")
+                    Button("Cancel", role: .cancel) {
+                        // Same protection as Escape: an hour of tuning must
+                        // not vanish on one reflexive click.
+                        if hasChanges {
+                            showingClosePrompt = true
+                        } else {
+                            dismiss()
+                        }
+                    }
+                    .help("Close without saving the profile")
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Accept") {

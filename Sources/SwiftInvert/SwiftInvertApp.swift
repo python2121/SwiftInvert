@@ -59,7 +59,7 @@ struct SwiftInvertApp: App {
             CommandGroup(replacing: .undoRedo) {
                 Button("Undo Edit") { keyModel.undo() }
                     .keyboardShortcut("z")
-                    .disabled(!keyModel.canUndo)
+                    .disabled(!keyModel.canUndo && !keyModel.hasUncommittedEdit)
                 Button("Redo Edit") { keyModel.redo() }
                     .keyboardShortcut("z", modifiers: [.command, .shift])
                     .disabled(!keyModel.canRedo)
@@ -85,11 +85,12 @@ struct SwiftInvertApp: App {
             CommandMenu("Image") {
                 // Bare-key menu equivalents intercept before responders, so
                 // disable while the export sheet (with its text field) is up.
+                // ←/→ (like ↑/↓) live in the window key monitor, which can
+                // check the first responder — a bare menu equivalent fires
+                // even while typing in a text field.
                 Button("Previous Image") { keyModel.selectAdjacent(-1) }
-                    .keyboardShortcut(.leftArrow, modifiers: [])
                     .disabled(keyModel.files.isEmpty || keyModel.exportRequest != nil)
                 Button("Next Image") { keyModel.selectAdjacent(1) }
-                    .keyboardShortcut(.rightArrow, modifiers: [])
                     .disabled(keyModel.files.isEmpty || keyModel.exportRequest != nil)
                 Divider()
                 Button("Rotate Left") { keyModel.rotateCounterclockwise() }
@@ -200,7 +201,15 @@ struct ContentView: View {
         }
         .animation(.easeOut(duration: 0.15), value: libraryVisible)
         .background(WindowKeyObserver(model: model))
-        .onExitCommand { model.toolMode = .none }
+        .onExitCommand {
+            // Same semantics as the key monitor's Escape: crop mode CANCELS
+            // (restores angle + box); committing is Return's job.
+            if model.toolMode == .crop {
+                model.cancelCropMode()
+            } else {
+                model.toolMode = .none
+            }
+        }
         // onExitCommand needs focus; a local monitor catches Escape anywhere
         // in the window. Pass-through unless a tool mode is active, so sheets
         // and text fields keep their own Escape behavior.
@@ -210,11 +219,14 @@ struct ContentView: View {
             // mode-entry values); Return/Enter accepts. ↑/↓ walk the film
             // strip like the ←/→ menu equivalents (↑ = previous, ↓ = next —
             // the strip is a vertical column, so both axes should read).
-            keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak model] event in
+                guard let model else { return event }
                 let isEscape = event.keyCode == 53
                 let isAccept = event.keyCode == 36 || event.keyCode == 76
                 let isUp = event.keyCode == 126
                 let isDown = event.keyCode == 125
+                let isLeft = event.keyCode == 123
+                let isRight = event.keyCode == 124
                 // ⇧Z zone overlay lives HERE, not as a menu equivalent: a
                 // bare-letter equivalent intercepts before responders and
                 // would fire while typing in any text field — the monitor
@@ -223,7 +235,8 @@ struct ContentView: View {
                 let isZoneToggle = event.keyCode == 6 && mods == .shift
                 let isStripToggle = event.keyCode == 17 && mods == .shift
                 let isEditingText = event.window?.firstResponder is NSTextView
-                guard isEscape || isAccept || isUp || isDown || isZoneToggle || isStripToggle
+                guard isEscape || isAccept || isUp || isDown || isLeft || isRight
+                    || isZoneToggle || isStripToggle
                 else { return event }
                 // Monitors fire on the main thread; only Sendable values
                 // cross the isolation boundary (NSEvent is not).
@@ -253,10 +266,12 @@ struct ContentView: View {
                         model.clearTestStrip()
                         return true
                     }
-                    if isUp || isDown {
-                        // Same enablement as the Previous/Next menu items.
-                        guard !model.files.isEmpty else { return false }
-                        model.selectAdjacent(isUp ? -1 : 1)
+                    if isUp || isDown || isLeft || isRight {
+                        // Frame navigation — but never while a text field has
+                        // focus (arrows must move the caret in the profile
+                        // name / export fields, not switch images).
+                        guard !isEditingText, !model.files.isEmpty else { return false }
+                        model.selectAdjacent((isUp || isLeft) ? -1 : 1)
                         return true
                     }
                     guard model.toolMode != .none else {
@@ -276,6 +291,16 @@ struct ContentView: View {
                     return true
                 }
                 return consumed ? nil : event
+            }
+        }
+        .onDisappear {
+            // Local monitors are app-global: every window's ContentView adds
+            // one, so a closed profile editor must remove its own or every
+            // keypress runs through dead monitors (and the closure would pin
+            // the editor's AppModel forever).
+            if let keyMonitor {
+                NSEvent.removeMonitor(keyMonitor)
+                self.keyMonitor = nil
             }
         }
         .sheet(item: $model.exportRequest) { request in
