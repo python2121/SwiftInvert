@@ -243,6 +243,10 @@ struct ControlsSidebar: View {
                             label: "Saturation", value: $model.settings.saturation,
                             range: 0...2, format: "%.2f", defaultValue: 1.0,
                             help: "Scale all color intensity equally.")
+                        LabeledSlider(
+                            label: "Skin Protection", value: $model.settings.skinProtection,
+                            range: 0...1, format: "%.2f", defaultValue: 0.5,
+                            help: "Soft chroma ceiling on skin-toned pixels only — reins in faces that print too red, from any source. Hue and lightness never move; on by default.")
                     }
                     .padding(6)
                 }

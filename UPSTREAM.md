@@ -12,9 +12,8 @@ and appending a history entry.
 commit:   a09cc46  ("change: Linear RAW defaults to off (#717)")
 reviewed: 2026-07-31
 fixtures: Tests/Fixtures/ dumped from 0369b10 except lab_color (partially
-          re-dumped from b8c596c, 2026-07-30). Nothing in this range moves
-          them: apply_saturation gained a skin_protection kwarg defaulting
-          to 0.0, so the dump script's calls keep their old semantics.
+          re-dumped from a09cc46, 2026-07-31, with the pure gamut boost —
+          the b8c596c dump had carried the interim in-boost skin damping).
 ```
 
 ## How to run a review
@@ -71,9 +70,19 @@ wide chroma window reined sunsets at weight 0.98. End state at tip:
   frame); their WGSL parity test was strengthened after discovering a dead
   GPU mirror could pass the old one.
 
-**To port (proposed — HIGH priority: it supersedes half of yesterday's
-port, which currently mis-targets warm non-skin content per upstream's own
-measurements):** remove the skin term from `gamutAwareBoost` (keep the
+**PORTED 2026-07-31 (same day, user approved).** Landed exactly as
+proposed below: the boost is pure gamut math again, `skinProtection`
+(default 0.5, keyless sidecars adopt it like upstream) + `skinChromaRein`
+both sides, fixture parity pinned at 0 in both harnesses, lab_color
+re-dumped from `a09cc46` (yesterday's b8c596c dump still carried the
+interim in-boost damping — the two boost cases moved again and our pure
+implementation matches at 1e-4), and the dead-mirror lesson became a
+parity test whose PRECONDITION asserts the rein moves a deliberately
+warmed frame (mean > 2e-3) before checking GPU==CPU. Known cost, accepted:
+default-on rein dispatches colorPop every frame — bench 4.6 → ~7.2 ms
+preview (still ~140 fps). 185 tests green.
+
+**Original proposal, for the record:** remove the skin term from `gamutAwareBoost` (keep the
 knee), add `skinProtection` (default 0.5) + `skinChromaRein` in colorPop
 after saturation, both sides; pin `skinProtection = 0` in the GPU fixture
 parity settings (fixtures predate the control — same pattern as

@@ -46,6 +46,7 @@ enum Fixtures2 {
         #expect(MemoryLayout<CurveUniforms>.offset(of: \.preSaturation) == 216)
         #expect(MemoryLayout<CurveUniforms>.offset(of: \.printSaturation) == 220)
         #expect(MemoryLayout<CurveUniforms>.offset(of: \.separationDamping) == 256)
+        #expect(MemoryLayout<CurveUniforms>.offset(of: \.skinProtection) == 260)
         // Flat levels buffer: must match LEVELS_BUFFER_FLOATS in the MSL.
         #expect(UniformsBuilder.levelsBufferFloats == 51)
         #expect(UniformsBuilder.levelsBuffer(RenderParams(
@@ -62,6 +63,7 @@ enum Fixtures2 {
         var s = ExposureSettings()
         // NegPy fixtures predate pre-saturation; pin the neutral value.
         s.preSaturation = 1.0
+        s.skinProtection = 0
         s.trueBlack = e["true_black"] as! Bool
         s.density = e["density"] as! Double
         s.grade = e["grade"] as! Double
@@ -350,5 +352,43 @@ enum Fixtures2 {
         let (mean, maxV) = GPUParityTests.diffStats(gpu.pixels, cpu.pixels)
         #expect(mean < 1e-3 && maxV < 0.02,
             "gamut-aware saturation GPU/CPU: mean \(mean), max \(maxV)")
+    }
+}
+
+/// Skin Protection: parity that PROVES the rein bites first (upstream found
+/// a dead WGSL mirror passing their old test because the frame barely moved
+/// — the precondition here makes that impossible).
+@Suite struct SkinProtectionParityTests {
+    @Test func reinMovesOutputAndMatchesGPU() throws {
+        let pipeline = try #require(GPU.pipeline, "Metal unavailable")
+        let pixels = try Fixtures2.floats("synthetic64/input.bin")
+        let input = RGBImage(pixels: pixels, width: 64, height: 64)
+        let analysis = ExposureKernel.analyze(linearImage: input, analysisBuffer: 0.05)
+
+        // Warm the print into the skin band so the rein has real work.
+        var settings = ExposureSettings()
+        settings.preSaturation = 1.0
+        settings.temp = 1.5
+        settings.vibrance = 1.4
+        settings.skinProtection = 1.0
+        var off = settings
+        off.skinProtection = 0
+
+        func cpu(_ s: ExposureSettings) -> RGBImage {
+            let p = ExposureKernel.deriveRenderParams(s, analysis)
+            return ReferenceCurve.encodeOutput(
+                ReferenceCurve.applyPrintCurve(
+                    ReferenceCurve.normalize(input, bounds: p.finalBounds), params: p))
+        }
+        let cpuOn = cpu(settings)
+        let cpuOff = cpu(off)
+        let (biteMean, _) = GPUParityTests.diffStats(cpuOn.pixels, cpuOff.pixels)
+        #expect(biteMean > 2e-3, "precondition: the rein must move this frame (mean \(biteMean)) — a dead mirror cannot hide behind an unmoved frame")
+
+        let source = try pipeline.upload(input)
+        let params = ExposureKernel.deriveRenderParams(settings, analysis)
+        let gpu = try pipeline.render(source: source, params: params).encoded
+        let (mean, maxV) = GPUParityTests.diffStats(gpu.pixels, cpuOn.pixels)
+        #expect(mean < 0.01 && maxV < 0.04, "skin rein GPU/CPU: mean \(mean), max \(maxV)")
     }
 }

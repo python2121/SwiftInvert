@@ -84,9 +84,10 @@ struct CurveUniforms {
     // Color-mixer bands, R/Y/G/B lanes (0 / 1.0 = off).
     float4 bandHues;
     float4 bandSaturations;
-    // Separation Damping (0 = off); pads keep the 16-byte stride.
+    // Separation Damping (0 = off) + Skin Protection rein strength
+    // (0 = off); pads keep the 16-byte stride.
     float separationDamping;
-    float _pad1;
+    float skinProtection;
     float _pad2;
     float _pad3;
 };
@@ -153,23 +154,56 @@ inline float3 rgb_to_lab(float3 rgb) {
     return float3(116.0f * f.y - 16.0f, 500.0f * (f.x - f.y), 200.0f * (f.y - f.z));
 }
 
-// ── Gamut-aware chroma boost (NegPy 1b900ab; mirrors LabColor.swift —
-//    keep the literals in sync) ──────────────────────────────────────────
+// ── Gamut-aware chroma boost (NegPy 1b900ab, skin term removed in
+//    bfcd90a) + Skin Protection rein (bfcd90a/fb94aed; mirrors
+//    LabColor.swift — keep the literals in sync) ─────────────────────────
 constant float SKIN_HUE_CENTER_DEG = 52.0f;
-constant float SKIN_HUE_WIDTH_DEG = 25.0f;
-constant float SKIN_PROTECTION_STRENGTH = 0.5f;
+constant float SKIN_HUE_SIGMA_DEG = 20.0f;
+constant float SKIN_CHROMA_FULL = 35.0f;
+constant float SKIN_CHROMA_ZERO = 60.0f;
+constant float SKIN_L_LO = 15.0f;
+constant float SKIN_L_HI = 95.0f;
 constant float SKIN_CHROMA_GATE = 2.0f;
+constant float SKIN_CEIL_AT_FULL = 22.0f;
+constant float SKIN_KNEE_START_FRAC = 0.6f;
 constant int GAMUT_ITERATIONS = 10;
 constant float GAMUT_TOL = 1e-4f;
 
-inline float skin_protection_weight(float a, float b) {
+inline float smoothstep_f(float e0, float e1, float x) {
+    float t = clamp((x - e0) / (e1 - e0), 0.0f, 1.0f);
+    return t * t * (3.0f - 2.0f * t);
+}
+
+// 0 (not skin) … 1 (dead centre of the skin locus): hue Gaussian ×
+// one-sided chroma window × lightness rolloff, chroma-gated for hue noise.
+inline float skin_weight(float l_val, float a, float b) {
     float chroma = sqrt(a * a + b * b);
     if (chroma < SKIN_CHROMA_GATE) { return 0.0f; }
     float hue_deg = atan2(b, a) * 57.29577951308232f;
     float dist = hue_deg - SKIN_HUE_CENTER_DEG;
     dist -= 360.0f * rint(dist / 360.0f);
-    float x = dist / SKIN_HUE_WIDTH_DEG;
-    return exp(-0.5f * x * x);
+    float x = dist / SKIN_HUE_SIGMA_DEG;
+    float w_hue = exp(-0.5f * x * x);
+    float w_chroma = 1.0f - smoothstep_f(SKIN_CHROMA_FULL, SKIN_CHROMA_ZERO, chroma);
+    float w_light = smoothstep_f(0.0f, SKIN_L_LO, l_val)
+        * (1.0f - smoothstep_f(SKIN_L_HI, 100.0f, l_val));
+    return w_hue * w_chroma * w_light;
+}
+
+// One-directional soft chroma ceiling inside the skin mask; hue and L*
+// untouched (a*/b* scale together). Mirrors LabColor.skinChromaRein.
+inline float3 skin_chroma_rein(float3 lab, float strength) {
+    if (strength <= 0.0f) { return lab; }
+    float ceiling = SKIN_CEIL_AT_FULL / strength;
+    float start = SKIN_KNEE_START_FRAC * ceiling;
+    float span = ceiling - start;
+    float chroma = sqrt(lab.y * lab.y + lab.z * lab.z);
+    if (chroma <= start) { return lab; }
+    float w = skin_weight(lab.x, lab.y, lab.z);
+    if (w <= 0.0f) { return lab; }
+    float knee = start + span * (1.0f - exp(-(chroma - start) / span));
+    float scale = (chroma + w * (knee - chroma)) / chroma;
+    return float3(lab.x, lab.y * scale, lab.z * scale);
 }
 
 // Raw in-gamut check (no lower clamp — the raw values ARE the decision).
@@ -187,11 +221,9 @@ inline bool in_gamut_lab(float l_val, float a, float b) {
 // Effective boost: skin-softened target if it fits, else a soft knee toward
 // the bisected in-gamut headroom (caller ensures saturation > 1).
 inline float gamut_aware_boost(float3 lab, float saturation) {
-    float w = skin_protection_weight(lab.y, lab.z);
-    float local_sat = saturation - SKIN_PROTECTION_STRENGTH * w * (saturation - 1.0f);
-    if (in_gamut_lab(lab.x, lab.y * local_sat, lab.z * local_sat)) { return local_sat; }
+    if (in_gamut_lab(lab.x, lab.y * saturation, lab.z * saturation)) { return saturation; }
     float lo = 1.0f;
-    float hi = local_sat;
+    float hi = saturation;
     bool still_ok = in_gamut_lab(lab.x, lab.y, lab.z);
     for (int i = 0; i < GAMUT_ITERATIONS; i++) {
         float mid = (lo + hi) / 2.0f;
@@ -203,7 +235,7 @@ inline float gamut_aware_boost(float3 lab, float saturation) {
     }
     float s_max = max(lo, 1.0f + GAMUT_TOL);
     float knee = s_max - 1.0f;
-    return 1.0f + knee * (1.0f - exp(-(local_sat - 1.0f) / knee));
+    return 1.0f + knee * (1.0f - exp(-(saturation - 1.0f) / knee));
 }
 
 inline float3 lab_to_rgb(float3 lab) {
@@ -382,11 +414,15 @@ kernel void colorPop(
         lab.yz *= boost;
         result = clamp(lab_to_rgb(lab), float3(0.0f), float3(1.0f));
     }
-    if (p.saturation != 1.0f) {
+    if (p.saturation != 1.0f || p.skinProtection > 0.0f) {
         float3 lab = rgb_to_lab(result);
-        // Boosts are gamut-aware (1b900ab); desaturation stays flat.
-        float eff = p.saturation > 1.0f ? gamut_aware_boost(lab, p.saturation) : p.saturation;
-        lab.yz *= eff;
+        if (p.saturation != 1.0f) {
+            // Boosts are gamut-aware (1b900ab); desaturation stays flat.
+            float eff = p.saturation > 1.0f ? gamut_aware_boost(lab, p.saturation) : p.saturation;
+            lab.yz *= eff;
+        }
+        // Skin Protection: after the scale, independent of it, reduce-only.
+        lab = skin_chroma_rein(lab, p.skinProtection);
         result = clamp(lab_to_rgb(lab), float3(0.0f), float3(1.0f));
     }
 

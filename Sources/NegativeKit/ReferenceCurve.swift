@@ -160,12 +160,14 @@ public enum ReferenceCurve {
                 // Color pop on the linear print (mixer bands, then NegPy lab
                 // stage: vibrance, then saturation), identity at defaults.
                 if params.bandHues != .zero || params.bandSaturations != SIMD4(repeating: 1.0)
-                    || params.vibrance != 1.0 || params.saturation != 1.0 {
+                    || params.vibrance != 1.0 || params.saturation != 1.0
+                    || params.skinProtection > 0 {
                     var rgb = SIMD3(Double(buf[i]), Double(buf[i + 1]), Double(buf[i + 2]))
                     rgb = LabColor.applyColorMixer(
                         rgb, hues: params.bandHues, saturations: params.bandSaturations)
                     let res = LabColor.applyVibranceSaturation(
-                        rgb, vibrance: params.vibrance, saturation: params.saturation)
+                        rgb, vibrance: params.vibrance, saturation: params.saturation,
+                        skinProtection: params.skinProtection)
                     buf[i] = Float(res.x)
                     buf[i + 1] = Float(res.y)
                     buf[i + 2] = Float(res.z)

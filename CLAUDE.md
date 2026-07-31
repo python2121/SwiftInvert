@@ -241,8 +241,11 @@ One command buffer, passes in order (`RenderPipeline.render` /
       `b = 10^−dMax` referenced to the *physical* d_max so toe lifts survive
       (negative toe raises the clip point); clamp [0,1] → **linear
       reflectance** out.
-3. **`colorPop`** (dispatched ONLY when a color-pop control is off-default:
-   vibrance/saturation/redSaturation ≠ 1 or redHue ≠ 0) — CIELAB
+3. **`colorPop`** (dispatched when a color-pop control is off-default —
+   vibrance/saturation/band controls — or skinProtection > 0, which is
+   the DEFAULT (0.5): in practice the pass now runs every frame, costing
+   ~2.5 ms at preview size — bench moved 4.6 → ~7.2 ms/frame, accepted
+   with the port) — CIELAB
    (Adobe RGB (1998) primaries, D65 since the b3490eb port; matrices
    duplicated in MSL and
    `LabColor.swift` — keep in sync): the **Color Mixer** first
@@ -264,8 +267,17 @@ One command buffer, passes in order (`RenderPipeline.render` /
    by 10-iteration bisection against the real RGB cube → softplus knee,
    so overshooting pixels keep their hue instead of hue-shifting through
    the per-channel clamp; in-gamut non-skin pixels are bit-identical to
-   the flat scale; desaturation stays flat; constants are MSL literals
-   mirrored from LabColor.swift).
+   the flat scale; desaturation stays flat; PURE gamut math since the
+   bfcd90a port removed the in-boost skin term), then **Skin Protection**
+   (`skinChromaRein`, default 0.5, slider 0–1): a one-directional soft
+   chroma ceiling (22/strength, softplus knee from 0.6×ceiling, scale
+   blended by mask weight; a*/b* together so hue and L* never move)
+   inside the measured skin locus — hue Gaussian 52° σ20 × one-sided
+   chroma window (full ≤35, zero ≥60; pure red C*≈104 drops out) ×
+   lightness rolloff (L* 15…95) — applied after the scale and
+   independent of it, so it also reins skin arriving over-chromatic
+   from the print curve. All constants are MSL literals mirrored from
+   LabColor.swift.
    Separate pass on purpose: inlining
    the Lab code into printCurve cost ~3 ms/frame in register pressure even
    when branched off. Writes into the (already consumed) `normalized`

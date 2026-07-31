@@ -38,6 +38,7 @@ import Testing
         s.highlightContrast = 0.4
         s.overallContrast = 0.3
         s.vibrance = 1.2
+        s.skinProtection = 0.8
         s.printSaturation = 1.3
         s.separationDamping = 0.6
         s.saturation = 0.9
@@ -72,7 +73,7 @@ import Testing
     /// `historyLabel` diff (HistoryLabels.swift), and `fullyMutated()` above.
     /// Update all three, then this count.
     @Test func storedFieldCountIsPinned() {
-        #expect(Mirror(reflecting: ExposureSettings()).children.count == 50)
+        #expect(Mirror(reflecting: ExposureSettings()).children.count == 51)
     }
 
     @Test func fullyMutatedActuallyMutatesEveryField() throws {
@@ -86,7 +87,7 @@ import Testing
         }
         let defaults = try json(ExposureSettings())
         let mutated = try json(Self.fullyMutated())
-        #expect(mutated.count == 50)
+        #expect(mutated.count == 51)
         for (key, value) in mutated {
             #expect(defaults[key] != value, "fullyMutated() left \(key) at its default")
         }

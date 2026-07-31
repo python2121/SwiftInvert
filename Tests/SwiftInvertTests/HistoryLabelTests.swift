@@ -36,6 +36,7 @@ import Testing
         ("highlightContrast", { $0.highlightContrast = 0.4 }),
         ("overallContrast", { $0.overallContrast = 0.3 }),
         ("vibrance", { $0.vibrance = 1.2 }),
+        ("skinProtection", { $0.skinProtection = 0.8 }),
         ("printSaturation", { $0.printSaturation = 1.3 }),
         ("separationDamping", { $0.separationDamping = 0.6 }),
         ("saturation", { $0.saturation = 0.9 }),

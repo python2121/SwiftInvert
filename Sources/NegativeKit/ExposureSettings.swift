@@ -54,6 +54,11 @@ public struct ExposureSettings: Codable, Equatable, Sendable {
     // colors toward the strength; saturation scales all chroma in CIELAB.
     public var vibrance: Double = 1.0
     public var saturation: Double = 1.0
+    /// Skin Protection (NegPy bfcd90a/fb94aed): one-directional soft chroma
+    /// ceiling inside the measured skin locus, after the saturation scale
+    /// and independent of it. DEFAULT ON at 0.5 (upstream's choice, mask
+    /// tight enough to leave on; keyless sidecars adopt it, like upstream).
+    public var skinProtection: Double = 0.5
 
     // Color mixer bands (chroma-gated, see LabColor.applyColorMixer): hue
     // nudges a band's saturated colors toward the neighboring hue (+ = ccw:
@@ -172,6 +177,7 @@ public struct ExposureSettings: Codable, Equatable, Sendable {
         overallContrast = d(.overallContrast, 0)
         vibrance = d(.vibrance, 1.0)
         saturation = d(.saturation, 1.0)
+        skinProtection = d(.skinProtection, 0.5)
         redHue = d(.redHue, 0)
         redSaturation = d(.redSaturation, 1.0)
         yellowHue = d(.yellowHue, 0)
@@ -247,6 +253,8 @@ public struct RenderParams: Equatable, Sendable {
     // CIELAB chroma ops on the linear print (1.0 = off).
     public var vibrance: Double = 1.0
     public var saturation: Double = 1.0
+    /// Skin chroma rein strength (0 = off).
+    public var skinProtection: Double = 0
     // Color-mixer bands, R/Y/G/B order (0 / 1.0 = off).
     public var bandHues: SIMD4<Double> = .zero
     public var bandSaturations: SIMD4<Double> = SIMD4(repeating: 1.0)
@@ -277,6 +285,7 @@ public struct RenderParams: Equatable, Sendable {
         toeWidth: Double, shoulderWidth: Double, dMin: Double, vStar: Double,
         shadows: Double = 0, shadowContrast: Double = 0, darkShadows: Double = 0, highlights: Double = 0,
         highlightContrast: Double = 0, vibrance: Double = 1.0, saturation: Double = 1.0,
+        skinProtection: Double = 0,
         bandHues: SIMD4<Double> = .zero, bandSaturations: SIMD4<Double> = SIMD4(repeating: 1.0),
         preSaturation: Double = 1.0, printSaturation: Double = 1.0,
         separationDamping: Double = 0,
@@ -303,6 +312,7 @@ public struct RenderParams: Equatable, Sendable {
         self.highlightContrast = highlightContrast
         self.vibrance = vibrance
         self.saturation = saturation
+        self.skinProtection = skinProtection
         self.bandHues = bandHues
         self.bandSaturations = bandSaturations
         self.preSaturation = preSaturation
@@ -490,6 +500,7 @@ public enum ExposureKernel {
             highlightContrast: settings.highlightContrast,
             vibrance: settings.vibrance,
             saturation: settings.saturation,
+            skinProtection: min(max(settings.skinProtection, 0.0), 1.0),
             bandHues: SIMD4(settings.redHue, settings.yellowHue, settings.greenHue, settings.blueHue),
             bandSaturations: SIMD4(
                 settings.redSaturation, settings.yellowSaturation,

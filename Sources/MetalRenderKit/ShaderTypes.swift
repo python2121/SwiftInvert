@@ -49,9 +49,10 @@ public struct CurveUniforms {
     // Color-mixer bands, R/Y/G/B lanes.
     public var bandHues: SIMD4<Float>
     public var bandSaturations: SIMD4<Float>
-    // Separation Damping (0 = off); pads keep the 16-byte stride.
+    // Separation Damping (0 = off) + Skin Protection rein strength
+    // (0 = off); pads keep the 16-byte stride.
     public var separationDamping: Float
-    public var _pad1: Float = 0
+    public var skinProtection: Float
     public var _pad2: Float = 0
     public var _pad3: Float = 0
 }
@@ -110,7 +111,8 @@ public enum UniformsBuilder {
             printSaturation: Float(params.printSaturation),
             bandHues: SIMD4<Float>(params.bandHues),
             bandSaturations: SIMD4<Float>(params.bandSaturations),
-            separationDamping: Float(params.separationDamping)
+            separationDamping: Float(params.separationDamping),
+            skinProtection: Float(params.skinProtection)
         )
     }
 
