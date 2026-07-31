@@ -9,15 +9,12 @@ and appending a history entry.
 ## Last reviewed
 
 ```
-commit:   b8c596c  ("Delete each tethered shot off the body after download ... (#696)")
-reviewed: 2026-07-30
-fixtures: Tests/Fixtures/ dumped from 0369b10 (2026-07-25, with the 127bcd7
-          cast-removal estimators) — still valid for OUR pipeline (nothing in
-          this range moves goldens; both new controls are identity-default).
-          lab_color was partially re-dumped from b8c596c on 2026-07-30
-          (gamut-aware boost cases only; the script's vibrance case now
-          carries the frozen pre-deletion formula, so dump_fixtures.py works
-          against current upstream again).
+commit:   a09cc46  ("change: Linear RAW defaults to off (#717)")
+reviewed: 2026-07-31
+fixtures: Tests/Fixtures/ dumped from 0369b10 except lab_color (partially
+          re-dumped from b8c596c, 2026-07-30). Nothing in this range moves
+          them: apply_saturation gained a skin_protection kwarg defaulting
+          to 0.0, so the dump script's calls keep their old semantics.
 ```
 
 ## How to run a review
@@ -43,6 +40,59 @@ updates this file. The manual procedure, for reference:
 6. Update the **Last reviewed** marker and append to the history below.
 
 ## Review history
+
+### 2026-07-31 — through `a09cc46` (0.45.0-dev, 10 commits)
+
+**Headline: upstream REDESIGNED the skin protection we ported yesterday.**
+`bfcd90a` + `fb94aed` replace 1b900ab's in-boost damping (what our
+2026-07-30 port ships) with a separate operator, after measuring the
+interim design's flaws: the hue-only 52±25° mask couldn't tell a face from
+a red car (~40° sits in-band), it was inert at Chroma 1.0 (a face arriving
+sunburnt from the print curve got nothing), and the first replacement's
+wide chroma window reined sunsets at weight 0.98. End state at tip:
+
+- The **gamut-aware knee stays exactly as we ported it** — but with the
+  skin term REMOVED from inside it (pure gamut math now).
+- **Skin Protection** is a user-facing Lab control (`skin_protection`,
+  default 0.5): `skin_chroma_rein`, a one-directional soft chroma ceiling
+  (ceiling = 22/strength, softplus knee from 0.6×ceiling, scale blended by
+  mask weight; a*/b* together so hue and L* never move) applied AFTER the
+  saturation scale and independent of it — it also catches skin that
+  arrived over-chromatic from the curve, and reduce-only means
+  saturation 0 still reaches true grey and it can never overshoot the
+  gamut the knee fitted.
+- The mask is the axis-aligned CIELAB skin locus: hue Gaussian 52° σ20
+  (was ±25), one-sided chroma window full ≤35 zero ≥60 via smoothstep
+  (skin C*≈12–40; pure red ≈104 drops out entirely), lightness rolloff
+  below L*15/above 95, chroma-gate 2 for hue stability. Measured weights
+  after the tightening: skin 0.95–1.00 vs sunset 0.04, terracotta 0.18,
+  brick 0.25, autumn leaf/rust 0.00.
+- Their goldens provably unmoved (no skin-band pixels in the relocation
+  frame); their WGSL parity test was strengthened after discovering a dead
+  GPU mirror could pass the old one.
+
+**To port (proposed — HIGH priority: it supersedes half of yesterday's
+port, which currently mis-targets warm non-skin content per upstream's own
+measurements):** remove the skin term from `gamutAwareBoost` (keep the
+knee), add `skinProtection` (default 0.5) + `skinChromaRein` in colorPop
+after saturation, both sides; pin `skinProtection = 0` in the GPU fixture
+parity settings (fixtures predate the control — same pattern as
+preSaturation); colorPop activation gains the new term (default-on means
+the pass always dispatches — bench it); dedicated coverage that actually
+exercises the rein (their dead-mirror lesson). No fixture re-dump
+(`apply_saturation`'s new kwarg defaults to 0.0, so the dump script's
+existing calls are semantics-stable).
+
+**Not applicable:** `a09cc46` Linear RAW defaults OFF + `b6d9b8e` scanning
+setup wizard — their onboarding defaults for uncalibrated setups (the
+wizard turns it back on); our linear rawpy-style decode is the pinned
+reference contract, unchanged upstream. `e62aacb` filmstrip scrolling,
+`7528f9c` favourites panel, `df91cb4` Filtration reset icon, `d1a3b61` IR
+dust fixes, `076e676` test-junk cleanup, `16b8f6d`-style prefetch order
+(`16b8fd6` — their prefetch; we retain sessions, no prefetch).
+
+**Still open (carried over):** colour ring-around (±4cc/2cc spec),
+`91a1b78` tunable targets (user-initiated only), the mixer band re-tune.
 
 ### 2026-07-30 — through `b8c596c` (0.45.0 tail, 10 commits)
 
