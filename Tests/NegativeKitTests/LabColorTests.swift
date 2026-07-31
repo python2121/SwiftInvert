@@ -134,3 +134,86 @@ import simd
         #expect(delta > 3)
     }
 }
+
+/// Gamut-aware chroma boost (NegPy 1b900ab) — the properties the fixture
+/// can't articulate: hue preservation on clipping pixels, in-gamut
+/// byte-identity, and skin-band softening.
+@Suite struct GamutAwareChromaTests {
+    private func hue(_ rgb: SIMD3<Double>) -> Double {
+        let lab = LabColor.rgbToLab(rgb)
+        return atan2(lab.z, lab.y) * 180.0 / .pi
+    }
+
+    private func hueDelta(_ a: Double, _ b: Double) -> Double {
+        var d = a - b
+        d -= 360.0 * (d / 360.0).rounded()
+        return abs(d)
+    }
+
+    /// A vivid pixel that clips under a flat 1.6× push: the old flat+clamp
+    /// path shifts its hue; the gamut-aware path must hold it far tighter.
+    @Test func huePreservedWherFlatScaleClipped() {
+        let vivid = SIMD3(0.85, 0.1, 0.12)  // strong red, near the gamut wall
+        let h0 = hue(vivid)
+
+        // The retired behavior, reconstructed: flat scale then per-channel clamp.
+        var lab = LabColor.rgbToLab(vivid)
+        lab.y *= 1.6
+        lab.z *= 1.6
+        let flat = simd_clamp(LabColor.labToRgb(lab), SIMD3<Double>(), SIMD3(repeating: 1))
+        let flatErr = hueDelta(hue(flat), h0)
+
+        let aware = LabColor.applyVibranceSaturation(vivid, vibrance: 1.0, saturation: 1.6)
+        let awareErr = hueDelta(hue(aware), h0)
+
+        #expect(flatErr > 1.0, "premise: the flat path visibly shifts hue (\(flatErr)°)")
+        #expect(awareErr < flatErr * 0.5, "gamut-aware must at least halve it (\(flatErr)° → \(awareErr)°)")
+        #expect(awareErr < 2.0, "and hold it small in absolute terms (\(awareErr)°)")
+    }
+
+    /// Comfortably in-gamut pixels OUTSIDE the skin band get the exact flat
+    /// scale (inside the band the softening applies even in gamut — that's
+    /// the design, covered by skinBandGetsGentlerBoost).
+    @Test func inGamutPixelsMatchFlatScale() {
+        let muted = SIMD3(0.25, 0.52, 0.60)  // teal — hue ~180° from the skin band
+        var lab = LabColor.rgbToLab(muted)
+        let w = LabColor.skinProtectionWeight(a: lab.y, b: lab.z)
+        #expect(w < 1e-6, "premise: fully outside the band (w = \(w))")
+        lab.y *= 1.2
+        lab.z *= 1.2
+        let flat = simd_clamp(LabColor.labToRgb(lab), SIMD3<Double>(), SIMD3(repeating: 1))
+        let aware = LabColor.applyVibranceSaturation(muted, vibrance: 1.0, saturation: 1.2)
+        #expect(simd_length(aware - flat) < 1e-9)
+    }
+
+    /// Desaturation is untouched by the machinery.
+    @Test func desaturationStaysFlat() {
+        let vivid = SIMD3(0.85, 0.1, 0.12)
+        var lab = LabColor.rgbToLab(vivid)
+        lab.y *= 0.5
+        lab.z *= 0.5
+        let flat = simd_clamp(LabColor.labToRgb(lab), SIMD3<Double>(), SIMD3(repeating: 1))
+        let aware = LabColor.applyVibranceSaturation(vivid, vibrance: 1.0, saturation: 0.5)
+        #expect(simd_length(aware - flat) < 1e-9)
+    }
+
+    /// A skin-hued pixel takes a gentler boost than an equally-chromatic
+    /// pixel at a distant hue.
+    @Test func skinBandGetsGentlerBoost() {
+        func chromaGain(_ rgb: SIMD3<Double>) -> Double {
+            let before = LabColor.rgbToLab(rgb)
+            let after = LabColor.rgbToLab(
+                LabColor.applyVibranceSaturation(rgb, vibrance: 1.0, saturation: 1.4))
+            let c0 = (before.y * before.y + before.z * before.z).squareRoot()
+            let c1 = (after.y * after.y + after.z * after.z).squareRoot()
+            return c1 / max(c0, 1e-9)
+        }
+        // Both moderate chroma, comfortably in gamut; hues ~52° vs ~-125°.
+        let skin = SIMD3(0.62, 0.47, 0.38)
+        let cool = SIMD3(0.38, 0.47, 0.62)
+        let sLab = LabColor.rgbToLab(skin)
+        #expect(LabColor.skinProtectionWeight(a: sLab.y, b: sLab.z) > 0.5, "premise: in the band")
+        #expect(chromaGain(skin) < chromaGain(cool) - 0.05,
+            "skin \(chromaGain(skin)) vs cool \(chromaGain(cool))")
+    }
+}

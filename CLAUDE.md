@@ -256,7 +256,16 @@ One command buffer, passes in order (`RenderPipeline.render` /
    sit at chroma 12-30): `bandCentersDeg`/`bandHalfWidthsDeg`/`bandChromaGate*`/
    `bandMaxHueShiftDeg` mirrored as MSL literals; UI: segmented band
    picker + gradient tracks, `ColorMixerSection.swift`), then
-   vibrance (muted-chroma boost, /60 range) then saturation (a*,b* scale).
+   vibrance (muted-chroma boost, /60 range; upstream DELETED theirs —
+   ours is SwiftInvert-maintained, reference formula frozen in the dump
+   script) then saturation (a*,b* scale; **gamut-aware on boosts** since
+   the 1b900ab port: skin-band softening (Gaussian around Lab hue 52°,
+   width 25°, strength 0.5, chroma gate 2) → per-pixel in-gamut headroom
+   by 10-iteration bisection against the real RGB cube → softplus knee,
+   so overshooting pixels keep their hue instead of hue-shifting through
+   the per-channel clamp; in-gamut non-skin pixels are bit-identical to
+   the flat scale; desaturation stays flat; constants are MSL literals
+   mirrored from LabColor.swift).
    Separate pass on purpose: inlining
    the Lab code into printCurve cost ~3 ms/frame in register pressure even
    when branched off. Writes into the (already consumed) `normalized`

@@ -328,3 +328,27 @@ enum Fixtures2 {
         }
     }
 }
+
+/// Gamut-aware saturation: tight CPU/GPU gate (upstream's transposed-matrix
+/// bug hid inside the loose 0.04 parity bar — this one wouldn't let it).
+@Suite struct GamutAwareParityTests {
+    @Test func saturationBoostTightParity() throws {
+        let pipeline = try #require(GPU.pipeline, "Metal unavailable")
+        let pixels = try Fixtures2.floats("synthetic64/input.bin")
+        let input = RGBImage(pixels: pixels, width: 64, height: 64)
+        let analysis = ExposureKernel.analyze(linearImage: input, analysisBuffer: 0.05)
+        var settings = ExposureSettings()
+        settings.preSaturation = 1.0
+        settings.saturation = 1.6  // strong boost → the bisection path runs
+        let params = ExposureKernel.deriveRenderParams(settings, analysis)
+
+        let cpu = ReferenceCurve.encodeOutput(
+            ReferenceCurve.applyPrintCurve(
+                ReferenceCurve.normalize(input, bounds: params.finalBounds), params: params))
+        let source = try pipeline.upload(input)
+        let gpu = try pipeline.render(source: source, params: params).encoded
+        let (mean, maxV) = GPUParityTests.diffStats(gpu.pixels, cpu.pixels)
+        #expect(mean < 1e-3 && maxV < 0.02,
+            "gamut-aware saturation GPU/CPU: mean \(mean), max \(maxV)")
+    }
+}

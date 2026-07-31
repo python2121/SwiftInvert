@@ -113,6 +113,77 @@ public enum LabColor {
     /// vibrance boosts muted chroma toward the strength, saturation scales all
     /// chroma; each returns clipped to [0, 1] like NegPy's per-op clip.
 
+    // ── Gamut-aware chroma boost (NegPy 1b900ab) ─────────────────────────
+    // A flat a*/b* scale preserves hue, but overshooting pixels get
+    // hard-clamped per RGB channel afterward — clamping only the channel(s)
+    // that overshot changes the R:G:B ratio, shifting the visible hue. The
+    // boost path therefore soft-knees toward each pixel's true in-gamut
+    // headroom (bisection against the real RGB cube) instead of clamping;
+    // in-gamut pixels get the exact flat scale. Desaturation stays flat.
+    // Constants mirrored as literals in NegPipeline.metal — keep in sync.
+    public static let skinHueCenterDeg = 52.0
+    public static let skinHueWidthDeg = 25.0
+    public static let skinProtectionStrength = 0.5
+    public static let skinChromaGate = 2.0
+    public static let gamutIterations = 10
+    public static let gamutTolerance = 1e-4
+
+    /// 0 (no protection) … ~1 (full) by hue distance from the skin band;
+    /// near-neutral pixels gate to 0 (their hue angle is noise).
+    static func skinProtectionWeight(a: Double, b: Double) -> Double {
+        let chroma = (a * a + b * b).squareRoot()
+        guard chroma >= skinChromaGate else { return 0 }
+        let hueDeg = atan2(b, a) * 180.0 / .pi
+        var dist = hueDeg - skinHueCenterDeg
+        dist -= 360.0 * (dist / 360.0).rounded()
+        let x = dist / skinHueWidthDeg
+        return exp(-0.5 * x * x)
+    }
+
+    /// Whether (L, a, b) decodes to linear working RGB within [0, 1] on all
+    /// channels (± tolerance). Unlike labToRgb, no lower clamp — the raw
+    /// values ARE the gamut decision.
+    static func inGamutLab(_ L: Double, _ a: Double, _ b: Double) -> Bool {
+        let fy = (L + 16.0) / 116.0
+        let f = SIMD3(a / 500.0 + fy, fy, fy - b / 200.0)
+        var xyz = SIMD3<Double>()
+        for i in 0..<3 {
+            let f3 = f[i] * f[i] * f[i]
+            xyz[i] = (f3 > labEps ? f3 : (f[i] - 16.0 / 116.0) / labKappa) * workingWhite[i]
+        }
+        let rgb = SIMD3(
+            simd_dot(toRGB.0, xyz), simd_dot(toRGB.1, xyz), simd_dot(toRGB.2, xyz))
+        let tol = gamutTolerance
+        return rgb.min() >= -tol && rgb.max() <= 1.0 + tol
+    }
+
+    /// The effective boost for one pixel: the skin-softened local target if
+    /// it already lands in gamut, else a softplus-style knee toward the
+    /// bisected in-gamut headroom. Caller ensures saturation > 1.
+    static func gamutAwareBoost(_ lab: SIMD3<Double>, saturation: Double) -> Double {
+        let w = skinProtectionWeight(a: lab.y, b: lab.z)
+        let localSat = saturation - skinProtectionStrength * w * (saturation - 1.0)
+        if inGamutLab(lab.x, lab.y * localSat, lab.z * localSat) {
+            // Full push already fits — use it directly (bisecting here would
+            // misread the search's own upper bound as a constraint and
+            // throttle pixels that were never going to clip).
+            return localSat
+        }
+        var lo = 1.0, hi = localSat
+        let stillOk = inGamutLab(lab.x, lab.y, lab.z)
+        for _ in 0..<gamutIterations {
+            let mid = (lo + hi) / 2.0
+            if stillOk && inGamutLab(lab.x, lab.y * mid, lab.z * mid) {
+                lo = mid
+            } else {
+                hi = mid
+            }
+        }
+        let sMax = max(lo, 1.0 + gamutTolerance)
+        let knee = sMax - 1.0
+        return 1.0 + knee * (1.0 - exp(-(localSat - 1.0) / knee))
+    }
+
     public static func applyVibranceSaturation(
         _ rgb: SIMD3<Double>, vibrance: Double, saturation: Double
     ) -> SIMD3<Double> {
@@ -128,8 +199,11 @@ public enum LabColor {
         }
         if saturation != 1.0 {
             var lab = rgbToLab(color)
-            lab.y *= saturation
-            lab.z *= saturation
+            // Boosts are gamut-aware (1b900ab); desaturation never
+            // overshoots, so it stays the exact flat scale.
+            let eff = saturation > 1.0 ? gamutAwareBoost(lab, saturation: saturation) : saturation
+            lab.y *= eff
+            lab.z *= eff
             color = simd_clamp(labToRgb(lab), SIMD3<Double>(), SIMD3(repeating: 1))
         }
         return color

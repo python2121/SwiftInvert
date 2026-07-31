@@ -14,10 +14,10 @@ reviewed: 2026-07-30
 fixtures: Tests/Fixtures/ dumped from 0369b10 (2026-07-25, with the 127bcd7
           cast-removal estimators) — still valid for OUR pipeline (nothing in
           this range moves goldens; both new controls are identity-default).
-          dump_fixtures.py remains BROKEN against ≥de79e13 (apply_vibrance
-          deleted); NOTE a gamut-aware-Chroma port (1b900ab) would ALSO
-          invalidate the lab_color saturation fixture — plan the script
-          adaptation + lab_color re-dump together with that port.
+          lab_color was partially re-dumped from b8c596c on 2026-07-30
+          (gamut-aware boost cases only; the script's vibrance case now
+          carries the frozen pre-deletion formula, so dump_fixtures.py works
+          against current upstream again).
 ```
 
 ## How to run a review
@@ -49,7 +49,20 @@ updates this file. The manual procedure, for reference:
 **Kernel status: no golden moves, no constants drift — but three port
 candidates, one of which is a bug-class we share.**
 
-**To port (proposed, not yet implemented), priority order:**
+**PORTED 2026-07-30 (same day, user approved) — items 1 and 2** (see the
+commits for full detail): **Separation Damping** landed with the exact gain
+formula, ref spread 0.35 as a new constants sync point, and the
+population-reversal contract tested both ways; **gamut-aware Chroma**
+landed in LabColor + colorPop with the skin band, bisection and knee —
+the dump script's lab_color case was repaired at the same time (frozen
+verbatim apply_vibrance for our SwiftInvert-maintained control, upstream
+apply_saturation for the rest) and lab_color partially re-dumped from
+`b8c596c`: ONLY the two boost cases changed, desat/in-gamut/vibrance
+byte-identical, and our Double implementation matches upstream's float32
+fixtures at the 1e-4 gate. A dedicated tight CPU/GPU test (mean < 1e-3,
+max < 0.02) guards the path their transposed-matrix bug hid in.
+
+**Original proposals, for the record:**
 1. **Gamut-aware Chroma + skin-tone protection** (`1b900ab`) — a flat Lab
    a*/b* scale preserves hue, but overshooting pixels get hard-clamped PER
    RGB CHANNEL afterward, which shifts the visible hue (their measurement:

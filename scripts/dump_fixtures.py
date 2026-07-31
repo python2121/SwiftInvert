@@ -369,8 +369,27 @@ def dump_ramp() -> None:
 def dump_lab_color() -> None:
     """Saturation/vibrance parity: NegPy's CIELAB chroma ops (lab/logic.py)
     applied to a deterministic color-patch grid (vibrance first, then
-    saturation — LabProcessor order)."""
-    from negpy.features.lab.logic import apply_saturation, apply_vibrance
+    saturation — LabProcessor order).
+
+    apply_vibrance was DELETED upstream (de79e13; replaced by density-space
+    Dye Separation). SwiftInvert keeps the control, so the reference formula
+    is FROZEN here verbatim from de79e13~1 — the vibrance half of this
+    fixture pins OUR SwiftInvert-maintained control, while the saturation
+    half keeps tracking upstream (gamut-aware since 1b900ab)."""
+    import cv2
+    from negpy.features.lab.logic import apply_saturation
+    from negpy.kernel.image.logic import lab_to_rgb_working, rgb_to_lab_working
+
+    def apply_vibrance(img, strength):
+        if strength == 1.0:
+            return img
+        lab = rgb_to_lab_working(img.astype(np.float32))
+        l_chan, a, b = cv2.split(lab)
+        chroma = np.sqrt(a**2 + b**2)
+        muted_mask = np.clip(1.0 - (chroma / 60.0), 0.0, 1.0)
+        boost = (strength - 1.0) * muted_mask
+        res_lab = cv2.merge([l_chan, a * (1.0 + boost), b * (1.0 + boost)])
+        return np.clip(lab_to_rgb_working(res_lab), 0.0, 1.0)
 
     n = 16
     img = np.zeros((n, n, 3), dtype=np.float32)

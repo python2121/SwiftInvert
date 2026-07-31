@@ -153,6 +153,59 @@ inline float3 rgb_to_lab(float3 rgb) {
     return float3(116.0f * f.y - 16.0f, 500.0f * (f.x - f.y), 200.0f * (f.y - f.z));
 }
 
+// ── Gamut-aware chroma boost (NegPy 1b900ab; mirrors LabColor.swift —
+//    keep the literals in sync) ──────────────────────────────────────────
+constant float SKIN_HUE_CENTER_DEG = 52.0f;
+constant float SKIN_HUE_WIDTH_DEG = 25.0f;
+constant float SKIN_PROTECTION_STRENGTH = 0.5f;
+constant float SKIN_CHROMA_GATE = 2.0f;
+constant int GAMUT_ITERATIONS = 10;
+constant float GAMUT_TOL = 1e-4f;
+
+inline float skin_protection_weight(float a, float b) {
+    float chroma = sqrt(a * a + b * b);
+    if (chroma < SKIN_CHROMA_GATE) { return 0.0f; }
+    float hue_deg = atan2(b, a) * 57.29577951308232f;
+    float dist = hue_deg - SKIN_HUE_CENTER_DEG;
+    dist -= 360.0f * rint(dist / 360.0f);
+    float x = dist / SKIN_HUE_WIDTH_DEG;
+    return exp(-0.5f * x * x);
+}
+
+// Raw in-gamut check (no lower clamp — the raw values ARE the decision).
+inline bool in_gamut_lab(float l_val, float a, float b) {
+    float fy = (l_val + 16.0f) / 116.0f;
+    float3 f = float3(a / 500.0f + fy, fy, fy - b / 200.0f);
+    float3 f3 = f * f * f;
+    float3 xyz = select((f - 16.0f / 116.0f) / LAB_KAPPA, f3, f3 > LAB_EPS) * WORKING_WHITE;
+    float3 rgb = XYZ_TO_WORKING * xyz;
+    return rgb.x >= -GAMUT_TOL && rgb.x <= 1.0f + GAMUT_TOL
+        && rgb.y >= -GAMUT_TOL && rgb.y <= 1.0f + GAMUT_TOL
+        && rgb.z >= -GAMUT_TOL && rgb.z <= 1.0f + GAMUT_TOL;
+}
+
+// Effective boost: skin-softened target if it fits, else a soft knee toward
+// the bisected in-gamut headroom (caller ensures saturation > 1).
+inline float gamut_aware_boost(float3 lab, float saturation) {
+    float w = skin_protection_weight(lab.y, lab.z);
+    float local_sat = saturation - SKIN_PROTECTION_STRENGTH * w * (saturation - 1.0f);
+    if (in_gamut_lab(lab.x, lab.y * local_sat, lab.z * local_sat)) { return local_sat; }
+    float lo = 1.0f;
+    float hi = local_sat;
+    bool still_ok = in_gamut_lab(lab.x, lab.y, lab.z);
+    for (int i = 0; i < GAMUT_ITERATIONS; i++) {
+        float mid = (lo + hi) / 2.0f;
+        if (still_ok && in_gamut_lab(lab.x, lab.y * mid, lab.z * mid)) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    float s_max = max(lo, 1.0f + GAMUT_TOL);
+    float knee = s_max - 1.0f;
+    return 1.0f + knee * (1.0f - exp(-(local_sat - 1.0f) / knee));
+}
+
 inline float3 lab_to_rgb(float3 lab) {
     float fy = (lab.x + 16.0f) / 116.0f;
     float3 f = float3(lab.y / 500.0f + fy, fy, fy - lab.z / 200.0f);
@@ -331,7 +384,9 @@ kernel void colorPop(
     }
     if (p.saturation != 1.0f) {
         float3 lab = rgb_to_lab(result);
-        lab.yz *= p.saturation;
+        // Boosts are gamut-aware (1b900ab); desaturation stays flat.
+        float eff = p.saturation > 1.0f ? gamut_aware_boost(lab, p.saturation) : p.saturation;
+        lab.yz *= eff;
         result = clamp(lab_to_rgb(lab), float3(0.0f), float3(1.0f));
     }
 
