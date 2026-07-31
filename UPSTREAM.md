@@ -9,19 +9,15 @@ and appending a history entry.
 ## Last reviewed
 
 ```
-commit:   723e2c5  ("update USER guide" — 0.45.0 release tip)
-reviewed: 2026-07-29
+commit:   b8c596c  ("Delete each tethered shot off the body after download ... (#696)")
+reviewed: 2026-07-30
 fixtures: Tests/Fixtures/ dumped from 0369b10 (2026-07-25, with the 127bcd7
-          cast-removal estimators) — still valid for OUR pipeline (all golden
-          movement since is identity in our dump configs; the 723e2c5-range
-          golden diff is comment-only). dump_fixtures.py remains BROKEN
-          against ≥de79e13: it imports lab.logic.apply_vibrance, which was
-          DELETED. Before any re-dump past de79e13, adapt the script's
-          lab_color case (apply_saturation survives; vibrance has no upstream
-          function anymore) or pin the checkout ≤9b04748. The 3fb5ca8
-          apply_characteristic_curve signature change (density_saturation
-          gone; dye_separation repurposed, default 1.0 = identity) is BENIGN
-          for the script — it passes neither kwarg.
+          cast-removal estimators) — still valid for OUR pipeline (nothing in
+          this range moves goldens; both new controls are identity-default).
+          dump_fixtures.py remains BROKEN against ≥de79e13 (apply_vibrance
+          deleted); NOTE a gamut-aware-Chroma port (1b900ab) would ALSO
+          invalidate the lab_color saturation fixture — plan the script
+          adaptation + lab_color re-dump together with that port.
 ```
 
 ## How to run a review
@@ -47,6 +43,60 @@ updates this file. The manual procedure, for reference:
 6. Update the **Last reviewed** marker and append to the history below.
 
 ## Review history
+
+### 2026-07-30 — through `b8c596c` (0.45.0 tail, 10 commits)
+
+**Kernel status: no golden moves, no constants drift — but three port
+candidates, one of which is a bug-class we share.**
+
+**To port (proposed, not yet implemented), priority order:**
+1. **Gamut-aware Chroma + skin-tone protection** (`1b900ab`) — a flat Lab
+   a*/b* scale preserves hue, but overshooting pixels get hard-clamped PER
+   RGB CHANNEL afterward, which shifts the visible hue (their measurement:
+   a 1.2× push clips 6.3% of a realistic population, mean hue error 8.65°
+   on the clipped set). Fix: bisect each pixel's true in-gamut headroom (10
+   iterations) and soft-knee toward it; in-gamut pixels stay byte-identical;
+   pulls (<1.0) unchanged; skin-tone hues get a gentler push. **Our colorPop
+   has the same hard clamp** (`clamp(lab_to_rgb(lab), 0, 1)` after
+   saturation/vibrance/mixer) — the bug class applies verbatim. Port =
+   LabColor.swift + colorPop MSL both sides + skin-band constants; CAUTION:
+   changes `apply_saturation` semantics for clipped pixels, so the
+   `lab_color` fixture must be re-dumped (requires the dump-script
+   adaptation first) or its clipped cases recalibrated. Medium effort.
+   Their war story worth keeping: a transposed RGB↔XYZ matrix inside the
+   bisection masqueraded as float precision noise — verify our port with
+   their tight CPU/GPU gate (~1e-4), not just the 0.04 parity bar.
+2. **Separation Damping** (`d86a5aa`, `separation_damping` τ 0…1, default
+   0 = byte-exact off): makes the dye-separation k chroma-selective per
+   pixel — `h(c) = (c0−c)/(c0+c)`, `k_eff = k^((1−τ)+τ·h(c))` on the RMS
+   dye-density spread above base — so a push lands on muted colour and
+   REVERSES on already-extreme colour (gain crosses 1.0; no flat k
+   reproduces it: their Ektar sample reads ×1.37 on the least-coloured
+   decile, ×0.89 on the most). The per-pixel-targeting idea we ported and
+   retired, reborn as a modifier of the surviving control: maps directly
+   onto our printSaturation (identity dye matrix → k_eff around the
+   achromatic mean). Only meaningful when printSaturation ≠ 1 (grey out at
+   1.0, like upstream). Kernel both sides + one constant (their c0
+   reference spread); no re-dump. Medium.
+3. **Proof-ladder rotation** (`a2455ab`): while the test strip (or their
+   ring-around) is up, the 90° rotate buttons and [ / ] turn the LADDER
+   instead of the image — the dense/hard end lands on a different part of
+   the frame, axis labels follow, and all four orientations assemble from
+   the SAME renders, so turning is instant. Clean follow-on to our
+   2026-07-29 test-strip port (our mosaic assembly would gain an
+   orientation parameter; renders already cached). Small-medium.
+
+**Noted:** the ring-around spec at the tip is now ±4cc in 2cc steps (was
+±2cc/1cc when first proposed) — still carried as an open candidate.
+
+**Not applicable:** `d982c4b` zoom-button alignment (Qt), `b8c596c`
+tethered-capture deletion for bodies without a capture target (camera
+scanning), `4aa1001`/`540cd9a`/`65c7667`/`9714664`/`1869f2e`
+changelog/screenshot/docs churn.
+
+**Still open (carried over):** colour ring-around (above), `91a1b78`
+tunable Auto Density/Grade targets (user-initiated only), the on-scan
+Color Mixer band re-tune pass (ours).
 
 ### 2026-07-29 (second) — through `723e2c5` (0.45.0 release, 12 commits)
 
