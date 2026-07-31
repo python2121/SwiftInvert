@@ -18,6 +18,7 @@ import Testing
         s.blackPointOffset = 0
         s.overallContrast = 0
         s.shadowContrast = 0
+        s.preSaturation = 1.15  // back to the STOCK default, not zero
         #expect(s == ExposureSettings())
     }
 
