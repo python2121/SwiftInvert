@@ -22,6 +22,7 @@ func historyLabel(from a: ExposureSettings, to b: ExposureSettings) -> String {
     add("Highlight contrast", a.highlightContrast != b.highlightContrast, num(b.highlightContrast))
     add("Pre-saturation", a.preSaturation != b.preSaturation, num(b.preSaturation))
     add("Print saturation", a.printSaturation != b.printSaturation, num(b.printSaturation))
+    add("Separation damping", a.separationDamping != b.separationDamping, num(b.separationDamping))
     add("Vibrance", a.vibrance != b.vibrance, num(b.vibrance))
     add("Saturation", a.saturation != b.saturation, num(b.saturation))
     add("Red hue", a.redHue != b.redHue, num(b.redHue, "%+.2f"))

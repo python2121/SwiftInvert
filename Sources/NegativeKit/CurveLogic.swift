@@ -4,6 +4,19 @@ import Foundation
 /// (grade math, pivot solve, cast removal, WB filtration). Single source of truth
 /// for the Metal uniforms, the CPU reference curve and (later) the curve chart.
 public enum CurveLogic {
+    /// Separation Damping's per-pixel effective k (NegPy
+    /// separation_damping_gain): the frame-wide printSaturation k tapered by
+    /// the pixel's own RMS dye-density spread. h = (ref − c)/(ref + c) runs
+    /// from 1 at grey to −1 at extreme separation, so at damping 1 muted
+    /// colour takes the full k, the reference spread stays at exactly 1.0
+    /// and vivid colour gets 1/k. Clamped at 3 (bounds the k → 0 corner).
+    /// Mirrored as MSL in NegPipeline.metal — keep in sync.
+    public static func separationDampingGain(k: Double, damping: Double, chroma: Double) -> Double {
+        guard k > 0 else { return 0 }
+        let h = (K.separationDampingRefSpread - chroma) / (K.separationDampingRefSpread + chroma)
+        return min(pow(k, (1.0 - damping) + damping * h), 3.0)
+    }
+
     /// Numerically stable softplus log(1 + exp(x)).
     @inlinable public static func softplus(_ x: Double) -> Double {
         x > 0 ? x + log1p(exp(-x)) : log1p(exp(x))

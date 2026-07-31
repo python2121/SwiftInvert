@@ -231,6 +231,11 @@ struct ControlsSidebar: View {
                             range: 0...2, format: "%.2f", defaultValue: 1.0,
                             help: "Density-space saturation: pushes the three dye densities apart after the print curve, so its effect scales with what the curve left in each channel.")
                         LabeledSlider(
+                            label: "Separation Damping", value: $model.settings.separationDamping,
+                            range: 0...1, format: "%.2f", defaultValue: 0,
+                            help: "Redistributes Print Saturation's push by each pixel's own chroma: muted colors keep the full push, already-vivid ones get the opposite. Inert while Print Saturation is 1.")
+                            .disabled(model.settings.printSaturation == 1.0)
+                        LabeledSlider(
                             label: "Vibrance", value: $model.settings.vibrance,
                             range: 0...2, format: "%.2f", defaultValue: 1.0,
                             help: "Boost muted colors more than already-saturated ones (Lab-space; Print Saturation is the density-space counterpart).")

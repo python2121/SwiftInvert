@@ -82,6 +82,12 @@ public struct ExposureSettings: Codable, Equatable, Sendable {
     // the per-pixel spread-masked control of that name (which we ported
     // and retired the same day — measured redundant with this, r≈0.95).
     public var printSaturation: Double = 1.0
+    /// Separation Damping (NegPy d86a5aa): tapers printSaturation's push by
+    /// each pixel's own chroma — muted colour keeps the full push, colour at
+    /// the reference spread is left alone, extreme colour gets the inverse.
+    /// Inert at printSaturation 1.0 (it redistributes that slider's push,
+    /// it has no effect of its own). 0 = off.
+    public var separationDamping: Double = 0
 
     // Pre-saturation (Negative Lab Pro concept): scales per-pixel density
     // deviations from neutral in normalized log space BEFORE the print curve,
@@ -175,6 +181,7 @@ public struct ExposureSettings: Codable, Equatable, Sendable {
         blueHue = d(.blueHue, 0)
         blueSaturation = d(.blueSaturation, 1.0)
         printSaturation = d(.printSaturation, 1.0)
+        separationDamping = d(.separationDamping, 0)
         preSaturation = d(.preSaturation, 1.15)
         temp = d(.temp, 0)
         tint = d(.tint, 0)
@@ -247,6 +254,12 @@ public struct RenderParams: Equatable, Sendable {
     public var preSaturation: Double = 1.0
     /// Post-curve density-space chroma (1.0 = off).
     public var printSaturation: Double = 1.0
+    /// Separation Damping (NegPy d86a5aa): tapers printSaturation's push by
+    /// each pixel's own chroma — muted colour keeps the full push, colour at
+    /// the reference spread is left alone, extreme colour gets the inverse.
+    /// Inert at printSaturation 1.0 (it redistributes that slider's push,
+    /// it has no effect of its own). 0 = off.
+    public var separationDamping: Double = 0
     /// Black point compensation (paper Dmax → display black).
     public var trueBlack: Bool = false
     // Per-band CMY density offsets (already scaled to density units).
@@ -266,6 +279,7 @@ public struct RenderParams: Equatable, Sendable {
         highlightContrast: Double = 0, vibrance: Double = 1.0, saturation: Double = 1.0,
         bandHues: SIMD4<Double> = .zero, bandSaturations: SIMD4<Double> = SIMD4(repeating: 1.0),
         preSaturation: Double = 1.0, printSaturation: Double = 1.0,
+        separationDamping: Double = 0,
         trueBlack: Bool = false,
         shadowCMY: SIMD3<Double> = .zero, midCMY: SIMD3<Double> = .zero,
         highlightCMY: SIMD3<Double> = .zero,
@@ -293,6 +307,7 @@ public struct RenderParams: Equatable, Sendable {
         self.bandSaturations = bandSaturations
         self.preSaturation = preSaturation
         self.printSaturation = printSaturation
+        self.separationDamping = separationDamping
         self.trueBlack = trueBlack
         self.shadowCMY = shadowCMY
         self.midCMY = midCMY
@@ -481,6 +496,7 @@ public enum ExposureKernel {
                 settings.greenSaturation, settings.blueSaturation),
             preSaturation: settings.preSaturation,
             printSaturation: min(max(settings.printSaturation, 0.0), K.printSaturationMax),
+            separationDamping: min(max(settings.separationDamping, 0.0), 1.0),
             trueBlack: settings.trueBlack,
             // Band sliders ±1 → ±cmy_max_density print-density offsets
             // (NegPy's shadow/highlight CMY scale, plus a mids band).

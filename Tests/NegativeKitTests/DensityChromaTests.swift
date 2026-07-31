@@ -90,3 +90,88 @@ import Testing
         #expect(decoded == expected)
     }
 }
+
+/// Separation Damping (NegPy d86a5aa): the chroma-selective taper of Print
+/// Saturation's push.
+@Suite struct SeparationDampingTests {
+    @Test func gainClosedForm() {
+        let ref = K.separationDampingRefSpread
+        // Grey pixel (chroma 0): h = 1 → full k at any damping.
+        #expect(abs(CurveLogic.separationDampingGain(k: 1.4, damping: 1.0, chroma: 0) - 1.4) < 1e-12)
+        // At the reference spread: h = 0 → k^(1−τ); τ=1 → exactly 1.
+        #expect(abs(CurveLogic.separationDampingGain(k: 1.4, damping: 1.0, chroma: ref) - 1.0) < 1e-12)
+        #expect(abs(CurveLogic.separationDampingGain(k: 1.4, damping: 0.5, chroma: ref) - pow(1.4, 0.5)) < 1e-12)
+        // Far above the reference: h → −1 → 1/k at τ=1 (the reversal).
+        let far = CurveLogic.separationDampingGain(k: 1.4, damping: 1.0, chroma: 100)
+        #expect(abs(far - 1.0 / 1.4) < 0.01)
+        // τ=0 is exactly the flat k, whatever the chroma.
+        #expect(CurveLogic.separationDampingGain(k: 1.4, damping: 0, chroma: 0.7) == 1.4)
+        // Clamp and the k≤0 guard.
+        #expect(CurveLogic.separationDampingGain(k: 2.9, damping: 1.0, chroma: 0) == 2.9)
+        #expect(CurveLogic.separationDampingGain(k: 0, damping: 0.5, chroma: 0.1) == 0)
+    }
+
+    private func params(_ mutate: (inout RenderParams) -> Void) -> RenderParams {
+        var p = RenderParams(
+            finalBounds: LogNegativeBounds(floors: SIMD3(-2, -2, -2), ceils: SIMD3(-0.5, -0.5, -0.5)),
+            slopes: SIMD3(repeating: 3.0), pivots: SIMD3(repeating: 0.4),
+            curvatures: .zero, cmyOffsets: .zero,
+            toeEff: 0, shoulderEff: 0, toeWidth: 2.5, shoulderWidth: 2.5,
+            dMin: 0, vStar: CurveLogic.referenceLinearValue(dMin: 0))
+        mutate(&p)
+        return p
+    }
+
+    private func densities(_ rgb: SIMD3<Double>, _ p: RenderParams) -> SIMD3<Double> {
+        let img = RGBImage(pixels: [Float(rgb.x), Float(rgb.y), Float(rgb.z)], width: 1, height: 1)
+        let out = ReferenceCurve.applyPrintCurve(img, params: p)
+        return SIMD3(
+            -log10(max(Double(out.pixels[0]), 1e-9)),
+            -log10(max(Double(out.pixels[1]), 1e-9)),
+            -log10(max(Double(out.pixels[2]), 1e-9)))
+    }
+
+    private func spread(_ d: SIMD3<Double>) -> Double {
+        max(d.x, max(d.y, d.z)) - min(d.x, min(d.y, d.z))
+    }
+
+    /// Inert at printSaturation 1 (any damping), and damping 0 is bit-equal
+    /// to the flat path.
+    @Test func inertAndFlatEquivalence() {
+        let px = SIMD3(0.3, 0.45, 0.65)
+        let base = densities(px, params { _ in })
+        let damped1 = densities(px, params { $0.separationDamping = 1.0 })
+        #expect(base == damped1)  // printSaturation 1 → nothing to redistribute
+        let flat = densities(px, params { $0.printSaturation = 1.5 })
+        let tau0 = densities(px, params { $0.printSaturation = 1.5; $0.separationDamping = 0 })
+        #expect(flat == tau0)
+    }
+
+    /// At full damping with k > 1: a muted pixel's dye spread still widens,
+    /// a vivid pixel's spread NARROWS (the reversal a flat k cannot do).
+    @Test func pushRedistributesBetweenPopulations() {
+        let muted = SIMD3(0.46, 0.48, 0.50)
+        let vivid = SIMD3(0.2, 0.45, 0.75)
+        let pFlat = params { $0.printSaturation = 1.5 }
+        let pDamped = params { $0.printSaturation = 1.5; $0.separationDamping = 1.0 }
+
+        let mutedBase = spread(densities(muted, params { _ in }))
+        let mutedDamped = spread(densities(muted, pDamped))
+        #expect(mutedDamped > mutedBase * 1.2, "muted must still widen (\(mutedBase) → \(mutedDamped))")
+
+        let vividBase = spread(densities(vivid, params { _ in }))
+        let vividFlat = spread(densities(vivid, pFlat))
+        let vividDamped = spread(densities(vivid, pDamped))
+        #expect(vividFlat > vividBase, "flat k widens vivid too")
+        #expect(vividDamped < vividBase, "damped push must REVERSE on vivid (\(vividBase) → \(vividDamped))")
+    }
+
+    @Test func sidecarRoundTripAndLegacyDefault() throws {
+        var s = ExposureSettings()
+        s.separationDamping = 0.4
+        let back = try JSONDecoder().decode(ExposureSettings.self, from: JSONEncoder().encode(s))
+        #expect(back == s)
+        let legacy = try JSONDecoder().decode(ExposureSettings.self, from: Data("{}".utf8))
+        #expect(legacy.separationDamping == 0)
+    }
+}

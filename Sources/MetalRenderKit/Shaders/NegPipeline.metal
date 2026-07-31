@@ -84,7 +84,24 @@ struct CurveUniforms {
     // Color-mixer bands, R/Y/G/B lanes (0 / 1.0 = off).
     float4 bandHues;
     float4 bandSaturations;
+    // Separation Damping (0 = off); pads keep the 16-byte stride.
+    float separationDamping;
+    float _pad1;
+    float _pad2;
+    float _pad3;
 };
+
+// Separation Damping reference spread — K.separationDampingRefSpread
+// (NegPy separation_damping_ref_spread); keep in sync.
+constant float SEPARATION_DAMPING_REF = 0.35f;
+
+// separation_damping_gain: the frame-wide k tapered by the pixel's own RMS
+// dye spread; h runs 1 at grey to -1 at extreme separation. Clamped at 3.
+static inline float separation_damping_gain(float k, float damping, float chroma) {
+    if (k <= 0.0f) { return 0.0f; }
+    float h = (SEPARATION_DAMPING_REF - chroma) / (SEPARATION_DAMPING_REF + chroma);
+    return min(pow(k, (1.0f - damping) + damping * h), 3.0f);
+}
 
 // Color-mixer band constants — must match LabColor.bandCentersDeg /
 // bandHalfWidthsDeg (order: Red, Yellow, Green, Blue).
@@ -244,7 +261,17 @@ kernel void printCurve(
     if (p.printSaturation != 1.0f) {
         float3 ve = dens - p.dMinRGB.xyz;
         float m = (ve.x + ve.y + ve.z) / 3.0f;
-        dens = p.dMinRGB.xyz + float3(m) + p.printSaturation * (ve - float3(m));
+        if (p.separationDamping > 0.0f) {
+            // Separation Damping: k becomes a function of the pixel's own
+            // RMS spread — the push lands on muted colour, reverses on
+            // extreme colour (mirrors ReferenceCurve).
+            float chroma = sqrt(((ve.x - ve.y) * (ve.x - ve.y) + (ve.y - ve.z) * (ve.y - ve.z)
+                + (ve.x - ve.z) * (ve.x - ve.z)) / 3.0f);
+            float k = separation_damping_gain(p.printSaturation, p.separationDamping, chroma);
+            dens = p.dMinRGB.xyz + float3(m) + k * (ve - float3(m));
+        } else {
+            dens = p.dMinRGB.xyz + float3(m) + p.printSaturation * (ve - float3(m));
+        }
     }
     float3 transmittance = pow(float3(10.0f), -dens);
     if (p.trueBlack != 0.0f) {

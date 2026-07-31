@@ -33,7 +33,7 @@ enum Fixtures2 {
     @Test func uniformStrides() {
         // Must match the MSL structs in NegPipeline.metal.
         #expect(MemoryLayout<NormUniforms>.stride == 48)
-        #expect(MemoryLayout<CurveUniforms>.stride == 256)
+        #expect(MemoryLayout<CurveUniforms>.stride == 272)
         #expect(MemoryLayout<CurveUniforms>.offset(of: \.bandHues) == 224)
         #expect(MemoryLayout<CurveUniforms>.offset(of: \.bandSaturations) == 240)
         #expect(MemoryLayout<CurveUniforms>.offset(of: \.midCMY) == 80)
@@ -45,6 +45,7 @@ enum Fixtures2 {
         #expect(MemoryLayout<CurveUniforms>.offset(of: \.saturation) == 212)
         #expect(MemoryLayout<CurveUniforms>.offset(of: \.preSaturation) == 216)
         #expect(MemoryLayout<CurveUniforms>.offset(of: \.printSaturation) == 220)
+        #expect(MemoryLayout<CurveUniforms>.offset(of: \.separationDamping) == 256)
         // Flat levels buffer: must match LEVELS_BUFFER_FLOATS in the MSL.
         #expect(UniformsBuilder.levelsBufferFloats == 51)
         #expect(UniformsBuilder.levelsBuffer(RenderParams(
@@ -144,6 +145,7 @@ enum Fixtures2 {
         settings.colorMids = SIMD3(-0.2, 0.4, -0.5)
         settings.colorHighs = SIMD3(0.3, 0.1, 0.6)
         settings.printSaturation = 1.4
+        settings.separationDamping = 0.7
         let params = ExposureKernel.deriveRenderParams(settings, analysis)
 
         let cpu = ReferenceCurve.encodeOutput(

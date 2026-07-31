@@ -128,6 +128,10 @@ public enum K {
     // Print Saturation's matrix-coefficient clamp (NegPy per_channel_dye_separation
     // — their surviving density-saturation control, renamed in 3fb5ca8).
     public static let printSaturationMax = 3.0
+    // Separation Damping's reference spread (NegPy separation_damping_ref_spread,
+    // d86a5aa): the per-pixel chroma left at exactly gain 1.0 when damping is
+    // full — above it the push reverses. Inlined as an MSL literal — change both.
+    public static let separationDampingRefSpread = 0.35
     // One photographic stop in log10 density.
     public static let log10Two = 0.3010299956639812
 

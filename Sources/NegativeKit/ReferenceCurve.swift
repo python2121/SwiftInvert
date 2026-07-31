@@ -137,7 +137,18 @@ public enum ReferenceCurve {
                 if params.printSaturation != 1.0 {
                     let ve = dens - dMinRGB
                     let m = (ve.x + ve.y + ve.z) / 3.0
-                    dens = dMinRGB + SIMD3(repeating: m) + params.printSaturation * (ve - SIMD3(repeating: m))
+                    if params.separationDamping > 0 {
+                        // Separation Damping (NegPy d86a5aa): k becomes a
+                        // function of the pixel's own RMS spread, so the push
+                        // lands on muted colour and reverses on extreme colour.
+                        let chroma = (((ve.x - ve.y) * (ve.x - ve.y) + (ve.y - ve.z) * (ve.y - ve.z)
+                            + (ve.x - ve.z) * (ve.x - ve.z)) / 3.0).squareRoot()
+                        let k = CurveLogic.separationDampingGain(
+                            k: params.printSaturation, damping: params.separationDamping, chroma: chroma)
+                        dens = dMinRGB + SIMD3(repeating: m) + k * (ve - SIMD3(repeating: m))
+                    } else {
+                        dens = dMinRGB + SIMD3(repeating: m) + params.printSaturation * (ve - SIMD3(repeating: m))
+                    }
                 }
                 for ch in 0..<3 {
                     var t = pow(10.0, -dens[ch])
