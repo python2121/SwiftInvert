@@ -104,6 +104,7 @@ final class AppModel {
         didSet {
             guard oldValue != toolMode else { return }
             clearTestStrip()
+            clearZonePlacement()
             if toolMode == .crop {
                 // Snapshot for Escape-cancel: mid-mode straighten commits
                 // mutate settings live, so cancel restores this pair.
@@ -600,6 +601,7 @@ final class AppModel {
     private func openSelection() {
         renderTask?.cancel()
         clearTestStrip()
+        clearZonePlacement()
         // Route a live crop mode through the CANCEL path: committing here
         // would apply the OLD image's crop box to the NEW image's settings
         // (DetailView's mode-exit handler runs after the switch).
@@ -657,6 +659,7 @@ final class AppModel {
 
     private func settingsChanged() {
         clearTestStrip()  // the patches no longer reflect the settings
+        clearZonePlacement()  // the pins' samples/solution no longer do either
         // Every settings edit in the profile editor updates the shared draft
         // (geometry stripped — crop/rotate in the editor stays view-local).
         if isProfileEditor { profileDraft = settings.adjustmentsOnly }
@@ -672,6 +675,7 @@ final class AppModel {
         didSet {
             if oldValue != hqPreview {
                 clearTestStrip()
+                clearZonePlacement()
                 scheduleRender()
             }
         }
@@ -828,6 +832,7 @@ final class AppModel {
             return
         }
         guard let session, selection != nil, toolMode == .none, !showingBaseline else { return }
+        clearZonePlacement()  // strip and pins both own the canvas
         // The strip and its patch previews are proxy-renders by design
         // (25 full-res renders would take ages); leaving HQ nominally on
         // while its tier gets evicted underneath would lie — flip it off.
@@ -906,6 +911,182 @@ final class AppModel {
         if before == settings { pendingHistoryLabel = nil }  // no-op pick: disarm
     }
 
+    // MARK: - Zone placement (NegPy 5a095f3/9dff124 port)
+
+    /// Session-only canvas state, like the test strip: pins over the frame,
+    /// the live solved-look preview, and the strip-armed target. Any real
+    /// edit, navigation, tool mode, baseline peek or HQ change clears it.
+    struct ZonePlacementState {
+        var pins: [ZonePlacement.Pin] = []
+        /// Measured roman label per pin (what it prints at under the CURRENT
+        /// settings), refreshed with every re-solve.
+        var labels: [String] = []
+        var solution: ZonePlacement.Solution?
+        /// Full-frame render of the solution, drawn over the canvas while
+        /// pins are up (the same overlay trick as the test strip's preview).
+        var previewImage: CGImage?
+        /// Zone picked on the strip, consumed by the next canvas click.
+        var armedZone: Double?
+        var solving = false
+    }
+    var zonePlacement: ZonePlacementState?
+    /// Fences stale async sample/solve completions (same pattern as the
+    /// test-strip generation counter).
+    @ObservationIgnored private var zonePlacementGeneration = 0
+
+    /// Zone-strip cell click: arm that zone for the next canvas click
+    /// (upstream: "click a cell in the Analysis zone strip, click that spot
+    /// on the photo"). Clicking the armed cell again disarms.
+    func armZonePlacementTarget(_ zone: Double) {
+        guard selection != nil, toolMode == .none, !showingBaseline else { return }
+        clearTestStrip()
+        // Placement samples and previews on the proxy tower (like the test
+        // strip); leaving HQ nominally on would lie. Flip BEFORE creating the
+        // state — the HQ didSet clears zone placement.
+        if hqPreview { hqPreview = false }
+        var state = zonePlacement ?? ZonePlacementState()
+        state.armedZone = state.armedZone == zone ? nil : zone
+        zonePlacement = state
+    }
+
+    /// Canvas click while placement is active. Armed: the pin takes the zone
+    /// picked on the strip. Unarmed: it takes the zone it already reads, so a
+    /// bare click meters without moving the print (upstream rule). Beyond
+    /// maxPins the nearest pin is replaced.
+    func addZonePin(u: Double, v: Double) {
+        guard zonePlacement != nil, let session else { return }
+        let armed = zonePlacement?.armedZone
+        let snapshot = settings
+        zonePlacementGeneration += 1
+        let generation = zonePlacementGeneration
+        Task { [weak self] in
+            guard let sample = try? await session.sampleZonePin(settings: snapshot, u: u, v: v)
+            else { return }
+            var target = armed
+            if target == nil {
+                guard
+                    let z = try? await session.predictedZone(
+                        settings: snapshot, valLuma: sample.valLuma)
+                else { return }
+                target = (z * 3).rounded() / 3  // snap the metered read to thirds
+            }
+            guard let self, self.zonePlacementGeneration == generation,
+                var state = self.zonePlacement
+            else { return }
+            let pin = ZonePlacement.Pin(
+                nx: u, ny: v, valRGB: sample.valRGB, valLuma: sample.valLuma,
+                targetZone: target!, retargeted: armed != nil)
+            if state.pins.count < ZonePlacement.maxPins {
+                state.pins.append(pin)
+            } else {
+                let nearest = state.pins.indices.min(by: {
+                    let a = state.pins[$0], b = state.pins[$1]
+                    return (a.nx - u) * (a.nx - u) + (a.ny - v) * (a.ny - v)
+                        < (b.nx - u) * (b.nx - u) + (b.ny - v) * (b.ny - v)
+                })!
+                state.pins[nearest] = pin
+            }
+            state.armedZone = nil
+            self.zonePlacement = state
+            self.resolveZonePlacement()
+        }
+    }
+
+    /// Drag a pin: re-samples the tone under it. An untargeted pin re-snaps
+    /// to the new reading, a retargeted one keeps its zone; the solve waits
+    /// for `final` (upstream `move_zone_pin`).
+    func moveZonePin(index: Int, u: Double, v: Double, final: Bool) {
+        guard let state = zonePlacement, state.pins.indices.contains(index), let session
+        else { return }
+        let snapshot = settings
+        zonePlacementGeneration += 1
+        let generation = zonePlacementGeneration
+        Task { [weak self] in
+            guard let sample = try? await session.sampleZonePin(settings: snapshot, u: u, v: v)
+            else { return }
+            guard let self, self.zonePlacementGeneration == generation,
+                var st = self.zonePlacement, st.pins.indices.contains(index)
+            else { return }
+            var pin = st.pins[index]
+            pin.nx = u
+            pin.ny = v
+            pin.valRGB = sample.valRGB
+            pin.valLuma = sample.valLuma
+            if !pin.retargeted {
+                let z = (try? await session.predictedZone(
+                    settings: snapshot, valLuma: sample.valLuma)) ?? pin.targetZone
+                pin.targetZone = (z * 3).rounded() / 3
+            }
+            guard self.zonePlacementGeneration == generation,
+                var latest = self.zonePlacement, latest.pins.indices.contains(index)
+            else { return }
+            latest.pins[index] = pin
+            self.zonePlacement = latest
+            if final { self.resolveZonePlacement() }
+        }
+    }
+
+    func removeZonePin(index: Int) {
+        guard var state = zonePlacement, state.pins.indices.contains(index) else { return }
+        state.pins.remove(at: index)
+        if state.pins.isEmpty {
+            state.solution = nil
+            state.previewImage = nil
+            state.labels = []
+        }
+        zonePlacement = state
+        if !state.pins.isEmpty { resolveZonePlacement() }
+    }
+
+    /// Re-solve and refresh: pin labels (what each tone prints at NOW), the
+    /// solution, and the solved-look preview render (one derive+render on the
+    /// warm tower, like a test-strip patch preview).
+    private func resolveZonePlacement() {
+        guard let state = zonePlacement, !state.pins.isEmpty, let session else { return }
+        let snapshot = settings
+        let pins = state.pins
+        zonePlacementGeneration += 1
+        let generation = zonePlacementGeneration
+        zonePlacement?.solving = true
+        Task { [weak self] in
+            var labels: [String] = []
+            for pin in pins {
+                let z = (try? await session.predictedZone(settings: snapshot, valLuma: pin.valLuma))
+                labels.append(z.map { Densitometry.zoneRoman($0) } ?? "–")
+            }
+            let solution = (try? await session.solveZonePlacement(settings: snapshot, pins: pins))
+                .flatMap { $0 }
+            var preview: CGImage?
+            if let solution {
+                preview = try? await session.render(settings: solution.settings).image
+            }
+            guard let self, self.zonePlacementGeneration == generation,
+                var st = self.zonePlacement
+            else { return }
+            st.labels = labels
+            st.solution = solution ?? nil
+            st.previewImage = preview
+            st.solving = false
+            self.zonePlacement = st
+        }
+    }
+
+    /// Apply the solution as ONE history entry (upstream: "Apply is one undo
+    /// step"). The settings didSet clears the placement state.
+    func applyZonePlacement() {
+        guard let solution = zonePlacement?.solution else { return }
+        pendingHistoryLabel = "Zone placement"
+        let before = settings
+        settings = solution.settings
+        clearZonePlacement()
+        if before == settings { pendingHistoryLabel = nil }  // no-op: disarm
+    }
+
+    func clearZonePlacement() {
+        zonePlacementGeneration += 1
+        if zonePlacement != nil { zonePlacement = nil }
+    }
+
     // MARK: - Baseline (press-and-hold "before") preview
 
     /// True while the long-press comparison shows the stock conversion.
@@ -924,7 +1105,10 @@ final class AppModel {
 
     func setBaselinePreview(_ on: Bool) {
         guard on != showingBaseline else { return }
-        if on { clearTestStrip() }
+        if on {
+            clearTestStrip()
+            clearZonePlacement()
+        }
         showingBaseline = on
         scheduleRender()
     }

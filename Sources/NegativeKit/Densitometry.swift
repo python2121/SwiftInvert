@@ -36,6 +36,14 @@ public enum Densitometry {
         return e <= mid ? 5.0 * e / mid : 5.0 + 5.0 * (e - mid) / (1.0 - mid)
     }
 
+    /// Exact inverse of `zone(ofEncoded:)`; kept beside it so the ruler can't
+    /// fork (NegPy `encoded_of_zone`).
+    public static func encoded(ofZone zone: Double) -> Double {
+        let z = min(max(zone, 0), 10)
+        let mid = midGrayEncoded
+        return z <= 5.0 ? mid * z / 5.0 : mid + (1.0 - mid) * (z - 5.0) / 5.0
+    }
+
     /// Reflection density of a display-encoded lightness.
     public static func printDensity(ofEncoded enc: Double) -> Double {
         let e = min(max(enc, 0), 1)

@@ -263,6 +263,59 @@ actor ImageSession {
         return cg
     }
 
+    // MARK: - Zone placement (NegPy 5a095f3/9dff124)
+
+    /// Normalized-log sample at content-normalized `u`,`v` of the DISPLAYED
+    /// frame (the fine-rotated preview under the committed crop): mean of the
+    /// (2·radius+1)² log-normalized patch, like upstream's
+    /// `_sample_normalized_log`. This is the pre-curve value a zone pin
+    /// freezes — the displayed rgba8 bytes are post-curve and can't serve.
+    func sampleZonePin(
+        settings: ExposureSettings, u: Double, v: Double, radius: Int = 2
+    ) throws -> (valRGB: SIMD3<Double>, valLuma: Double) {
+        let (image, analysis) = try prepare(settings: settings)
+        let bounds = analysis.baseBounds.applyingOffsets(
+            whitePoint: settings.whitePointOffset, blackPoint: settings.blackPointOffset)
+        // Map through the crop: the displayed frame is preview ∩ cropRect.
+        var cu = u, cv = v
+        if let crop = settings.cropRect {
+            cu = crop.x + u * crop.width
+            cv = crop.y + v * crop.height
+        }
+        let cx = min(max(Int(cu * Double(image.width)), 0), image.width - 1)
+        let cy = min(max(Int(cv * Double(image.height)), 0), image.height - 1)
+        var sum = SIMD3<Double>()
+        var n = 0.0
+        for y in max(cy - radius, 0)...min(cy + radius, image.height - 1) {
+            for x in max(cx - radius, 0)...min(cx + radius, image.width - 1) {
+                for ch in 0..<3 {
+                    let lg = log10(max(Double(image[y, x, ch]), 1e-6))
+                    let denom = bounds.ceils[ch] - bounds.floors[ch]
+                    sum[ch] += (lg - bounds.floors[ch]) / (abs(denom) < 1e-6 ? 1e-6 : denom)
+                }
+                n += 1
+            }
+        }
+        let val = sum / n
+        return (val, K.lumaR * val.x + K.lumaG * val.y + K.lumaB * val.z)
+    }
+
+    /// Zone the CURRENT settings print `valLuma` on (pin labels + the default
+    /// target of an unarmed pin).
+    func predictedZone(settings: ExposureSettings, valLuma: Double) throws -> Double {
+        let (_, analysis) = try prepare(settings: settings)
+        return ZonePlacement.predictedZone(settings: settings, analysis: analysis, valLuma: valLuma)
+    }
+
+    /// Solve the placement against the warm analysis (pure CPU, in the actor
+    /// so the bisections stay off the main thread).
+    func solveZonePlacement(
+        settings: ExposureSettings, pins: [ZonePlacement.Pin]
+    ) throws -> ZonePlacement.Solution? {
+        let (_, analysis) = try prepare(settings: settings)
+        return ZonePlacement.solve(settings: settings, analysis: analysis, pins: pins)
+    }
+
     func renderDetached(settings: ExposureSettings) throws -> RenderOutput {
         if basePreview == nil {
             basePreview = try RawDecoder().decode(url: url, quality: .preview, maxLongEdge: 1536)

@@ -160,7 +160,10 @@ struct DetailView: View {
             Spacer()
 
             if model.selection != nil {
-                DensitometerReadout(state: densitometer)
+                DensitometerReadout(
+                    state: densitometer,
+                    armedZone: model.zonePlacement?.armedZone,
+                    onSelectZone: { model.armZonePlacementTarget($0) })
             }
 
             Spacer()
@@ -228,6 +231,7 @@ struct DetailView: View {
                 !cropMode && !zeroBase && model.toolMode == .none
                 && model.straightenDragValue == nil
                 && model.testStrip == nil  // the strip covers the probed bitmap
+                && model.zonePlacement == nil  // the pins are the read-outs
             let inscribed = RGBImage.inscribedRectSize(
                 width: Double(image.width), height: Double(image.height), radians: radians)
             // Crop mode fits the ROTATED frame's bounding box so the whole
@@ -317,6 +321,14 @@ struct DetailView: View {
                         !zeroBase, model.straightenDragValue == nil
                     {
                         TestStripLayer(strip: strip, model: model)
+                    }
+                    // Zone placement pins + solved-look preview: same
+                    // plain-presentation rule as the strip; AppModel clears
+                    // the state on any edit/tool/baseline/HQ change.
+                    if let placement = model.zonePlacement, model.toolMode == .none,
+                        !zeroBase, model.straightenDragValue == nil
+                    {
+                        ZonePlacementLayer(state: placement, model: model)
                     }
                 }
                 .frame(width: window.width, height: window.height)

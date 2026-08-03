@@ -499,6 +499,30 @@ values where needed):
   while typing in text fields; the monitor checks the first responder. NegPy's 120-bin
   `density_histogram` is deliberately NOT ported: it exists to feed their H&D
   chart, which we don't ship.
+- **Zone placement** (NegPy 5a095f3/9dff124 port: `ZonePlacement` in
+  NegativeKit + `ZonePlacementLayer`/AppModel state): click a zone-strip
+  cell, click that spot on the photo, and Brightness (1 pin) or
+  Brightness+Grade (2 pins) or those plus ONE knee control (3 pins) solve
+  so the tone prints there. Pins freeze their normalized-log luma
+  (`ImageSession.sampleZonePin`, 5×5 patch mean — the displayed rgba8 is
+  post-curve and can't serve); the forward model is the ACHROMATIC
+  green-reference curve run through the real kernel (`predictedZone`:
+  derive → params collapsed to green → 1-px `ReferenceCurve` → zone
+  ruler — includes exposureStops and the green levels remap, which
+  upstream's model omits/lacks). Solved by bisection at half slider
+  precision, autos forced off, clamped+rounded, achieved zones recomputed
+  at the rounded values; `encoded(ofZone:)` is the ruler's exact inverse.
+  Knee candidates are OUR tone-control knees (shadowContrast /
+  highlightContrast — upstream solves Split Grade/Snap, which we don't
+  ship), picked by measured purchase; DIVERGENCE: the knee bisects the
+  COMPOSITE residual (2-pin solve nested inside) instead of upstream's
+  alternating passes — our anchors sit between typical pin positions, the
+  alternation diverges there, and the µs-scale model makes nesting cheap.
+  UX mirrors the test strip's canvas-state rules: solved-look preview
+  drawn over the frame, drag re-samples (retargeted pins keep their
+  zone), Apply = one history entry ("Zone placement"), Escape/any
+  edit/tool/baseline/HQ/navigation clears; solve runs in the session
+  actor. No settings field, no parity surface, no fixture re-dump.
 - **Edit history**: per-image undo/redo in AppModel (`historyEntries`/`historyIndex`,
   session-scoped per URL). Slider/handle drags commit on RELEASE (drag =
   preview: `setControlEditing` via the `controlEditingChanged` environment

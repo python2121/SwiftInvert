@@ -9,8 +9,8 @@ and appending a history entry.
 ## Last reviewed
 
 ```
-commit:   a09cc46  ("change: Linear RAW defaults to off (#717)")
-reviewed: 2026-07-31
+commit:   41ae8c5  ("docs: changelog for 0.47.0 (#753)")
+reviewed: 2026-08-03
 fixtures: Tests/Fixtures/ dumped from 0369b10 except lab_color (partially
           re-dumped from a09cc46, 2026-07-31, with the pure gamut boost —
           the b8c596c dump had carried the interim in-boost skin damping).
@@ -39,6 +39,160 @@ updates this file. The manual procedure, for reference:
 6. Update the **Last reviewed** marker and append to the history below.
 
 ## Review history
+
+### 2026-08-03 — through `41ae8c5` (0.47.0, 5 commits) + PORTS of the 2026-08-02 items
+
+**Addendum review before porting yesterday's items — one overnight commit
+changed the spec of the very feature being ported:** `9dff124` extends zone
+placement with a THIRD pin that solves one knee control (their Shadows
+Grade / Highlights Grade / Snap), picked by MEASURED purchase (probe each
+candidate against the forward model, keep the one that moves the pin most
+— explicitly not a zone-number rule) with an alternating outer/mid solve
+and an honest achieved-vs-asked readout. Also in the range, all N/A:
+`86ba21f` first-frame selection order, `0713263` camera-scanning crash
+fixes, `41d3aee` work prints (named per-frame versions surviving undo —
+their session/DB layer; noted as a UX idea only), `41ae8c5` changelog.
+
+**PORTED 2026-08-03 (both 2026-08-02 items, user approved; zone placement
+at the new `9dff124` spec):**
+
+1. **`2a6cb22` decode white-level pin** — `adjust_maximum_thr = 0.0` in
+   `RawDecoder` (the one decode function serves preview + export).
+   Verified: the reference Canon frames don't trip the 75% threshold
+   (negcli meter byte-identical on IMG_0365/0348, probe values match the
+   127bcd7 A/B record); frames with base near clipping will shift — the
+   fix working. CLAUDE.md decode contract updated: the rawpy
+   byte-identical claim now requires `adjust_maximum_thr=0` passed
+   explicitly on the rawpy side.
+
+2. **`5a095f3` + `9dff124` zone placement** — `ZonePlacement` in
+   NegativeKit (Pin/Solution/1-2-3-pin solve, bisection at half slider
+   precision, autos off, clamp+round with achieved recomputed, honest
+   clamped flag), `Densitometry.encoded(ofZone:)` exact ruler inverse,
+   `ImageSession.sampleZonePin/predictedZone/solveZonePlacement`,
+   zone-strip cell arming + draggable pins + solved-look canvas preview +
+   Apply-as-one-history-entry ("Zone placement"), Escape/edit/tool/
+   baseline/HQ/navigation clears (test-strip state rules). Forward model
+   runs the REAL kernel collapsed to green (1-px ReferenceCurve — can't
+   fork from the render); deliberate inclusions upstream's model omits:
+   the green cmyOffset (carries exposureStops, our control) and the green
+   levels remap. **Documented adaptations:**
+   - Knee candidates are our tone-control knees (`shadowContrast`,
+     `highlightContrast`) — upstream solves Split Grade/Snap, which sit
+     inside our recorded Split Grade/Zone Density skip; the
+     measured-purchase picker is control-agnostic by design, so it
+     transfers. No midtone candidate (our only midtone contrast is
+     global `overallContrast`, collinear with the grade the 2-pin solve
+     owns).
+   - **The knee solve NESTS instead of alternating.** Upstream iterates
+     (place extremes, place middle, ×3 passes) to avoid multiplying the
+     2-pin cost — sound for their zone-centred grade windows, whose
+     centres sit outside the span between typical pins. Our knee anchors
+     (1.40/0.30) sit BETWEEN typical pin positions, the raw and
+     post-re-solve effects can have opposite signs, and the alternation
+     measurably diverged to the slider corners (grade 50, knee −3, every
+     pin off). The composite-residual bisection (2-pin solve nested in
+     every evaluation, picker measures composite purchase too) converges
+     unconditionally, and monotonicity makes the clamped endpoint the
+     argmax — never worse than no knee. Affordable because our forward
+     model is µs-scale where theirs is ms-scale Python.
+   No settings field (density/grade/knees are existing fields — tripwire
+   counts untouched), no parity surface, NO fixture re-dump. 229 tests
+   green (ZonePlacementTests: ruler inverse, model monotonicity +
+   stops/levels visibility, 1/2/3-pin contracts, order-invariance,
+   degenerate/clamp honesty, unrelated-settings passthrough); bench
+   unchanged (prepare 126 ms, 7.7 ms/frame); app renders headlessly.
+   Human-verify the pointer paths (pin drag, strip arming) per the GUI
+   verification rule.
+
+**Still open (carried over):** colour ring-around (±4cc/2cc spec),
+`91a1b78` tunable Auto Density/Grade targets (user-initiated only), the
+on-scan Color Mixer band re-tune pass (ours).
+
+### 2026-08-02 — through `82f7c62` (0.45.0 → 0.47.0-dev, 18 commits)
+
+**Kernel status: no golden moves, no constants drift — but one decode-contract
+fix we share verbatim, and one substantial exposure feature.** The 0.46.0
+release landed in this range; the path-filtered pipeline log holds only
+`5a095f3` (zone placement) and `a06381c` (content hashing, N/A); `2a6cb22`
+hides in `services/` because their decode params live there.
+
+**To port (proposed; BOTH PORTED 2026-08-03 — see the entry above):**
+
+1. **`2a6cb22` — pin RAW decode scale to the camera white level.** LibRaw's
+   default `adjust_maximum_thr=0.75` swaps the u16 scaling reference from the
+   camera's white level to the frame's own brightest pixel once that pixel
+   passes 75% of white level — routine when the film base is exposed near
+   clipping, i.e. exactly negative scans. Each such frame then decodes on its
+   own scale while normalization bounds, metering and A/B assume one shared
+   scale. Upstream now passes `adjust_maximum_thr=0.0` on EVERY decode
+   (pipeline/preview/detection/thumbnails), documented in PIPELINE.md as part
+   of the decode contract. **We share the bug**: `RawDecoder.swift` never
+   sets `params.adjust_maximum_thr`, so we inherit the 0.75 default on both
+   the preview and export paths. Port = one line in `configure` (both paths
+   share it) + a decode test; NO fixture re-dump (fixtures are synthetic
+   dumps — decode is outside the parity surface). Bookkeeping: CLAUDE.md's
+   decode-contract list gains the param, and the "verified byte-identical
+   against rawpy" claim must be restated (the rawpy comparison now needs
+   `adjust_maximum_thr=0` passed explicitly). Expect affected frames (base
+   near clipping) to shift slightly in metering — that's the fix working.
+   Trivial effort, highest priority: it's a per-roll-consistency correctness
+   fix in the pinned reference contract, and upstream made it the
+   unconditional default, not a toggle.
+
+2. **`5a095f3` — Zone placement** (0.46.0's headliner): click a zone-strip
+   cell, click that spot on the photo, and Print Density (1 pin) or Density +
+   ISO-R Grade (2 pins) solve so the tone prints on that zone; pins drag
+   live; Apply is one undo step. The math (`placement.py`, ~130 lines) is
+   pure forward-model inversion by bisection: `predicted_zone` runs the
+   ACHROMATIC green-reference curve (`curve_params_from_metrics` →
+   `print_curve` → output encode → `zone_of_encoded`) on the pin's frozen
+   normalized-log luma; 1 pin bisects density (autos → off), 2 pins do an
+   outer grade bisection against the light pin with an inner density solve
+   pinning the dark pin (residual decreasing in R), both at half the
+   sliders' precision, clamped+rounded with achieved zones recomputed.
+   `analysis.py` gains `encoded_of_zone` (exact ruler inverse, kept beside
+   `zone_of_encoded` "so the ruler can't fork"). Maps cleanly: we already
+   ship the ruler (`Densitometry.zone(ofEncoded:)`), the zone strip, the
+   probe's frozen samples, and a µs derive — the solver is a small
+   NegativeKit type calling `deriveRenderParams` + the green
+   `ReferenceCurve` per iteration (closed-form testable; their
+   test_zone_placement.py is 547 lines of spec to mirror). Bulk of the work
+   is UI: pin overlay + drag + zone-strip arming + Apply-as-one-history-
+   entry. No parity surface, no fixture re-dump. Moderate effort (~1 day).
+
+**Checked, no counterpart (shared-bug-class audits):**
+- `c6dfb35` + `404c62a` bulk ops / Export Sidecars stamping the active
+  frame's edit onto unedited frames — their config-hydration bug. Ours
+  resolves per-file at use (`SidecarStore.load(for:) ?? DefaultProfile
+  .settings`, live settings only for the open URL) in batch export; Copy
+  Adjustments is explicit-only. Verified in `performExport`.
+- `4ff2855` test-strip/ring-around preview corrupted by alpha before RGB888
+  display — read because we ported the test strip; it's a Qt display-
+  conversion bug with no counterpart (our display path is rgba8unorm
+  end-to-end, no RGB888 repack).
+- `14bc87b` glow/halation: stage we don't ship. Noted for any future
+  halation-class effect: GPU blur radii must scale with render scale
+  (their fixed 15/25 px collapsed the bloom 4–8× at export), and the
+  highlight mask is now LINEAR (the CPU's `**2` was dropped to converge on
+  the shipped GPU look).
+
+**Not applicable:** `6956add` flat-field profile store, `0353bf2` RGB-scan
+triplet stitching (capture), `6410002` Linear Output export (decoded-source
+TIFF dump — `negcli decode` already serves the debugging role here),
+`69befb9` OpenICE IR removal (retouch), `92d6913`/`71069f1` export filename
+templates + EXIF ImageDescription fields, `a06381c` content-hash interior
+sampling (their edit-store identity; our sidecars key off the filename),
+`4edce33` IR dust detection scale, `82f7c62` library folders/metadata
+search, `7292fcd`/`cd8362a`/`e9c4e8a` changelog/readme churn.
+
+**dump_fixtures.py:** compatible — exposure `normalization.py`/`logic.py`
+untouched in the range; the `analysis.py` change is additive
+(`encoded_of_zone`).
+
+**Still open (carried over):** colour ring-around (±4cc/2cc spec),
+`91a1b78` tunable Auto Density/Grade targets (user-initiated only), the
+on-scan Color Mixer band re-tune pass (ours).
 
 ### 2026-07-31 — through `a09cc46` (0.45.0-dev, 10 commits)
 

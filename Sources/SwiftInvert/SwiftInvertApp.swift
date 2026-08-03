@@ -266,6 +266,11 @@ struct ContentView: View {
                         model.clearTestStrip()
                         return true
                     }
+                    // Same rule for zone-placement pins.
+                    if isEscape, model.zonePlacement != nil {
+                        model.clearZonePlacement()
+                        return true
+                    }
                     if isUp || isDown || isLeft || isRight {
                         // Frame navigation — but never while a text field has
                         // focus (arrows must move the caret in the profile
