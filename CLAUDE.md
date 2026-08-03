@@ -72,7 +72,11 @@ render (GPU) → display/export**. Slider changes re-run ONLY derive+render
 ### 1. RAW decode (`RawDecodeKit/RawDecoder.swift`)
 
 LibRaw parameters mirror NegPy's rawpy decode exactly (verified byte-identical
-against rawpy on real files): `gamma=(1,1)`, `no_auto_bright`, `output_bps=16`,
+against rawpy on real files — a rawpy comparison must now pass
+`adjust_maximum_thr=0` explicitly): `gamma=(1,1)`, `no_auto_bright`,
+`adjust_maximum_thr=0` (pin the u16 scale to the camera white level; the 0.75
+default rescales to the frame's own brightest pixel once it nears clipping —
+NegPy 2a6cb22), `output_bps=16`,
 `output_color=RAW` (sensor-native, **no camera color matrix**), unity WB
 (`user_mul=(1,1,1,1)`, `use_camera_wb=0`), `user_flip=0`. Output is scene-linear
 `RGBImage` (interleaved RGB float32 in [0,1], `u16/65535` via vDSP).

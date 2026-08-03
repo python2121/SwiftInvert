@@ -62,6 +62,11 @@ public struct RawDecoder {
         lr.pointee.params.gamm.0 = 1.0
         lr.pointee.params.gamm.1 = 1.0
         lr.pointee.params.no_auto_bright = 1
+        // Pin the u16 scale to the camera white level (NegPy 2a6cb22): the
+        // default adjust_maximum_thr=0.75 rescales to the frame's own brightest
+        // pixel once it passes 75% of white level — routine when the film base
+        // is exposed near clipping — putting each frame on its own scale.
+        lr.pointee.params.adjust_maximum_thr = 0.0
         lr.pointee.params.output_bps = 16
         lr.pointee.params.output_color = 0  // sensor-native, no color matrix
         lr.pointee.params.use_camera_wb = 0
