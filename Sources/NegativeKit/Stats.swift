@@ -1,16 +1,15 @@
-import Accelerate
 import Foundation
 
 /// numpy-compatible order statistics (linear-interpolation percentile, even/odd
 /// median). NegPy's bounds analysis is built on np.percentile/np.median, so these
 /// must match exactly.
 public enum Stats {
-    /// vDSP ascending sort — same ordering as Array.sorted() for the NaN-free
-    /// float data the meters see, several times faster on large arrays.
+    /// Ascending sort — same ordering as Array.sorted() for the NaN-free float
+    /// data the meters see. Radix, not comparison: sorting is the bulk of
+    /// analysis and this is ~11× faster than vDSP_vsort here (see RadixSort).
+    /// Every percentile/median/quantile below funnels through this one call.
     public static func sortedAscending(_ data: [Float]) -> [Float] {
-        var out = data
-        vDSP_vsort(&out, vDSP_Length(out.count), 1)
-        return out
+        RadixSort.sorted(data)
     }
 
     /// np.percentile(data, q) with the default "linear" interpolation:
@@ -62,9 +61,7 @@ public enum Stats {
     // statistics must too.
 
     public static func sortedAscending(_ data: [Double]) -> [Double] {
-        var out = data
-        vDSP_vsortD(&out, vDSP_Length(out.count), 1)
-        return out
+        RadixSort.sorted(data)
     }
 
     public static func percentileOfSorted(_ sorted: [Double], _ q: Double) -> Double {

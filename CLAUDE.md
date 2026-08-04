@@ -109,9 +109,15 @@ Rendering/export still bake the angle; `exportRender` shares `prepare()`,
 so preview and export agree.
 
 Two stages, both offset-independent since the 2125a34 port
-(`ExposureKernel.prepare` ≈180 ms once per image/crop; `finalize` ≈45 ms,
+(`ExposureKernel.prepare` ≈21 ms once per image/crop; `finalize` ≈7 ms,
 cached with it — white/black-point drags re-run NO analysis at all; the
-offsets fold into `finalBounds` at derive time only):
+offsets fold into `finalBounds` at derive time only). Both were ~5.5× slower
+until `Stats.sortedAscending` moved off `vDSP_vsort` to `RadixSort`
+(prepare 120 → 21 ms, finalize 45 → 7 ms): sorting was ~70% of analysis and
+vDSP was the slowest option measured (21.6 ms/252k Floats vs 15.8 for
+`Array.sorted()` and 1.9 for radix). **Every order statistic funnels through
+that one function**, so keep new percentile/median code going through
+`Stats` rather than calling `.sort()` directly:
 
 **`prepare(linearImage:cropRect:analysisRect:analysisBuffer:)` →
 `Prepared`** (offset-independent, cached per rect state):
@@ -247,9 +253,10 @@ One command buffer, passes in order (`RenderPipeline.render` /
       reflectance** out.
 3. **`colorPop`** (dispatched when a color-pop control is off-default —
    vibrance/saturation/band controls — or skinProtection > 0, which is
-   the DEFAULT (0.5): in practice the pass now runs every frame, costing
-   ~2.5 ms at preview size — bench moved 4.6 → ~7.2 ms/frame, accepted
-   with the port) — CIELAB
+   the DEFAULT (0.5): in practice the pass runs every frame, accepted with
+   the port — though the ~7.2 ms/frame recorded then no longer reproduces;
+   bench measures 4.3–4.6 ms/frame with the pass confirmed dispatching)
+   — CIELAB
    (Adobe RGB (1998) primaries, D65 since the b3490eb port; matrices
    duplicated in MSL and
    `LabColor.swift` — keep in sync): the **Color Mixer** first

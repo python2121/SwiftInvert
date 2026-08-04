@@ -54,9 +54,11 @@ public enum Meters {
                     K.lumaR * Double(src[i * 3]) + K.lumaG * Double(src[i * 3 + 1]) + K.lumaB * Double(src[i * 3 + 2]))
             }
         }
-        lum.sort()
-        let lo = Stats.percentileOfSorted(lum, K.texturalRangeClip)
-        let hi = Stats.percentileOfSorted(lum, 100.0 - K.texturalRangeClip)
+        // Through Stats so this shares the radix sort with every other meter
+        // (a bare lum.sort() left this the slowest line in prepare).
+        let sortedLum = Stats.sortedAscending(lum)
+        let lo = Stats.percentileOfSorted(sortedLum, K.texturalRangeClip)
+        let hi = Stats.percentileOfSorted(sortedLum, 100.0 - K.texturalRangeClip)
         return abs(hi - lo)
     }
 
