@@ -109,7 +109,7 @@ Rendering/export still bake the angle; `exportRender` shares `prepare()`,
 so preview and export agree.
 
 Two stages, both offset-independent since the 2125a34 port
-(`ExposureKernel.prepare` ≈21 ms once per image/crop; `finalize` ≈7 ms,
+(`ExposureKernel.prepare` ≈17 ms once per image/crop; `finalize` ≈7 ms,
 cached with it — white/black-point drags re-run NO analysis at all; the
 offsets fold into `finalBounds` at derive time only). Both were ~5.5× slower
 until `Stats.sortedAscending` moved off `vDSP_vsort` to `RadixSort`
@@ -127,12 +127,14 @@ that one function**, so keep new percentile/median code going through
    inversion) with the buffer applied inside; else the centered buffer alone.
    Default buffer **0.10** = middle 80% of the frame (NegPy ships 0.05 —
    deliberate divergence). Degenerate rects (<2 px) are ignored.
-2. **Prefilter** (`Prefilter.prefilterLogGrid`): `log10(clip(x, 1e-6, 1.0))`
-   via vForce (buffer holds negative density −D since values ≤1), then a
-   **block-median grid**: block side `b = ceil(maxDim/1024)`; per-cell,
-   per-channel median kills dust/speculars and makes stats
-   resolution-invariant. The preview path always hits `b=2`, which has a
-   closed-form median-of-4 fast path.
+2. **Prefilter** (`Prefilter.prefilterLogGrid`): the buffer crop, then
+   `log10(clip(x, 1e-6, 1.0))` via vForce (buffer holds negative density −D
+   since values ≤1), then a **block-median grid**: block side
+   `b = ceil(maxDim/1024)`; per-cell, per-channel median kills
+   dust/speculars and makes stats resolution-invariant. The preview path
+   always hits `b=2`, which has a closed-form median-of-4 fast path.
+   NegPy logs BEFORE cropping; we crop first because `log10` is elementwise
+   (identical survivors) and the 0.10 buffer discards 36% of the frame.
 3. **Bounds** (`BoundsAnalysis.analyze`, NegPy `analyze_log_exposure_bounds`):
    two independent percentile axes on the grid, one sort per channel
    (vDSP): the **luma axis** (base clip 0.01%) sets the mean center+span
@@ -316,6 +318,15 @@ overwrites them. Violating this segfaulted the concurrent test runner once.
 Uniform structs are mirrored byte-for-byte in `ShaderTypes.swift`;
 `LayoutTests` pins strides (Norm 48, Curve 256) plus the 51-float levels-buffer length and key offsets — update both
 sides plus the asserts together.
+
+**Big-buffer discipline** (learned repeatedly, now applied throughout): never
+allocate a large pixel buffer with `[T](repeating:)` when the code that
+follows writes every lane — use `unsafeUninitializedCapacity` (or
+`RGBImage(width:height:initializingWith:)`). At export size the wasted
+zero-fill costs tens of ms per buffer in first-touch page faults alone, and
+`readback` was doing it twice (387 MB + 290 MB). Live instances: `upload`,
+`readback`, both display/float read-backs, `RawDecoder`'s u16→float,
+`RGBImage.downsampled`, `BoundsAnalysis.sortedChannels`.
 
 ### 5. Color management
 

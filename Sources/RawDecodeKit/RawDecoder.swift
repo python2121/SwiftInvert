@@ -100,25 +100,27 @@ public struct RawDecoder {
 
         let w = Int(p.width), h = Int(p.height)
         let count = w * h * 3
-        var pixels = [Float](repeating: 0, count: count)
         // `data` is a C flexible array member; address it via its offset from the
         // struct base (withUnsafePointer(to: .pointee.data) would copy to a
         // misaligned temporary and trap).
         let dataOffset = MemoryLayout<libraw_processed_image_t>.offset(of: \.data)!
         let raw = UnsafeRawPointer(processed) + dataOffset
         var inv: Float = 1.0 / 65535.0
-        if Int(bitPattern: raw) % MemoryLayout<UInt16>.alignment == 0 {
-            // vDSP u16→float + scale (the struct's flexible array member is
-            // 2-byte aligned in practice; scalar fallback below if not).
-            let u16 = raw.assumingMemoryBound(to: UInt16.self)
-            pixels.withUnsafeMutableBufferPointer { dst in
+        // Uninitialized: both branches write every element, so a zero-fill here
+        // is a wasted pass over 290 MB at full resolution (~5 ms).
+        let pixels = [Float](unsafeUninitializedCapacity: count) { dst, initialized in
+            if Int(bitPattern: raw) % MemoryLayout<UInt16>.alignment == 0 {
+                // vDSP u16→float + scale (the struct's flexible array member is
+                // 2-byte aligned in practice; scalar fallback below if not).
+                let u16 = raw.assumingMemoryBound(to: UInt16.self)
                 vDSP_vfltu16(u16, 1, dst.baseAddress!, 1, vDSP_Length(count))
                 vDSP_vsmul(dst.baseAddress!, 1, &inv, dst.baseAddress!, 1, vDSP_Length(count))
+            } else {
+                for i in 0..<count {
+                    dst[i] = Float(raw.loadUnaligned(fromByteOffset: i * 2, as: UInt16.self)) * inv
+                }
             }
-        } else {
-            for i in 0..<count {
-                pixels[i] = Float(raw.loadUnaligned(fromByteOffset: i * 2, as: UInt16.self)) * inv
-            }
+            initialized = count
         }
 
         var img = RGBImage(pixels: pixels, width: w, height: h)

@@ -1,3 +1,4 @@
+import Dispatch
 import Foundation
 
 /// Interleaved RGB float32 image buffer, row-major, values scene-linear in [0, 1]
@@ -18,6 +19,22 @@ public struct RGBImage: @unchecked Sendable {
         self.pixels = [Float](repeating: fill, count: width * height * 3)
         self.width = width
         self.height = height
+    }
+
+    /// Allocate WITHOUT the zero-fill, for buffers whose every lane the caller
+    /// writes. `repeating:` costs a full pass over the buffer that the write
+    /// then immediately discards — 290 MB of it at export size. `body` must
+    /// initialize all `width * height * 3` elements.
+    public init(
+        width: Int, height: Int,
+        initializingWith body: (UnsafeMutableBufferPointer<Float>) -> Void
+    ) {
+        self.width = width
+        self.height = height
+        self.pixels = [Float](unsafeUninitializedCapacity: width * height * 3) { buffer, count in
+            body(buffer)
+            count = width * height * 3
+        }
     }
 
     @inlinable
@@ -159,30 +176,44 @@ public struct RGBImage: @unchecked Sendable {
         let scale = Double(maxLongEdge) / Double(long)
         let ow = max(1, Int((Double(width) * scale).rounded()))
         let oh = max(1, Int((Double(height) * scale).rounded()))
-        var out = RGBImage(width: ow, height: oh)
         let sx = Double(width) / Double(ow)
         let sy = Double(height) / Double(oh)
-        out.pixels.withUnsafeMutableBufferPointer { dst in
+        let w = width, h = height
+        return RGBImage(width: ow, height: oh) { dst in
             pixels.withUnsafeBufferPointer { src in
-                for oy in 0..<oh {
-                    let y0 = Int(Double(oy) * sy), y1 = min(height, max(y0 + 1, Int(Double(oy + 1) * sy)))
-                    for ox in 0..<ow {
-                        let x0 = Int(Double(ox) * sx), x1 = min(width, max(x0 + 1, Int(Double(ox + 1) * sx)))
-                        var acc: (Float, Float, Float) = (0, 0, 0)
-                        for y in y0..<y1 {
-                            let row = y * width
-                            for x in x0..<x1 {
-                                let i = (row + x) * 3
-                                acc.0 += src[i]; acc.1 += src[i + 1]; acc.2 += src[i + 2]
+                let out = dst.baseAddress!
+                let sp = src.baseAddress!
+                // Output rows are disjoint, and each reads a disjoint band of
+                // input rows — so distributing the row loop leaves every box's
+                // accumulation order, and therefore every output float, exactly
+                // as the serial version produced it (11.9 → 2.7 ms on the
+                // 3012×2010 → 1536×1025 preview step).
+                let slices = min(8, oh)
+                let per = (oh + slices - 1) / slices
+                DispatchQueue.concurrentPerform(iterations: slices) { slice in
+                    // `per * slices` can exceed `oh` (e.g. oh = 10 over 8
+                    // slices), leaving the tail slices with no rows at all.
+                    let firstRow = min(slice * per, oh)
+                    let lastRow = min(oh, firstRow + per)
+                    for oy in firstRow..<lastRow {
+                        let y0 = Int(Double(oy) * sy), y1 = min(h, max(y0 + 1, Int(Double(oy + 1) * sy)))
+                        for ox in 0..<ow {
+                            let x0 = Int(Double(ox) * sx), x1 = min(w, max(x0 + 1, Int(Double(ox + 1) * sx)))
+                            var acc: (Float, Float, Float) = (0, 0, 0)
+                            for y in y0..<y1 {
+                                let row = y * w
+                                for x in x0..<x1 {
+                                    let i = (row + x) * 3
+                                    acc.0 += sp[i]; acc.1 += sp[i + 1]; acc.2 += sp[i + 2]
+                                }
                             }
+                            let n = Float((y1 - y0) * (x1 - x0))
+                            let o = (oy * ow + ox) * 3
+                            out[o] = acc.0 / n; out[o + 1] = acc.1 / n; out[o + 2] = acc.2 / n
                         }
-                        let n = Float((y1 - y0) * (x1 - x0))
-                        let o = (oy * ow + ox) * 3
-                        dst[o] = acc.0 / n; dst[o + 1] = acc.1 / n; dst[o + 2] = acc.2 / n
                     }
                 }
             }
         }
-        return out
     }
 }

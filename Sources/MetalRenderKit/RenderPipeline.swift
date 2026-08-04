@@ -125,22 +125,25 @@ public final class RenderPipeline: @unchecked Sendable {
 
     public func readback(_ texture: MTLTexture) -> RGBImage {
         let w = texture.width, h = texture.height
-        var rgba = [Float](repeating: 0, count: w * h * 4)
-        rgba.withUnsafeMutableBufferPointer { buf in
+        let n = w * h
+        // Neither buffer needs its zero-fill: getBytes writes every lane of the
+        // staging array and the loop below writes every lane of the output. At
+        // export size those two fills alone cost ~17 ms to be overwritten —
+        // the same lesson `upload` above already learned.
+        let rgba = [Float](unsafeUninitializedCapacity: n * 4) { buf, count in
             texture.getBytes(
                 buf.baseAddress!, bytesPerRow: w * 16, from: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0)
+            count = n * 4
         }
-        var out = RGBImage(width: w, height: h)
-        out.pixels.withUnsafeMutableBufferPointer { dst in
+        return RGBImage(width: w, height: h) { dst in
             rgba.withUnsafeBufferPointer { src in
-                for i in 0..<(w * h) {
+                for i in 0..<n {
                     dst[i * 3] = src[i * 4]
                     dst[i * 3 + 1] = src[i * 4 + 1]
                     dst[i * 3 + 2] = src[i * 4 + 2]
                 }
             }
         }
-        return out
     }
 
     // MARK: - Encoding
@@ -368,10 +371,12 @@ public final class RenderPipeline: @unchecked Sendable {
         cmd.waitUntilCompleted()
         if let error = cmd.error { throw RenderError.resource("command buffer failed: \(error)") }
 
-        var rgba = [UInt8](repeating: 0, count: w * h * 4)
-        rgba.withUnsafeMutableBufferPointer { buf in
+        // getBytes writes every byte, so skip the zero-fill (this one is on the
+        // interactive path — it runs on every slider frame).
+        let rgba = [UInt8](unsafeUninitializedCapacity: w * h * 4) { buf, count in
             encoded8.getBytes(
                 buf.baseAddress!, bytesPerRow: w * 4, from: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0)
+            count = w * h * 4
         }
         let histogram = histBuffer.contents().withMemoryRebound(to: UInt32.self, capacity: 1024) {
             Array(UnsafeBufferPointer(start: $0, count: 1024))

@@ -99,4 +99,58 @@ import Testing
         let out = img.downsampled(maxLongEdge: 16)
         #expect(out.pixels.allSatisfy { abs($0 - 0.42) < 1e-6 })
     }
+
+    /// `downsampled` distributes its row loop across 8 slices. Output rows are
+    /// disjoint and read disjoint input bands, so the result must be BYTE-
+    /// identical to the serial box filter — and the slicing must survive output
+    /// heights that aren't a multiple of the slice count (an unguarded
+    /// `slice * per` overshoots `oh` at e.g. 10 rows over 8 slices and traps on
+    /// the reversed range).
+    @Test func parallelDownsampleMatchesSerialAtEveryRaggedHeight() {
+        func serialDownsample(_ img: RGBImage, maxLongEdge: Int) -> [Float] {
+            let long = max(img.width, img.height)
+            guard long > maxLongEdge else { return img.pixels }
+            let scale = Double(maxLongEdge) / Double(long)
+            let ow = max(1, Int((Double(img.width) * scale).rounded()))
+            let oh = max(1, Int((Double(img.height) * scale).rounded()))
+            let sx = Double(img.width) / Double(ow), sy = Double(img.height) / Double(oh)
+            var out = [Float](repeating: 0, count: ow * oh * 3)
+            for oy in 0..<oh {
+                let y0 = Int(Double(oy) * sy)
+                let y1 = min(img.height, max(y0 + 1, Int(Double(oy + 1) * sy)))
+                for ox in 0..<ow {
+                    let x0 = Int(Double(ox) * sx)
+                    let x1 = min(img.width, max(x0 + 1, Int(Double(ox + 1) * sx)))
+                    var acc: (Float, Float, Float) = (0, 0, 0)
+                    for y in y0..<y1 {
+                        for x in x0..<x1 {
+                            let i = (y * img.width + x) * 3
+                            acc.0 += img.pixels[i]
+                            acc.1 += img.pixels[i + 1]
+                            acc.2 += img.pixels[i + 2]
+                        }
+                    }
+                    let n = Float((y1 - y0) * (x1 - x0))
+                    let o = (oy * ow + ox) * 3
+                    out[o] = acc.0 / n
+                    out[o + 1] = acc.1 / n
+                    out[o + 2] = acc.2 / n
+                }
+            }
+            return out
+        }
+
+        // Heights chosen to land on ragged slice counts (oh % 8 != 0), single
+        // rows, and fewer output rows than slices.
+        for (w, h, cap) in [
+            (100, 75, 64), (64, 48, 32), (37, 29, 13), (101, 53, 17),
+            (200, 13, 10), (19, 200, 10), (64, 48, 1), (9, 9, 2), (1536, 1025, 1536),
+            (3012, 2010, 1536),
+        ] {
+            let img = gradient(width: w, height: h)
+            #expect(
+                img.downsampled(maxLongEdge: cap).pixels == serialDownsample(img, maxLongEdge: cap),
+                "\(w)x\(h) -> cap \(cap)")
+        }
+    }
 }
