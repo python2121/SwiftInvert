@@ -9,8 +9,9 @@ and appending a history entry.
 ## Last reviewed
 
 ```
-commit:   41ae8c5  ("docs: changelog for 0.47.0 (#753)")
-reviewed: 2026-08-03
+commit:   bd81b85  ("feat: clickable empty state, canvas-tracked centring,
+          foldable branding (#757)")
+reviewed: 2026-08-04
 fixtures: Tests/Fixtures/ dumped from 0369b10 except lab_color (partially
           re-dumped from a09cc46, 2026-07-31, with the pure gamut boost —
           the b8c596c dump had carried the interim in-boost skin damping).
@@ -39,6 +40,62 @@ updates this file. The manual procedure, for reference:
 6. Update the **Last reviewed** marker and append to the history below.
 
 ## Review history
+
+### 2026-08-04 — through `bd81b85` (0.47.0, 4 commits)
+
+**Kernel status: a genuine null.** The path-filtered log over
+`features/exposure/`, `features/process/`, `kernel/image/` and both
+characterization goldens is EMPTY; no renames in the range
+(`--diff-filter=R` empty); VERSION unmoved at 0.47.0 and CHANGELOG.md
+untouched (the range is post-release 0.47.0 work). No fixture re-dump, no
+constants drift. `dump_fixtures.py` unaffected — exposure
+`normalization.py`/`logic.py`/`models.py`/`analysis.py` have zero lines in
+the diff, so every imported signature is stable at the new tip.
+
+**Ported:** nothing (nothing required).
+
+PIPELINE.md moved in two places, both outside our pipeline: the Linear
+Output section documents the new composite paths and correction toggles
+(below), and the OpenICE section gains a §7 "Grain" step for `4baae2e`.
+
+**Not applicable (each diff checked):**
+- `b80eb4f` **Linear Output: composite support, correction toggles, no-op
+  fixes** — read in full because the last review's lesson was that a
+  decode-contract change (`2a6cb22`) hid in `services/`. It doesn't repeat:
+  grepping the `linear_output.py` diff for every rawpy postprocess
+  parameter (`adjust_maximum_thr`, `output_color`, `gamma`,
+  `no_auto_bright`, `user_wb`/`user_mul`, `half_size`, `output_bps`,
+  `user_flip`, `user_qual`) returns nothing — the decode contract we pin is
+  untouched. What it adds is their capture stack: RGB-scan triplet merging
+  and multi-part stitch assembly into one linear TIFF, plus three
+  default-OFF toggles (apply WB / flatfield / sensor correction) that bake
+  corrections into the raw dump, forced on per-part for stitches so
+  vignetting and crosstalk don't seam. All of it sits on features we don't
+  ship (RGB-triplet capture, stitching, flatfield, sensor crosstalk), and
+  the Linear Output feature itself is already a recorded N/A (`6410002`,
+  2026-08-02 — `negcli decode` serves the debugging role). Their raw-dump
+  philosophy is worth noting as convergent with ours: the default output is
+  unmodified sensor data.
+- `4baae2e` **OpenICE synthetic grain** — restores ICE's §8 dither inside
+  the IR-dust reconstruction (zero-mean density noise, α = 0.015/0.015/
+  0.025, parabolic envelope over the 1st–99th density percentiles, no grain
+  unless the dithered value stays in-band), because a confidence-weighted
+  reconstruction returns smoother than the film around it and the finest
+  detail band can't fix that — it restores a pixel's grain FROM that pixel,
+  and a pixel under solid dust has none left. Retouch/IR stage we don't
+  ship. **Noted for any future synthesis-class effect:** they draw from a
+  hash of the pixel's absolute coordinate rather than ICE's frame-global
+  LCG — the LCG is the algorithm's only serial dependency and would make a
+  banded pass differ from a whole-frame one. That is the same
+  render-scale-invariance discipline as the `14bc87b` halation note
+  (2026-08-02).
+- `07a7f18` session panel stays stacked when its sections collapse (Qt
+  layout), `bd81b85` clickable empty state + canvas-tracked centring +
+  foldable branding header (their Qt shell chrome).
+
+**Still open (carried over, unchanged):** colour ring-around (±4cc/2cc
+spec), `91a1b78` tunable Auto Density/Grade targets (user-initiated only),
+the on-scan Color Mixer band re-tune pass (ours).
 
 ### 2026-08-03 — through `41ae8c5` (0.47.0, 5 commits) + PORTS of the 2026-08-02 items
 
