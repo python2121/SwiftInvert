@@ -358,14 +358,23 @@ actor ImageSession {
 
     /// `uncropped` shows the full frame (used while a selection tool is active
     /// so the user can drag on the whole image, like NegPy's crop_preview_full).
-    func render(settings: ExposureSettings, uncropped: Bool = false, hq: Bool = false) throws -> RenderOutput {
+    ///
+    /// `retainHQ` keeps the full-resolution tier alive across a proxy render.
+    /// Auto mode needs it: zooming back out below the threshold is a proxy
+    /// render, and dropping the tier there would make the next zoom-in pay the
+    /// whole ~700 ms decode again. The tier is still freed when HQ is switched
+    /// off, and by `releaseHQ()` on every session the LRU isn't showing — so at
+    /// most the on-screen frame holds it, exactly as before.
+    func render(
+        settings: ExposureSettings, uncropped: Bool = false, hq: Bool = false, retainHQ: Bool = false
+    ) throws -> RenderOutput {
         let (image, analysis) = try prepare(settings: settings)
         let params = ExposureKernel.deriveRenderParams(settings, analysis)
         let source: MTLTexture
         if hq {
             source = try hqSourceTexture(settings: settings, uncropped: uncropped)
         } else {
-            clearHQ()
+            if !retainHQ { clearHQ() }
             source = try sourceTexture(image: image, settings: settings, uncropped: uncropped)
         }
         let result = try pipeline.renderDisplay(source: source, params: params)

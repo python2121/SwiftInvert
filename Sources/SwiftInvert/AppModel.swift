@@ -105,6 +105,7 @@ final class AppModel {
             guard oldValue != toolMode else { return }
             clearTestStrip()
             clearZonePlacement()
+            refreshHQActive(debounced: false)
             if toolMode == .crop {
                 // Snapshot for Escape-cancel: mid-mode straighten commits
                 // mutate settings live, so cancel restores this pair.
@@ -156,7 +157,7 @@ final class AppModel {
             else { return }
             var zeroed = settings
             zeroed.fineRotation = 0
-            if toolMode == .none, !showingBaseline, !hqPreview,
+            if toolMode == .none, !showingBaseline, !hqActive,
                 let base = straightenBase, base.settings == zeroed {
                 displayImage = base.output.image
                 histogram = base.output.histogram
@@ -175,7 +176,7 @@ final class AppModel {
 
     func prepareStraightenBase(afterMilliseconds delay: Int = 0) {
         guard selection != nil, settings.fineRotation != 0, toolMode == .none,
-            !showingBaseline, !hqPreview, straightenDragValue == nil
+            !showingBaseline, !hqActive, straightenDragValue == nil
         else { return }
         var zeroed = settings
         zeroed.fineRotation = 0
@@ -619,6 +620,13 @@ final class AppModel {
         }
         straightenBaseTask?.cancel()
         straightenBase = nil
+        // A new frame always arrives fitted (DetailView resets its gesture
+        // state too). Resolve HQ BEFORE the sidecar load kicks off the first
+        // render, or an `.auto` frame opened while the previous one was zoomed
+        // in would decode full resolution for a picture shown at fit.
+        canvasZoom = 1
+        hqSwapTask?.cancel()
+        hqActive = hqShouldBeActive
         session = retainedSession(for: url, pipeline: pipeline)
         // Loading the sidecar mutates settings, which triggers the first render.
         // A frame with no sidecar gets the house default profile. The profile
@@ -669,16 +677,154 @@ final class AppModel {
     }
 
     /// Preview at full source resolution instead of the 1536px proxy (the HQ
-    /// button in the canvas control bar). Session-only by design: a persisted
-    /// flag would silently make every launch pay full-res render costs.
-    var hqPreview = false {
-        didSet {
-            if oldValue != hqPreview {
-                clearTestStrip()
-                clearZonePlacement()
-                scheduleRender()
+    /// button in the canvas control bar, cycling off → auto → on).
+    ///
+    /// Session-only by design: a persisted `.on` would silently make every
+    /// launch pay full-res render costs. `.auto` is the default and is cheap
+    /// at rest — it decodes nothing until you actually magnify past the point
+    /// where the proxy runs out of pixels.
+    enum HQMode: String, CaseIterable, Identifiable, Sendable {
+        /// Always the 1536px proxy.
+        case off
+        /// Proxy when fitted, full resolution once zoomed past
+        /// `hqAutoZoomThreshold` — rendered in the background and swapped in.
+        case auto
+        /// Always full resolution.
+        case on
+
+        var id: String { rawValue }
+
+        var label: String {
+            switch self {
+            case .off: return "Off"
+            case .auto: return "Auto"
+            case .on: return "On"
             }
         }
+
+        var next: HQMode {
+            switch self {
+            case .off: return .auto
+            case .auto: return .on
+            case .on: return .off
+            }
+        }
+
+        /// Pure resolution of "mode + canvas context → render full resolution?".
+        /// Split out of `AppModel` so it is testable without standing up a
+        /// render pipeline and a decoded session.
+        ///
+        /// - `canvasOwnedByProxyTool`: a test strip or zone placement is up.
+        ///   Both render from the proxy tower by construction, so HQ would be a
+        ///   lie there — this is what the old boolean's explicit force-off did.
+        /// - `cropToolActive`: Crop & Straighten pins the canvas to fit
+        ///   (`scaleEffect(1)`) whatever the zoom state holds, so magnification
+        ///   is not a reason to decode while it owns the view. It does not
+        ///   suppress an explicit `.on`.
+        ///
+        /// Baseline hold is deliberately absent: a press-and-hold compare must
+        /// show both states at the SAME resolution, or part of the difference
+        /// you see is the proxy rather than the edit.
+        nonisolated func resolve(
+            zoom: CGFloat,
+            threshold: CGFloat,
+            hasSelection: Bool,
+            canvasOwnedByProxyTool: Bool,
+            cropToolActive: Bool
+        ) -> Bool {
+            guard hasSelection, !canvasOwnedByProxyTool else { return false }
+            switch self {
+            case .off: return false
+            case .on: return true
+            case .auto: return !cropToolActive && zoom >= threshold
+            }
+        }
+    }
+
+    /// Magnification at which `.auto` switches to the full-resolution tier.
+    ///
+    /// `zoom == 1` is fit-to-window, so on a Retina display the 1536px proxy is
+    /// already being upsampled before you touch the trackpad — a
+    /// "proxy has run out of real pixels" threshold would fire at rest and make
+    /// `.auto` indistinguishable from `.on`. 2× is comfortably past the proxy's
+    /// useful resolution at any sane window size, and it keeps the trigger a
+    /// property of YOUR gesture rather than of the window's dimensions.
+    nonisolated static let hqAutoZoomThreshold: CGFloat = 2.0
+
+    var hqMode: HQMode = .auto {
+        didSet {
+            guard oldValue != hqMode else { return }
+            // Changing the mode by hand invalidates the canvas-owning states,
+            // exactly as toggling the old boolean did.
+            clearTestStrip()
+            clearZonePlacement()
+            if hqMode == .off { Task { [session] in await session?.releaseHQ() } }
+            refreshHQActive(debounced: false)
+        }
+    }
+
+    /// Canvas magnification, reported by DetailView so `.auto` can follow it
+    /// (the gesture state itself stays view-local).
+    var canvasZoom: CGFloat = 1 {
+        didSet {
+            guard oldValue != canvasZoom, hqMode == .auto else { return }
+            // A pinch reports continuously; only a CROSSING can change the
+            // answer, so ignore the rest of the gesture rather than cancelling
+            // and rescheduling a task per frame.
+            let was = oldValue >= Self.hqAutoZoomThreshold
+            let now = canvasZoom >= Self.hqAutoZoomThreshold
+            guard was != now else { return }
+            // Debounced upward: sweeping past 2× mid-pinch shouldn't commit to
+            // a ~700 ms decode until the gesture settles there.
+            refreshHQActive(debounced: true)
+        }
+    }
+
+    /// Whether the CURRENT render should use the full-resolution tier — the
+    /// mode resolved against zoom and the canvas-owning states.
+    private(set) var hqActive = false
+
+    private var hqShouldBeActive: Bool {
+        hqMode.resolve(
+            zoom: canvasZoom,
+            threshold: Self.hqAutoZoomThreshold,
+            hasSelection: selection != nil,
+            canvasOwnedByProxyTool: testStrip != nil || testStripTask != nil || zonePlacement != nil,
+            cropToolActive: toolMode != .none)
+    }
+
+    @ObservationIgnored private var hqSwapTask: Task<Void, Never>?
+
+    /// Re-resolve `hqActive` and re-render if it moved. The swap is deliberately
+    /// NOT accompanied by clearing `displayImage`: the proxy stays on screen
+    /// until the full-resolution frame is ready, so crossing the threshold reads
+    /// as the picture sharpening rather than as a reload.
+    func refreshHQActive(debounced: Bool) {
+        hqSwapTask?.cancel()
+        let target = hqShouldBeActive
+        guard target != hqActive else { return }
+        // Dropping BACK to the proxy is instant (its tower is warm), so only
+        // the expensive direction waits out the gesture.
+        guard debounced, target else {
+            applyHQActive(target)
+            return
+        }
+        hqSwapTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(350))
+            guard !Task.isCancelled, let self else { return }
+            guard self.hqShouldBeActive != self.hqActive else { return }
+            self.applyHQActive(self.hqShouldBeActive)
+        }
+    }
+
+    /// Deliberately does NOT clear the test strip / zone placement: those states
+    /// force `hqShouldBeActive` false while they own the canvas, so clearing
+    /// them here would re-enable HQ and bounce straight back. Clearing on an
+    /// explicit mode change is `hqMode`'s job.
+    private func applyHQActive(_ value: Bool) {
+        guard hqActive != value else { return }
+        hqActive = value
+        scheduleRender()
     }
 
     /// Latest-wins render coalescing: one render in flight; a change during a
@@ -702,7 +848,7 @@ final class AppModel {
                     snapshot.fineRotation = 0
                 }
                 let uncropped = self.toolMode != .none
-                let hq = self.hqPreview
+                let hq = self.hqActive
                 let midStraightenDrag = self.straightenDragValue != nil
                 guard let session = self.session else { break }
                 do {
@@ -711,7 +857,9 @@ final class AppModel {
                     if await session.needsPreparation(settings: snapshot, hq: hq), !midStraightenDrag {
                         self.isAnalyzing = true
                     }
-                    let output = try await session.render(settings: snapshot, uncropped: uncropped, hq: hq)
+                    let output = try await session.render(
+                        settings: snapshot, uncropped: uncropped, hq: hq,
+                        retainHQ: self.hqMode != .off)
                     self.isAnalyzing = false
                     if Task.isCancelled { break }
                     self.frameSize = output.frameSize
@@ -834,9 +982,11 @@ final class AppModel {
         guard let session, selection != nil, toolMode == .none, !showingBaseline else { return }
         clearZonePlacement()  // strip and pins both own the canvas
         // The strip and its patch previews are proxy-renders by design
-        // (25 full-res renders would take ages); leaving HQ nominally on
-        // while its tier gets evicted underneath would lie — flip it off.
-        if hqPreview { hqPreview = false }
+        // (25 full-res renders would take ages). `hqShouldBeActive` already
+        // reports false while a strip owns the canvas; demote an explicit
+        // `.on` too, so the button can't read "always HQ" over a proxy strip.
+        if hqMode == .on { hqMode = .off }
+        refreshHQActive(debounced: false)
         let snapshot = settings
         testStripGeneration += 1
         let generation = testStripGeneration
@@ -856,11 +1006,15 @@ final class AppModel {
     }
 
     func clearTestStrip() {
+        let owned = testStrip != nil || testStripTask != nil
         testStripGeneration += 1
         testStripTask?.cancel()
         testStripTask = nil
         if testStripBuilding { testStripBuilding = false }
         if testStrip != nil { testStrip = nil }
+        // The strip suppressed HQ while it owned the canvas; releasing it may
+        // let `.auto` apply again at the current magnification.
+        if owned { refreshHQActive(debounced: false) }
     }
 
     /// Single click on a patch: render THAT look full-frame (the preview
@@ -941,9 +1095,10 @@ final class AppModel {
         guard selection != nil, toolMode == .none, !showingBaseline else { return }
         clearTestStrip()
         // Placement samples and previews on the proxy tower (like the test
-        // strip); leaving HQ nominally on would lie. Flip BEFORE creating the
-        // state — the HQ didSet clears zone placement.
-        if hqPreview { hqPreview = false }
+        // strip); leaving HQ nominally on would lie. Demote BEFORE creating the
+        // state — applyHQActive clears zone placement.
+        if hqMode == .on { hqMode = .off }
+        refreshHQActive(debounced: false)
         var state = zonePlacement ?? ZonePlacementState()
         state.armedZone = state.armedZone == zone ? nil : zone
         zonePlacement = state
@@ -1083,8 +1238,10 @@ final class AppModel {
     }
 
     func clearZonePlacement() {
+        let owned = zonePlacement != nil
         zonePlacementGeneration += 1
         if zonePlacement != nil { zonePlacement = nil }
+        if owned { refreshHQActive(debounced: false) }
     }
 
     // MARK: - Baseline (press-and-hold "before") preview

@@ -74,9 +74,19 @@ struct SwiftInvertApp: App {
                 // ⇧Z is handled by the window key monitor (a bare-letter
                 // menu equivalent would fire while typing in text fields).
                 Toggle("Zone Overlay", isOn: $showZoneOverlay)
-                Toggle("HQ Preview", isOn: Binding(
-                    get: { keyModel.hqPreview },
-                    set: { keyModel.hqPreview = $0 }))
+                Picker("HQ Preview", selection: Binding(
+                    get: { keyModel.hqMode },
+                    set: { keyModel.hqMode = $0 }))
+                {
+                    ForEach(AppModel.HQMode.allCases) { mode in
+                        Text(mode.label).tag(mode)
+                    }
+                }
+                .pickerStyle(.inline)
+                .disabled(keyModel.selection == nil)
+                // A picker can't carry a key equivalent, so ⇧⌘P cycles —
+                // matching what clicking the control-bar badge does.
+                Button("Cycle HQ Preview") { keyModel.hqMode = keyModel.hqMode.next }
                     .keyboardShortcut("p", modifiers: [.command, .shift])
                     .disabled(keyModel.selection == nil)
             }

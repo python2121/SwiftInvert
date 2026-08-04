@@ -84,10 +84,31 @@ NegPy 2a6cb22), `output_bps=16`,
 - **Preview path**: `half_size=1` + linear demosaic (`user_qual=0`) — except
   X-Trans sensors (`idata.filters == 9`), where half_size aliases the 6×6 CFA;
   they decode full and downsample. Preview is capped at 1536 px long edge —
-unless the HQ toggle (canvas control bar, `AppModel.hqPreview`,
-session-only) is on: then the display render runs on the cached
+unless HQ preview is engaged, when the display render runs on the cached
 full-resolution decode (`ImageSession.hqSourceTexture`; analysis stays on
-the proxy, matching export), freed by the first non-HQ render.
+the proxy, matching export).
+  **`AppModel.HQMode`** (canvas-bar badge cycles off → auto → on, ⇧⌘P, View
+  menu picker; session-only — a persisted `.on` would make every launch pay
+  full-res costs): **`.auto` is the default** and decodes nothing until the
+  canvas is magnified to `hqAutoZoomThreshold` (**2×**), then renders full
+  resolution in the background and swaps it in — the proxy stays on screen
+  meanwhile, so it reads as sharpening rather than a reload, and dropping
+  back below is instant off the warm proxy tower. `zoom == 1` is
+  fit-to-window, so a "proxy is out of real pixels" threshold would fire at
+  rest on any Retina display and make auto indistinguishable from on; 2×
+  keeps the trigger a property of the gesture, not the window size.
+  Resolution is the pure `HQMode.resolve` (tested without a pipeline):
+  suppressed with no selection and while the test strip or zone placement
+  owns the canvas (both are proxy-renders, and an HQ badge over them would
+  lie — this replaces the old boolean's explicit force-off); auto (not on)
+  is also suppressed in Crop & Straighten, which pins the canvas to fit
+  regardless of zoom. Baseline hold is deliberately NOT suppressed: a
+  compare must show both states at the same resolution. `render(retainHQ:)`
+  keeps the tier alive across proxy renders in auto/on so zooming out and
+  back doesn't re-pay the ~700 ms decode; it is freed on `.off`, and
+  `releaseHQ()` still strips it from every session the LRU isn't showing.
+  Zoom itself stays DetailView `@State` and is reported to
+  `AppModel.canvasZoom`, whose didSet acts only on a threshold CROSSING.
 - **Full path** (export): LibRaw default (best) demosaic, full resolution.
 - EXIF orientation baked in Swift afterwards (`applyingFlip`, dcraw codes:
   3=180°, 5=90°CCW, 6=90°CW). C struct's flexible array member must be read
@@ -569,7 +590,9 @@ values where needed):
   group — the ⌘Z shortcuts live HERE, not on HistoryPanel's buttons),
   Copy/Paste Adjustments ⇧⌘C/⇧⌘V (geometry never pasted), Reset All ⌥⌘R;
   View = Show Library ⇧⌘L / Show Grid Lines ⇧⌘G / Zone Overlay (⇧Z via the
-  key monitor) / HQ Preview ⇧⌘P
+  key monitor) / HQ Preview (inline 3-way picker — a Picker can't carry a key
+  equivalent, so a sibling "Cycle HQ Preview" item owns ⇧⌘P and cycles like
+  the badge)
   (@AppStorage keys shared with the in-window controls); Image =
   Previous/Next Image ←/→ / Rotate Left/Right ⌘[/⌘] / Flip ⇧⌘H /
   Crop ⌘K / Crop for Analysis ⇧⌘K + clear items (tool toggles checkmark

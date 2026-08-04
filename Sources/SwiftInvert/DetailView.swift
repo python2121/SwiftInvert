@@ -121,22 +121,20 @@ struct DetailView: View {
                 }
                 .help("Flip horizontally")
                 Button {
-                    model.hqPreview.toggle()
+                    model.hqMode = model.hqMode.next
                 } label: {
                     Text("HQ")
                         .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(HQBadge.foreground(model.hqMode))
                         .padding(.horizontal, 5)
                         .padding(.vertical, 2)
                         .background(
-                            RoundedRectangle(cornerRadius: 4)
-                                .fill(model.hqPreview ? Color.accentColor.opacity(0.3) : Color.primary.opacity(0.06)))
+                            RoundedRectangle(cornerRadius: 4).fill(HQBadge.fill(model.hqMode)))
                         .overlay(
                             RoundedRectangle(cornerRadius: 4)
-                                .strokeBorder(
-                                    model.hqPreview ? Color.accentColor : Color.secondary.opacity(0.4),
-                                    lineWidth: 1))
+                                .strokeBorder(HQBadge.stroke(model.hqMode), lineWidth: 1))
                 }
-                .help("Preview at full source resolution (slower); off = 1536px proxy")
+                .help(HQBadge.help(model.hqMode))
                 Button {
                     showZoneOverlay.toggle()
                 } label: {
@@ -365,7 +363,18 @@ struct DetailView: View {
             .onTapGesture(count: 2) {
                 withAnimation(.easeOut(duration: 0.15)) { resetZoom() }
             }
-            .onChange(of: model.selection) { _, _ in cropBox = nil }
+            // The gesture state stays view-local; the model only needs the
+            // magnification so `.auto` HQ can follow it. onChange (rather than
+            // reporting from each gesture) catches double-tap reset and the
+            // tool-mode resets too.
+            .onChange(of: zoom) { _, value in model.canvasZoom = value }
+            .onChange(of: model.selection) { _, _ in
+                cropBox = nil
+                // A new frame starts fitted; without this the model would keep
+                // the previous frame's magnification and could decode HQ for a
+                // picture that is on screen at fit.
+                resetZoom()
+            }
             .onChange(of: model.toolMode) { old, new in
                 if old == .crop {
                     if model.cropModeCancelled {
@@ -478,6 +487,47 @@ struct DetailView: View {
                     }
                     .onEnded { _ in basePan = pan }
             )
+    }
+}
+
+/// Three-state HQ badge styling: off is the neutral chip every other control
+/// bar toggle uses, Auto a light blue, On a saturated one — so the two "HQ is
+/// available" states read as the same family at a glance while still being
+/// distinguishable, and Off can't be mistaken for either.
+enum HQBadge {
+    static func fill(_ mode: AppModel.HQMode) -> Color {
+        switch mode {
+        case .off: return Color.primary.opacity(0.06)
+        case .auto: return Color.accentColor.opacity(0.18)
+        case .on: return Color.accentColor.opacity(0.85)
+        }
+    }
+
+    static func stroke(_ mode: AppModel.HQMode) -> Color {
+        switch mode {
+        case .off: return Color.secondary.opacity(0.4)
+        case .auto: return Color.accentColor.opacity(0.55)
+        case .on: return Color.accentColor
+        }
+    }
+
+    static func foreground(_ mode: AppModel.HQMode) -> Color {
+        // The filled chip needs a light label to stay legible.
+        mode == .on ? Color.white : Color.primary
+    }
+
+    static func help(_ mode: AppModel.HQMode) -> String {
+        let threshold = Int(AppModel.hqAutoZoomThreshold)
+        switch mode {
+        case .off:
+            return "HQ preview: Off — always the 1536px proxy. Click for Auto (⇧⌘P)."
+        case .auto:
+            return
+                "HQ preview: Auto — full resolution once zoomed past \(threshold)×, "
+                + "rendered in the background and swapped in. Click for On (⇧⌘P)."
+        case .on:
+            return "HQ preview: On — always full resolution (slower). Click for Off (⇧⌘P)."
+        }
     }
 }
 
