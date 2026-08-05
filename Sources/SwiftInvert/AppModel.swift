@@ -161,6 +161,7 @@ final class AppModel {
                 let base = straightenBase, base.settings == zeroed {
                 displayImage = base.output.image
                 histogram = base.output.histogram
+                displayAspect = base.output.displayAspect
                 displayedFineRotation = 0
             } else {
                 scheduleRender()
@@ -199,6 +200,9 @@ final class AppModel {
     /// Unrotated (orientation-only) frame dims of the current image, from the
     /// last render — the base for CropGeometry's rotated-space math.
     var frameSize: CGSize = .zero
+    /// Aspect the canvas lays out at — resolution-independent, so swapping the
+    /// HQ tier in cannot nudge the picture. See `ImageSession.RenderOutput`.
+    var displayAspect: Double = 0
     /// Measured pre-offset density range of the current negative, from the last
     /// render — input to the Negative-character read-out beside the Grade
     /// slider. 0 until the first render lands.
@@ -863,6 +867,7 @@ final class AppModel {
                     self.isAnalyzing = false
                     if Task.isCancelled { break }
                     self.frameSize = output.frameSize
+                    self.displayAspect = output.displayAspect
                     self.densityRange = output.densityRange
                     if midStraightenDrag {
                         // Cache-miss fallback: the 0° re-base swaps bitmap,

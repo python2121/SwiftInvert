@@ -211,8 +211,16 @@ struct DetailView: View {
     @ViewBuilder
     private func imageCanvas(_ image: CGImage) -> some View {
         GeometryReader { geo in
+            // Lay out from the render's resolution-INDEPENDENT aspect, not the
+            // bitmap's pixel count: the proxy and the HQ tier round the crop
+            // and the straighten inscribed-rect on different pixel grids, and
+            // laying out from the bitmap made the picture nudge when HQ swapped
+            // in (magnified by scaleEffect, so worst exactly when it happens).
             let fitted = fittedRect(
-                imageSize: CGSize(width: image.width, height: image.height), in: geo.size)
+                imageSize: model.displayAspect > 0
+                    ? CGSize(width: model.displayAspect, height: 1)
+                    : CGSize(width: image.width, height: image.height),
+                in: geo.size)
             // Straighten preview state (see the Image below): target angle,
             // its delta from the baked angle, and — for 0°-base previews —
             // the inscribed-rect clip window replacing the plain fitted frame.

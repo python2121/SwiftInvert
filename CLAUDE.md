@@ -109,6 +109,19 @@ the proxy, matching export).
   `releaseHQ()` still strips it from every session the LRU isn't showing.
   Zoom itself stays DetailView `@State` and is reported to
   `AppModel.canvasZoom`, whose didSet acts only on a threshold CROSSING.
+  **Tier-swap stability** (the two tiers must not move the picture): the
+  canvas lays out from `RenderOutput.displayAspect`
+  (`CropGeometry.displayAspect`, continuous frame → inscribed → crop, never
+  a pixel count) because `pixelROI` truncates and `fineRotated` floors on
+  each tier's own grid, giving aspects up to 0.2% apart; and
+  `hqSourceTexture` crops to the window the PROXY resolved
+  (`proxyAnchoredROI` + `RGBImage.cropped(toPixels:)`) instead of
+  re-truncating the normalized rect at 6024px, which otherwise selected a
+  different part of the picture — up to ~6 pt of content shift at 4× zoom,
+  the bulk of the visible jump. `scaleEffect` multiplies both errors by the
+  zoom, i.e. worst exactly when the swap fires. `DisplayAspectTests` pins
+  both, including a case asserting the old bitmap-derived layout really did
+  disagree (so the tier-equality test can't go vacuous).
 - **Full path** (export): LibRaw default (best) demosaic, full resolution.
 - EXIF orientation baked in Swift afterwards (`applyingFlip`, dcraw codes:
   3=180°, 5=90°CCW, 6=90°CW). C struct's flexible array member must be read

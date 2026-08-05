@@ -25,6 +25,33 @@ public enum CropGeometry {
         return SIMD2(r.width, r.height)
     }
 
+    /// Width÷height the canvas should LAY OUT the render at, in continuous
+    /// space: the orientation-only frame, through the straighten inscribed
+    /// rect, through the crop — nothing rounded to a pixel grid.
+    ///
+    /// The rendered bitmap's own pixel ratio can't serve this. `pixelROI`
+    /// truncates the crop to whole pixels and `fineRotated` floors the
+    /// inscribed rect, so the same settings produce aspects that differ by up
+    /// to ~0.2% between the 1536px proxy and the full-resolution tier. Laying
+    /// out from the bitmap therefore nudged the picture whenever HQ swapped in
+    /// — and the canvas `scaleEffect` multiplies that error by the zoom, which
+    /// is precisely when the swap happens. Both tiers describe the SAME
+    /// continuous rectangle; lay out from that and let the bitmap fill it.
+    ///
+    /// `frame` is the orientation-only (90° steps + flip) size. Pass
+    /// `crop: nil` for the uncropped presentations the tools use.
+    public static func displayAspect(
+        frame: SIMD2<Double>, radians: Double, crop: NormalizedRect?
+    ) -> Double {
+        var size = inscribedSize(frame: frame, radians: radians)
+        if let crop {
+            size.x *= crop.width
+            size.y *= crop.height
+        }
+        guard size.x > 0, size.y > 0, frame.y > 0 else { return max(frame.x / max(frame.y, 1), 1e-6) }
+        return size.x / size.y
+    }
+
     /// Does the axis-aligned box lie inside the θ-rotated frame?
     public static func boxFits(
         center: SIMD2<Double>, halfExtents: SIMD2<Double>, radians: Double,

@@ -31,6 +31,26 @@ actor ImageSession {
         settings.analysisRect != nil ? settings.analysisRectFineRotation : 0
     }
 
+    /// The displayed rectangle's width÷height in CONTINUOUS space: the
+    /// orientation-only frame, through the straighten inscribed-rect, through
+    /// the crop — none of it rounded to a pixel grid. `orientedFrameSize` reads
+    /// the proxy's dims in both tiers, so this is identical for the proxy and
+    /// the full-resolution render by construction. See `RenderOutput`.
+    ///
+    /// The conditions must mirror `oriented`/`sourceTexture` exactly, or the
+    /// layout would describe a rectangle the render didn't produce.
+    private func displayAspect(_ settings: ExposureSettings, uncropped: Bool) -> Double {
+        let base = orientedFrameSize(settings)
+        // `oriented` applies the fine rotation only past this threshold — the
+        // conditions here must mirror it and `sourceTexture` exactly, or the
+        // layout would describe a rectangle the render didn't produce.
+        let radians = abs(settings.fineRotation) > 0.005 ? settings.fineRotation * .pi / 180 : 0
+        return CropGeometry.displayAspect(
+            frame: SIMD2(Double(base.width), Double(base.height)),
+            radians: radians,
+            crop: uncropped ? nil : settings.cropRect)
+    }
+
     /// Unrotated (orientation-only) frame dims — meterPreview can itself be
     /// rotated when an analysis region pins an angle, so derive from the
     /// decode dims + the 90° step instead.
@@ -81,6 +101,19 @@ actor ImageSession {
         /// Unrotated (orientation-only) frame dimensions in pixels — the
         /// coordinate base for CropGeometry's rotated-space math.
         let frameSize: CGSize
+        /// Width÷height the canvas should LAY OUT at, computed in continuous
+        /// space rather than read off `image.width/height`.
+        ///
+        /// The bitmap's own pixel ratio is resolution-dependent: `pixelROI`
+        /// truncates the crop to whole pixels and `fineRotated` floors the
+        /// inscribed rect, so the 1536px proxy and the full-resolution tier
+        /// land on aspects that differ by up to ~0.2%. Laying out from the
+        /// bitmap made the picture jump when HQ swapped in — and `scaleEffect`
+        /// multiplies that error by the zoom, which is exactly when the swap
+        /// happens. Both tiers describe the same continuous rectangle, so lay
+        /// out from THAT and let the bitmap fill it (the ≤0.2% difference
+        /// between a tier's true ratio and the ideal is sub-pixel).
+        let displayAspect: Double
         /// Pre-offset luminance density range of the negative (NegPy's
         /// `norm_density_range`) — the Negative-character diagnostic's input.
         /// Carried on the render because the analysis lives in the actor.
@@ -183,10 +216,41 @@ actor ImageSession {
         }
         let crop = settings.cropRect!
         if hqCroppedTexture == nil || hqCroppedRect != crop {
-            hqCroppedTexture = try pipeline.upload(hqOriented!.cropped(to: crop))
+            // Crop to the window the PROXY resolved, not to an independently
+            // truncated one. `pixelROI` floors to whole pixels, and the two
+            // tiers have different grids: at 1536 px a boundary lands on
+            // multiples of 0.065%, at 6024 px on multiples of 0.017%, so the
+            // same normalized rect selects visibly different windows. That —
+            // not the aspect — is the bulk of the shift you saw when HQ swapped
+            // in, up to ~6 pt of CONTENT movement at 4× zoom.
+            //
+            // Re-deriving the HQ window from the proxy's leaves only HQ's own
+            // half-pixel of rounding (≈8e-5 of frame width), which is sub-pixel
+            // in the source.
+            let source = hqOriented!
+            let anchored = proxyAnchoredROI(crop: crop, in: source)
+            hqCroppedTexture = try pipeline.upload(anchored ?? source.cropped(to: crop))
             hqCroppedRect = crop
         }
         return hqCroppedTexture!
+    }
+
+    /// The crop window the proxy tier resolved, re-expressed on the
+    /// full-resolution grid so both tiers show the SAME part of the picture.
+    /// Returns nil when the proxy geometry isn't available or the rect is
+    /// degenerate, in which case the caller falls back to a plain crop.
+    private func proxyAnchoredROI(crop: NormalizedRect, in source: RGBImage) -> RGBImage? {
+        guard let proxy = preview,
+            let roi = crop.pixelROI(width: proxy.width, height: proxy.height)
+        else { return nil }
+        let sx = Double(source.width) / Double(proxy.width)
+        let sy = Double(source.height) / Double(proxy.height)
+        let x0 = min(max(Int((Double(roi.x0) * sx).rounded()), 0), source.width - 1)
+        let y0 = min(max(Int((Double(roi.y0) * sy).rounded()), 0), source.height - 1)
+        let x1 = min(max(Int((Double(roi.x1) * sx).rounded()), x0 + 1), source.width)
+        let y1 = min(max(Int((Double(roi.y1) * sy).rounded()), y0 + 1), source.height)
+        guard x1 - x0 >= 2, y1 - y0 >= 2 else { return nil }
+        return source.cropped(toPixels: (x0: x0, y0: y0, x1: x1, y1: y1))
     }
 
     private func clearHQ() {
@@ -353,6 +417,7 @@ actor ImageSession {
         else { throw RenderError.resource("CGImage conversion") }
         return RenderOutput(
             image: cg, histogram: result.histogram, frameSize: orientedFrameSize(settings),
+            displayAspect: displayAspect(settings, uncropped: false),
             densityRange: analysis.baseBounds.luminanceDensityRange)
     }
 
@@ -382,6 +447,7 @@ actor ImageSession {
         else { throw RenderError.resource("CGImage conversion") }
         return RenderOutput(
             image: cg, histogram: result.histogram, frameSize: orientedFrameSize(settings),
+            displayAspect: displayAspect(settings, uncropped: uncropped),
             densityRange: analysis.baseBounds.luminanceDensityRange)
     }
 
