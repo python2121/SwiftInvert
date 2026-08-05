@@ -52,6 +52,49 @@ public enum CropGeometry {
         return size.x / size.y
     }
 
+    /// Where a rendered bitmap actually lands inside the ideal display
+    /// rectangle, in units of that rectangle — nominally (0, 0, 1, 1), off it
+    /// by a fraction of a pixel.
+    ///
+    /// Two stages quantize, and they quantize differently at every resolution:
+    /// `fineRotated` FLOORS the inscribed rect (the bitmap covers slightly less
+    /// than ideal, centred), and the crop `pixelROI` floors onto that bitmap's
+    /// grid. So a 1536px proxy and a 6024px full-res render of the same
+    /// settings cover slightly different windows and can't both fill one rect
+    /// without disagreeing — about half a full-res pixel, ~1 pt of visible
+    /// slide at 4× zoom. Placing each bitmap at the window it really covers
+    /// removes the disagreement exactly, because both then resolve to the same
+    /// affine map from frame coordinates to screen.
+    ///
+    /// `orientedPixels` is the fine-rotated bitmap's size; `roi` its crop
+    /// window in that bitmap's pixels (nil = uncropped), as (x0, y0, x1, y1).
+    public static func contentWindow(
+        frame: SIMD2<Double>, radians: Double, crop: NormalizedRect?,
+        orientedPixels: SIMD2<Double>, roi: SIMD4<Double>?
+    ) -> NormalizedRect {
+        let inscribed = inscribedSize(frame: frame, radians: radians)
+        guard inscribed.x > 0, inscribed.y > 0, orientedPixels.x > 0, orientedPixels.y > 0 else {
+            return NormalizedRect(x: 0, y: 0, width: 1, height: 1)
+        }
+        // Stage 1, in units of the ideal inscribed rect.
+        var origin = SIMD2(
+            (1 - orientedPixels.x / inscribed.x) / 2, (1 - orientedPixels.y / inscribed.y) / 2)
+        var size = SIMD2(orientedPixels.x / inscribed.x, orientedPixels.y / inscribed.y)
+        // Stage 2: fold in the crop ROI, then re-express in units of the ideal
+        // CROPPED rect — which is what the canvas fits.
+        if let crop, let roi, crop.width > 0, crop.height > 0 {
+            origin.x += size.x * (roi.x / orientedPixels.x)
+            origin.y += size.y * (roi.y / orientedPixels.y)
+            size.x *= (roi.z - roi.x) / orientedPixels.x
+            size.y *= (roi.w - roi.y) / orientedPixels.y
+            origin.x = (origin.x - crop.x) / crop.width
+            origin.y = (origin.y - crop.y) / crop.height
+            size.x /= crop.width
+            size.y /= crop.height
+        }
+        return NormalizedRect(x: origin.x, y: origin.y, width: size.x, height: size.y)
+    }
+
     /// Does the axis-aligned box lie inside the θ-rotated frame?
     public static func boxFits(
         center: SIMD2<Double>, halfExtents: SIMD2<Double>, radians: Double,

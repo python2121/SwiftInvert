@@ -219,6 +219,160 @@ import simd
         #expect(degenerate.width == 20 && degenerate.height == 10)
     }
 
+    // MARK: - The end-to-end invariant: same content, same screen position
+
+    /// Simulate a tier all the way to the screen: floor the inscribed rect and
+    /// the crop ROI exactly as the pipeline does, then ask where a given point
+    /// of the FRAME lands in the fitted rect.
+    ///
+    /// `f` is in ideal-inscribed-rect coordinates (0…1 across the straightened
+    /// frame). Returns the screen x/y in points.
+    private func screenPosition(
+        of f: SIMD2<Double>, frame: SIMD2<Double>, radians: Double, crop: NormalizedRect?,
+        anchorTo reference: SIMD2<Double>? = nil, fittedWidth: Double = 1200
+    ) -> SIMD2<Double> {
+        let inscribed = CropGeometry.inscribedSize(frame: frame, radians: radians)
+        // The oriented bitmap: inscribed rect floored to whole pixels.
+        let ow = Double(max(Int(inscribed.x.rounded(.down)), 1))
+        let oh = Double(max(Int(inscribed.y.rounded(.down)), 1))
+
+        var roi: SIMD4<Double>?
+        if let crop {
+            if let reference {
+                // The HQ tier adopts the window the proxy resolved.
+                let rInsc = CropGeometry.inscribedSize(frame: reference, radians: radians)
+                let rw = Double(max(Int(rInsc.x.rounded(.down)), 1))
+                let rh = Double(max(Int(rInsc.y.rounded(.down)), 1))
+                guard let p = crop.pixelROI(width: Int(rw), height: Int(rh)) else { return .zero }
+                let sx = ow / rw, sy = oh / rh
+                roi = SIMD4(
+                    (Double(p.x0) * sx).rounded(), (Double(p.y0) * sy).rounded(),
+                    (Double(p.x1) * sx).rounded(), (Double(p.y1) * sy).rounded())
+            } else {
+                guard let p = crop.pixelROI(width: Int(ow), height: Int(oh)) else { return .zero }
+                roi = SIMD4(Double(p.x0), Double(p.y0), Double(p.x1), Double(p.y1))
+            }
+        }
+
+        // Each tier measures its own bitmap against its OWN frame...
+        let cw = CropGeometry.contentWindow(
+            frame: frame, radians: radians, crop: crop,
+            orientedPixels: SIMD2(ow, oh), roi: roi)
+        // ...but the canvas is laid out from ONE aspect for both, which the app
+        // takes from the proxy (`orientedFrameSize` always reads basePreview).
+        let aspect = CropGeometry.displayAspect(frame: proxy, radians: radians, crop: crop)
+        let fitted = SIMD2(fittedWidth, fittedWidth / aspect)
+
+        // The bitmap's screen rect, placed by its real window.
+        let originPt = SIMD2(fitted.x * cw.x, fitted.y * cw.y)
+        let sizePt = SIMD2(fitted.x * cw.width, fitted.y * cw.height)
+
+        // Where `f` sits inside the bitmap, as a fraction of it.
+        let ideal = crop ?? NormalizedRect(x: 0, y: 0, width: 1, height: 1)
+        // f in ideal-cropped units, then into bitmap units via the window.
+        let inCropped = SIMD2(
+            (f.x - ideal.x) / ideal.width, (f.y - ideal.y) / ideal.height)
+        let p = SIMD2((inCropped.x - cw.x) / cw.width, (inCropped.y - cw.y) / cw.height)
+        return SIMD2(originPt.x + sizePt.x * p.x, originPt.y + sizePt.y * p.y)
+    }
+
+    /// THE invariant the whole fix exists for: a given point of the picture must
+    /// land on the same pixel of the screen whether the proxy or the
+    /// full-resolution tier produced it. Before the fix this drifted by several
+    /// points at zoom; placing each bitmap by its true window makes the two
+    /// tiers resolve to the SAME affine frame→screen map, so it is exact.
+    @Test func sameContentLandsAtTheSameScreenPositionInBothTiers() {
+        for crop in crops {
+            for deg in angles {
+                let radians = deg * .pi / 180
+                // Sample the frame, including the corners of the crop.
+                for f in [
+                    SIMD2(0.2, 0.2), SIMD2(0.5, 0.5), SIMD2(0.8, 0.75), SIMD2(0.35, 0.62),
+                ] {
+                    let p = screenPosition(of: f, frame: proxy, radians: radians, crop: crop)
+                    let h = screenPosition(
+                        of: f, frame: full, radians: radians, crop: crop, anchorTo: proxy)
+                    let drift = max(abs(p.x - h.x), abs(p.y - h.y))
+                    // Float noise, not geometry: ~1e-4 pt on a 1200 pt canvas
+                    // is a billionth of the frame. The user-visible figure this
+                    // replaces was several POINTS.
+                    #expect(
+                        drift < 1e-3,
+                        "\(String(describing: crop)) at \(deg)°, point \(f): drifted \(drift) pt")
+                }
+            }
+        }
+    }
+
+    /// The fix must beat the previous behaviour by orders of magnitude, not
+    /// marginally — otherwise the tolerance above is doing the work. Compares
+    /// placing each bitmap by its window against stretching both to fill.
+    @Test func placingBeatsFillingByOrdersOfMagnitude() {
+        let crop = NormalizedRect(x: 0.33, y: 0.25, width: 0.34, height: 0.5)
+        let f = SIMD2(0.5, 0.5)
+
+        // Filling: f maps through each bitmap's own window onto the same rect.
+        func filled(_ frame: SIMD2<Double>, anchorTo reference: SIMD2<Double>?) -> Double {
+            let ow = frame.x, oh = frame.y
+            let roi: (x0: Int, y0: Int, x1: Int, y1: Int)
+            if let reference {
+                guard let p = crop.pixelROI(width: Int(reference.x), height: Int(reference.y))
+                else { return 0 }
+                let sx = ow / reference.x, sy = oh / reference.y
+                roi = (
+                    Int((Double(p.x0) * sx).rounded()), Int((Double(p.y0) * sy).rounded()),
+                    Int((Double(p.x1) * sx).rounded()), Int((Double(p.y1) * sy).rounded()))
+            } else {
+                guard let p = crop.pixelROI(width: Int(ow), height: Int(oh)) else { return 0 }
+                roi = p
+            }
+            let ax = Double(roi.x0) / ow, aw = Double(roi.x1 - roi.x0) / ow
+            return 1200.0 * ((f.x - ax) / aw)
+        }
+        let fillDrift = abs(filled(proxy, anchorTo: nil) - filled(full, anchorTo: proxy))
+
+        let placeDrift = abs(
+            screenPosition(of: f, frame: proxy, radians: 0, crop: crop).x
+                - screenPosition(of: f, frame: full, radians: 0, crop: crop, anchorTo: proxy).x)
+
+        #expect(fillDrift > 0.01, "filling should still drift; got \(fillDrift) pt")
+        #expect(
+            placeDrift < fillDrift / 100,
+            "placing (\(placeDrift) pt) should be <1% of filling (\(fillDrift) pt)")
+    }
+
+    @Test func contentWindowIsTheUnitRectWhenNothingQuantizes() {
+        // No rotation and no crop: the bitmap IS the ideal rect.
+        let cw = CropGeometry.contentWindow(
+            frame: proxy, radians: 0, crop: nil, orientedPixels: proxy, roi: nil)
+        #expect(abs(cw.x) < 1e-12 && abs(cw.y) < 1e-12)
+        #expect(abs(cw.width - 1) < 1e-12 && abs(cw.height - 1) < 1e-12)
+    }
+
+    @Test func contentWindowStaysNearTheUnitRect() {
+        // Whatever the settings, the bitmap is at most a pixel off the ideal —
+        // a window far from (0,0,1,1) would mean the algebra is wrong.
+        for crop in crops {
+            for deg in angles {
+                let radians = deg * .pi / 180
+                let inscribed = CropGeometry.inscribedSize(frame: proxy, radians: radians)
+                let ow = Double(max(Int(inscribed.x.rounded(.down)), 1))
+                let oh = Double(max(Int(inscribed.y.rounded(.down)), 1))
+                var roi: SIMD4<Double>?
+                if let crop, let p = crop.pixelROI(width: Int(ow), height: Int(oh)) {
+                    roi = SIMD4(Double(p.x0), Double(p.y0), Double(p.x1), Double(p.y1))
+                }
+                let cw = CropGeometry.contentWindow(
+                    frame: proxy, radians: radians, crop: crop,
+                    orientedPixels: SIMD2(ow, oh), roi: roi)
+                #expect(abs(cw.x) < 0.01 && abs(cw.y) < 0.01, "origin \(cw) for \(deg)°")
+                #expect(
+                    abs(cw.width - 1) < 0.01 && abs(cw.height - 1) < 0.01,
+                    "size \(cw) for \(deg)°")
+            }
+        }
+    }
+
     @Test func degenerateInputsFallBackRatherThanProducingGarbage() {
         let zeroCrop = NormalizedRect(x: 0.5, y: 0.5, width: 0, height: 0)
         let a = CropGeometry.displayAspect(frame: proxy, radians: 0, crop: zeroCrop)

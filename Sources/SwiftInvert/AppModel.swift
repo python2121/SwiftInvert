@@ -162,6 +162,7 @@ final class AppModel {
                 displayImage = base.output.image
                 histogram = base.output.histogram
                 displayAspect = base.output.displayAspect
+                contentWindow = base.output.contentWindow
                 displayedFineRotation = 0
             } else {
                 scheduleRender()
@@ -203,6 +204,9 @@ final class AppModel {
     /// Aspect the canvas lays out at — resolution-independent, so swapping the
     /// HQ tier in cannot nudge the picture. See `ImageSession.RenderOutput`.
     var displayAspect: Double = 0
+    /// Where the current bitmap sits inside that laid-out rect (nominally the
+    /// unit rect, off it by a fraction of a pixel). See `ImageSession.contentWindow`.
+    var contentWindow = NormalizedRect(x: 0, y: 0, width: 1, height: 1)
     /// Measured pre-offset density range of the current negative, from the last
     /// render — input to the Negative-character read-out beside the Grade
     /// slider. 0 until the first render lands.
@@ -868,6 +872,7 @@ final class AppModel {
                     if Task.isCancelled { break }
                     self.frameSize = output.frameSize
                     self.displayAspect = output.displayAspect
+                    self.contentWindow = output.contentWindow
                     self.densityRange = output.densityRange
                     if midStraightenDrag {
                         // Cache-miss fallback: the 0° re-base swaps bitmap,

@@ -258,6 +258,19 @@ struct DetailView: View {
                     : fitted)
             let cropScale = window.width / bbox.width
             let frameScale = window.width / CGFloat(inscribed.width)
+            // Plain presentation: place the bitmap at the window it ACTUALLY
+            // covers instead of stretching it to fill `window`. The crop ROI
+            // and the straighten inscribed rect are both pixel-aligned, and the
+            // proxy and full-resolution grids can't align on the same
+            // boundaries — so "fill the rect" makes the two tiers disagree by
+            // up to half a full-res pixel, which is ~1 pt of slide at 4× zoom.
+            // Positioning by the real window removes it exactly.
+            let cw = model.contentWindow
+            let contentSize = CGSize(
+                width: window.width * CGFloat(cw.width), height: window.height * CGFloat(cw.height))
+            let contentOffset = CGSize(
+                width: window.width * CGFloat(cw.x + cw.width / 2 - 0.5),
+                height: window.height * CGFloat(cw.y + cw.height / 2 - 0.5))
             let imageFrame: CGSize? =
                 cropMode
                 ? CGSize(width: framePx.x * cropScale, height: framePx.y * cropScale)
@@ -265,7 +278,7 @@ struct DetailView: View {
                     ? CGSize(
                         width: CGFloat(image.width) * frameScale,
                         height: CGFloat(image.height) * frameScale)
-                    : nil)
+                    : contentSize)
             ZStack {
                 ZStack {
                     // Straighten preview: the display rotates by the difference
@@ -285,6 +298,10 @@ struct DetailView: View {
                         .resizable()
                         .interpolation(.high)
                         .frame(width: imageFrame?.width, height: imageFrame?.height)
+                        // Sub-pixel nudge so the bitmap's real window lands
+                        // where the ideal rect says it should (plain path only;
+                        // the tool/straighten presentations centre by design).
+                        .offset(cropMode || zeroBase ? .zero : contentOffset)
                         // Above the frame, below the transforms: local coords
                         // here span the displayed bitmap exactly, and SwiftUI
                         // inverse-maps the enclosing zoom/pan itself — so the
@@ -296,7 +313,11 @@ struct DetailView: View {
                                 densitometer.clear()
                                 return
                             }
-                            densitometer.probe(u: p.x / window.width, v: p.y / window.height)
+                            // Normalize by the bitmap's own frame — `.local`
+                            // spans the Image, which is now `contentSize` and
+                            // no longer exactly `window`.
+                            let span = imageFrame ?? window.size
+                            densitometer.probe(u: p.x / span.width, v: p.y / span.height)
                         }
                         .rotationEffect(.degrees(cropMode || zeroBase ? target : delta))
                         .scaleEffect(

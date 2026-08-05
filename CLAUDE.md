@@ -109,19 +109,31 @@ the proxy, matching export).
   `releaseHQ()` still strips it from every session the LRU isn't showing.
   Zoom itself stays DetailView `@State` and is reported to
   `AppModel.canvasZoom`, whose didSet acts only on a threshold CROSSING.
-  **Tier-swap stability** (the two tiers must not move the picture): the
-  canvas lays out from `RenderOutput.displayAspect`
-  (`CropGeometry.displayAspect`, continuous frame → inscribed → crop, never
-  a pixel count) because `pixelROI` truncates and `fineRotated` floors on
-  each tier's own grid, giving aspects up to 0.2% apart; and
-  `hqSourceTexture` crops to the window the PROXY resolved
-  (`proxyAnchoredROI` + `RGBImage.cropped(toPixels:)`) instead of
-  re-truncating the normalized rect at 6024px, which otherwise selected a
-  different part of the picture — up to ~6 pt of content shift at 4× zoom,
-  the bulk of the visible jump. `scaleEffect` multiplies both errors by the
-  zoom, i.e. worst exactly when the swap fires. `DisplayAspectTests` pins
-  both, including a case asserting the old bitmap-derived layout really did
-  disagree (so the tier-equality test can't go vacuous).
+  **Tier-swap stability** — the two tiers must put the same content on the
+  same pixel, or the picture nudges when HQ arrives (and `scaleEffect`
+  multiplies any error by the zoom, i.e. worst exactly when the swap fires).
+  `pixelROI` truncates and `fineRotated` floors on each tier's own grid, so
+  a 1536px and a 6024px render of one setting genuinely cover different
+  windows. Three layers, all in `CropGeometry` + `DisplayAspectTests`:
+  1. **Lay out from `RenderOutput.displayAspect`** (`CropGeometry
+     .displayAspect`: continuous frame → inscribed → crop, never a pixel
+     count) — bitmap ratios differ up to 0.2% between tiers.
+  2. **`hqSourceTexture` crops to the window the PROXY resolved**
+     (`proxyAnchoredROI` + `RGBImage.cropped(toPixels:)`) rather than
+     re-truncating at 6024px, which selected a different part of the
+     picture — ~6 pt of content shift at 4× zoom, the bulk of the jump.
+  3. **Place each bitmap at the window it really covers**
+     (`RenderOutput.contentWindow` → DetailView's `contentSize`/
+     `contentOffset`), instead of stretching both to fill. Anchoring alone
+     still left half a full-res pixel (~1 pt at 4×) — the floor for
+     pixel-aligned cropping. Positioning removes it exactly: both tiers
+     resolve to the same affine frame→screen map. **`contentWindow` must
+     measure a tier's bitmap against ITS OWN frame** (`orientedFrameSize(of:)`)
+     — using the proxy's frame for the HQ bitmap yields a window ~3.9× the
+     ideal rect. The probe normalizes by the image's frame, not `window`.
+  `DisplayAspectTests` pins tier-equality of the final screen position, and
+  deliberately keeps cases asserting the OLD behaviours really did drift, so
+  the equality tests can't go vacuous.
 - **Full path** (export): LibRaw default (best) demosaic, full resolution.
 - EXIF orientation baked in Swift afterwards (`applyingFlip`, dcraw codes:
   3=180°, 5=90°CCW, 6=90°CW). C struct's flexible array member must be read

@@ -31,14 +31,38 @@ actor ImageSession {
         settings.analysisRect != nil ? settings.analysisRectFineRotation : 0
     }
 
+    /// Where the produced bitmap actually sits inside the IDEAL display
+    /// rectangle, in units of that rectangle — nominally (0, 0, 1, 1), and off
+    /// it by well under a pixel.
+    ///
+    /// Two stages quantize, and they quantize differently per tier:
+    /// `fineRotated` FLOORS the inscribed rect (so the bitmap covers slightly
+    /// less than the ideal, centered), and the crop `pixelROI` floors onto that
+    /// bitmap's grid. Anchoring the HQ window to the proxy's got the two tiers
+    /// to within half a full-resolution pixel of each other, but half a pixel
+    /// is still ~1 pt of visible slide at 4× zoom — pixel-aligned cropping
+    /// cannot do better. So stop pretending each bitmap fills the ideal rect:
+    /// report where it really lands and let the canvas place it there. Both
+    /// tiers then put the same content at the same point to float precision.
+    private func contentWindow(
+        _ settings: ExposureSettings, uncropped: Bool, tierBase: RGBImage, oriented: RGBImage,
+        roi: (x0: Int, y0: Int, x1: Int, y1: Int)?
+    ) -> NormalizedRect {
+        let base = orientedFrameSize(of: tierBase, settings)
+        let radians = abs(settings.fineRotation) > 0.005 ? settings.fineRotation * .pi / 180 : 0
+        return CropGeometry.contentWindow(
+            frame: SIMD2(Double(base.width), Double(base.height)),
+            radians: radians,
+            crop: uncropped ? nil : settings.cropRect,
+            orientedPixels: SIMD2(Double(oriented.width), Double(oriented.height)),
+            roi: roi.map { SIMD4(Double($0.x0), Double($0.y0), Double($0.x1), Double($0.y1)) })
+    }
+
     /// The displayed rectangle's width÷height in CONTINUOUS space: the
-    /// orientation-only frame, through the straighten inscribed-rect, through
+    /// orientation-only frame, through the straighten inscribed rect, through
     /// the crop — none of it rounded to a pixel grid. `orientedFrameSize` reads
     /// the proxy's dims in both tiers, so this is identical for the proxy and
     /// the full-resolution render by construction. See `RenderOutput`.
-    ///
-    /// The conditions must mirror `oriented`/`sourceTexture` exactly, or the
-    /// layout would describe a rectangle the render didn't produce.
     private func displayAspect(_ settings: ExposureSettings, uncropped: Bool) -> Double {
         let base = orientedFrameSize(settings)
         // `oriented` applies the fine rotation only past this threshold — the
@@ -55,7 +79,14 @@ actor ImageSession {
     /// rotated when an analysis region pins an angle, so derive from the
     /// decode dims + the 90° step instead.
     private func orientedFrameSize(_ settings: ExposureSettings) -> CGSize {
-        let base = basePreview!
+        orientedFrameSize(of: basePreview!, settings)
+    }
+
+    /// Same, for an explicit base — `contentWindow` must measure a tier's
+    /// bitmap against ITS OWN frame. Measuring the full-resolution bitmap
+    /// against the proxy's frame yields a window ~3.9x the ideal rect, not the
+    /// fraction-of-a-pixel correction it is meant to be.
+    private func orientedFrameSize(of base: RGBImage, _ settings: ExposureSettings) -> CGSize {
         let swapped = (((settings.rotation % 360) + 360) % 360) % 180 != 0
         return swapped
             ? CGSize(width: base.height, height: base.width)
@@ -114,6 +145,12 @@ actor ImageSession {
         /// out from THAT and let the bitmap fill it (the ≤0.2% difference
         /// between a tier's true ratio and the ideal is sub-pixel).
         let displayAspect: Double
+        /// Where this bitmap actually lands inside the ideal display rect, in
+        /// units of that rect (nominally (0,0,1,1)). The canvas places the image
+        /// by THIS rather than stretching it to fill, which is what makes the
+        /// proxy and full-resolution tiers put identical content at identical
+        /// screen positions. See `ImageSession.contentWindow`.
+        let contentWindow: NormalizedRect
         /// Pre-offset luminance density range of the negative (NegPy's
         /// `norm_density_range`) — the Negative-character diagnostic's input.
         /// Carried on the render because the analysis lives in the actor.
@@ -178,23 +215,30 @@ actor ImageSession {
         return (preview!, analysis!)
     }
 
-    /// The cached GPU texture for this frame's current crop state.
-    private func sourceTexture(image: RGBImage, settings: ExposureSettings, uncropped: Bool) throws -> MTLTexture {
+    /// The cached GPU texture for this frame's current crop state, plus the
+    /// pixel window it covers (nil = the whole oriented image) — `contentWindow`
+    /// needs the window that was actually used, not the one that was asked for.
+    private func sourceTexture(image: RGBImage, settings: ExposureSettings, uncropped: Bool) throws
+        -> (texture: MTLTexture, roi: (x0: Int, y0: Int, x1: Int, y1: Int)?)
+    {
         if uncropped || settings.cropRect == nil {
             if fullTexture == nil { fullTexture = try pipeline.upload(image) }
-            return fullTexture!
+            return (fullTexture!, nil)
         }
         let crop = settings.cropRect!
+        let roi = crop.pixelROI(width: image.width, height: image.height)
         if croppedTexture == nil || croppedTextureRect != crop {
             croppedTexture = try pipeline.upload(image.cropped(to: crop))
             croppedTextureRect = crop
         }
-        return croppedTexture!
+        return (croppedTexture!, roi)
     }
 
     /// The full-resolution source texture for HQ previews, cached with the
     /// same decode → orient → crop keying as the proxy path.
-    private func hqSourceTexture(settings: ExposureSettings, uncropped: Bool) throws -> MTLTexture {
+    private func hqSourceTexture(settings: ExposureSettings, uncropped: Bool) throws
+        -> (texture: MTLTexture, roi: (x0: Int, y0: Int, x1: Int, y1: Int)?, oriented: RGBImage)
+    {
         if hqBase == nil {
             hqBase = try RawDecoder().decode(url: url, quality: .full)
         }
@@ -212,7 +256,7 @@ actor ImageSession {
         }
         if uncropped || settings.cropRect == nil {
             if hqFullTexture == nil { hqFullTexture = try pipeline.upload(hqOriented!) }
-            return hqFullTexture!
+            return (hqFullTexture!, nil, hqOriented!)
         }
         let crop = settings.cropRect!
         if hqCroppedTexture == nil || hqCroppedRect != crop {
@@ -228,18 +272,30 @@ actor ImageSession {
             // half-pixel of rounding (≈8e-5 of frame width), which is sub-pixel
             // in the source.
             let source = hqOriented!
-            let anchored = proxyAnchoredROI(crop: crop, in: source)
-            hqCroppedTexture = try pipeline.upload(anchored ?? source.cropped(to: crop))
+            let roi = proxyAnchoredROI(crop: crop, in: source)
+            hqCroppedTexture = try pipeline.upload(
+                roi.map { source.cropped(toPixels: $0) } ?? source.cropped(to: crop))
             hqCroppedRect = crop
         }
-        return hqCroppedTexture!
+        return (hqCroppedTexture!, hqROI(crop: crop, in: hqOriented!), hqOriented!)
+    }
+
+    /// The window `hqSourceTexture` cropped to, recomputed (it is pure and
+    /// cheap) so the cached-texture path reports the same one it uploaded.
+    private func hqROI(crop: NormalizedRect, in source: RGBImage)
+        -> (x0: Int, y0: Int, x1: Int, y1: Int)?
+    {
+        proxyAnchoredROI(crop: crop, in: source)
+            ?? crop.pixelROI(width: source.width, height: source.height)
     }
 
     /// The crop window the proxy tier resolved, re-expressed on the
     /// full-resolution grid so both tiers show the SAME part of the picture.
     /// Returns nil when the proxy geometry isn't available or the rect is
     /// degenerate, in which case the caller falls back to a plain crop.
-    private func proxyAnchoredROI(crop: NormalizedRect, in source: RGBImage) -> RGBImage? {
+    private func proxyAnchoredROI(crop: NormalizedRect, in source: RGBImage)
+        -> (x0: Int, y0: Int, x1: Int, y1: Int)?
+    {
         guard let proxy = preview,
             let roi = crop.pixelROI(width: proxy.width, height: proxy.height)
         else { return nil }
@@ -250,7 +306,7 @@ actor ImageSession {
         let x1 = min(max(Int((Double(roi.x1) * sx).rounded()), x0 + 1), source.width)
         let y1 = min(max(Int((Double(roi.y1) * sy).rounded()), y0 + 1), source.height)
         guard x1 - x0 >= 2, y1 - y0 >= 2 else { return nil }
-        return source.cropped(toPixels: (x0: x0, y0: y0, x1: x1, y1: y1))
+        return (x0, y0, x1, y1)
     }
 
     private func clearHQ() {
@@ -302,7 +358,7 @@ actor ImageSession {
     /// Assembled incrementally so only mosaic + one tile are ever held.
     func renderTestStrip(settings: ExposureSettings, orientation: Int) throws -> CGImage {
         let (image, analysis) = try prepare(settings: settings)
-        let source = try sourceTexture(image: image, settings: settings, uncropped: false)
+        let source = try sourceTexture(image: image, settings: settings, uncropped: false).texture
         var mosaic: [UInt8] = []
         var w = 0, h = 0
         for cell in TestStrip.cells(orientation: orientation) {
@@ -411,6 +467,9 @@ actor ImageSession {
             fineRotation: settings.fineRotation)
         let params = ExposureKernel.deriveRenderParams(settings, analysis)
         let image = settings.cropRect.map { oriented.cropped(to: $0) } ?? oriented
+        let detachedROI = settings.cropRect.flatMap {
+            $0.pixelROI(width: oriented.width, height: oriented.height)
+        }
         let source = try pipeline.upload(image)
         let result = try pipeline.renderDisplay(source: source, params: params)
         guard let cg = ImageConversion.cgImage(rgba8: result.rgba, width: result.width, height: result.height)
@@ -418,6 +477,9 @@ actor ImageSession {
         return RenderOutput(
             image: cg, histogram: result.histogram, frameSize: orientedFrameSize(settings),
             displayAspect: displayAspect(settings, uncropped: false),
+            contentWindow: contentWindow(
+                settings, uncropped: false, tierBase: basePreview!, oriented: oriented,
+                roi: detachedROI),
             densityRange: analysis.baseBounds.luminanceDensityRange)
     }
 
@@ -436,11 +498,23 @@ actor ImageSession {
         let (image, analysis) = try prepare(settings: settings)
         let params = ExposureKernel.deriveRenderParams(settings, analysis)
         let source: MTLTexture
+        let roi: (x0: Int, y0: Int, x1: Int, y1: Int)?
+        let orientedSource: RGBImage
+        let tierBase: RGBImage
         if hq {
-            source = try hqSourceTexture(settings: settings, uncropped: uncropped)
+            let hqSource = try hqSourceTexture(settings: settings, uncropped: uncropped)
+            source = hqSource.texture
+            roi = hqSource.roi
+            orientedSource = hqSource.oriented
+            tierBase = hqBase!
         } else {
             if !retainHQ { clearHQ() }
-            source = try sourceTexture(image: image, settings: settings, uncropped: uncropped)
+            let proxySource = try sourceTexture(
+                image: image, settings: settings, uncropped: uncropped)
+            source = proxySource.texture
+            roi = proxySource.roi
+            orientedSource = image
+            tierBase = basePreview!
         }
         let result = try pipeline.renderDisplay(source: source, params: params)
         guard let cg = ImageConversion.cgImage(rgba8: result.rgba, width: result.width, height: result.height)
@@ -448,6 +522,9 @@ actor ImageSession {
         return RenderOutput(
             image: cg, histogram: result.histogram, frameSize: orientedFrameSize(settings),
             displayAspect: displayAspect(settings, uncropped: uncropped),
+            contentWindow: contentWindow(
+                settings, uncropped: uncropped, tierBase: tierBase, oriented: orientedSource,
+                roi: roi),
             densityRange: analysis.baseBounds.luminanceDensityRange)
     }
 
