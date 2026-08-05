@@ -102,6 +102,29 @@ import Testing
         }
     }
 
+    // MARK: - Which tier the mode asks for
+
+    /// Auto takes the free tier (the half-size buffer the preview decode
+    /// already made); On pays for the full decode because it promises
+    /// export-truth. Off and "below the threshold" are the plain proxy.
+    @Test func modeChoosesTheRightSource() {
+        #expect(AppModel.renderTier(mode: .off, active: false) == .proxy)
+        #expect(AppModel.renderTier(mode: .auto, active: false) == .proxy)
+        #expect(AppModel.renderTier(mode: .on, active: false) == .proxy)
+        #expect(AppModel.renderTier(mode: .auto, active: true) == .mediumIfFree)
+        #expect(AppModel.renderTier(mode: .on, active: true) == .full)
+        // Off can't be active, but the mapping must not invent a decode if it is.
+        #expect(AppModel.renderTier(mode: .off, active: true) == .mediumIfFree)
+    }
+
+    /// Only `.on` may ever trigger the ~500-700 ms full decode. If Auto could
+    /// reach `.full` directly, crossing the threshold would stall again.
+    @Test func autoNeverRequestsTheFullDecode() {
+        for active in [true, false] {
+            #expect(AppModel.renderTier(mode: .auto, active: active) != .full)
+        }
+    }
+
     // MARK: - Model wiring
 
     /// `hqActive` is what the render path reads. With no image open it must be

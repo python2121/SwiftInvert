@@ -668,7 +668,7 @@ final class AppModel {
         // session keeping its HQ decode would cost hundreds of MB for pixels
         // nobody is looking at.
         for entry in sessionLRU where entry.url != url {
-            Task { await entry.session.releaseHQ() }
+            Task { await entry.session.releaseEnhancedTiers() }
         }
         return found
     }
@@ -759,6 +759,18 @@ final class AppModel {
     /// property of YOUR gesture rather than of the window's dimensions.
     nonisolated static let hqAutoZoomThreshold: CGFloat = 2.0
 
+    /// Which source the render should read from.
+    ///
+    /// `.on` means "show me what export produces", so it always pays for the
+    /// full decode. `.auto` is a convenience — it takes whatever costs nothing,
+    /// which is the half-size buffer the preview decode already produced (the
+    /// session falls through to `.full` on bodies that have no such buffer).
+    /// So Auto is instant but not export-truth; On is export-truth but waits.
+    nonisolated static func renderTier(mode: HQMode, active: Bool) -> ImageSession.RenderTier {
+        guard active else { return .proxy }
+        return mode == .on ? .full : .mediumIfFree
+    }
+
     var hqMode: HQMode = .auto {
         didSet {
             guard oldValue != hqMode else { return }
@@ -766,7 +778,7 @@ final class AppModel {
             // exactly as toggling the old boolean did.
             clearTestStrip()
             clearZonePlacement()
-            if hqMode == .off { Task { [session] in await session?.releaseHQ() } }
+            if hqMode == .off { Task { [session] in await session?.releaseEnhancedTiers() } }
             refreshHQActive(debounced: false)
         }
     }
@@ -856,18 +868,20 @@ final class AppModel {
                     snapshot.fineRotation = 0
                 }
                 let uncropped = self.toolMode != .none
-                let hq = self.hqActive
+                let tier = Self.renderTier(mode: self.hqMode, active: self.hqActive)
                 let midStraightenDrag = self.straightenDragValue != nil
                 guard let session = self.session else { break }
                 do {
                     // No Analyzing pill for the transient 0° re-base render —
                     // it flashes mid-gesture and adds to the visual churn.
-                    if await session.needsPreparation(settings: snapshot, hq: hq), !midStraightenDrag {
+                    if await session.needsPreparation(settings: snapshot, tier: tier),
+                        !midStraightenDrag
+                    {
                         self.isAnalyzing = true
                     }
                     let output = try await session.render(
-                        settings: snapshot, uncropped: uncropped, hq: hq,
-                        retainHQ: self.hqMode != .off)
+                        settings: snapshot, uncropped: uncropped, tier: tier,
+                        retainFull: self.hqMode != .off)
                     self.isAnalyzing = false
                     if Task.isCancelled { break }
                     self.frameSize = output.frameSize

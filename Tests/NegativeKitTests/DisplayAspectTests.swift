@@ -15,6 +15,8 @@ import simd
     /// Proxy and full-resolution dimensions for a 24MP frame: the preview is
     /// decoded half-size (3012×2010) then capped at 1536 on the long edge.
     private let proxy = SIMD2<Double>(1536, 1025)
+    /// The retained half-size buffer the preview decode already produced.
+    private let medium = SIMD2<Double>(3012, 2010)
     private let full = SIMD2<Double>(6024, 4020)
 
     /// What the OLD code laid out from — the cropped/rotated bitmap's real
@@ -228,8 +230,15 @@ import simd
                     SIMD2(0.2, 0.2), SIMD2(0.5, 0.5), SIMD2(0.8, 0.75), SIMD2(0.35, 0.62),
                 ] {
                     let p = screenPosition(of: f, frame: proxy, radians: radians, crop: crop)
+                    let m = screenPosition(of: f, frame: medium, radians: radians, crop: crop)
                     let h = screenPosition(of: f, frame: full, radians: radians, crop: crop)
-                    let drift = max(abs(p.x - h.x), abs(p.y - h.y))
+                    // All THREE tiers must agree — Auto swaps proxy↔medium and
+                    // On swaps proxy↔full, so any pair can meet on screen.
+                    let drift = max(
+                        max(abs(p.x - h.x), abs(p.y - h.y)),
+                        max(
+                            max(abs(p.x - m.x), abs(p.y - m.y)),
+                            max(abs(m.x - h.x), abs(m.y - h.y))))
                     // Float noise, not geometry: ~1e-4 pt on a 1200 pt canvas
                     // is a billionth of the frame. The user-visible figure this
                     // replaces was several POINTS.

@@ -116,15 +116,65 @@ actor ImageSession {
     private var croppedTexture: MTLTexture?
     private var croppedTextureRect: NormalizedRect?
 
-    /// HQ preview: the full-resolution decode cached like the proxy tower
-    /// (analysis still runs on the proxy, so HQ shows exactly what export
-    /// produces). Hundreds of MB per image — freed by the first non-HQ render.
-    private var hqBase: RGBImage?
-    private var hqOriented: RGBImage?
-    private var hqOrientKey: OrientKey?
-    private var hqFullTexture: MTLTexture?
-    private var hqCroppedTexture: MTLTexture?
-    private var hqCroppedRect: NormalizedRect?
+    /// Which source a display render should read from. Analysis ALWAYS runs on
+    /// the 1536px proxy whatever this says — the tiers differ only in pixels on
+    /// screen, so switching between them can never move the conversion.
+    enum RenderTier: Sendable {
+        /// The 1536px analysis proxy.
+        case proxy
+        /// The best tier that costs no decode: the retained half-size buffer
+        /// when this body has one, else `full`.
+        case mediumIfFree
+        /// True full resolution with the export demosaic — what export produces.
+        case full
+    }
+
+    /// A display tier above the analysis proxy: decoded base → oriented →
+    /// GPU textures for the current crop, keyed exactly like the proxy tower.
+    /// One instance per tier, so adding the medium tier didn't mean a third
+    /// copy of this bookkeeping.
+    private struct DisplayTier {
+        var base: RGBImage?
+        var oriented: RGBImage?
+        var orientKey: OrientKey?
+        var fullTexture: MTLTexture?
+        var croppedTexture: MTLTexture?
+        var croppedRect: NormalizedRect?
+
+        /// Drop everything derived from the orientation (textures live in
+        /// fine-oriented space) while keeping the decoded base.
+        mutating func invalidateOrientation() {
+            oriented = nil
+            orientKey = nil
+            fullTexture = nil
+            croppedTexture = nil
+            croppedRect = nil
+        }
+
+        mutating func clear() {
+            base = nil
+            invalidateOrientation()
+        }
+    }
+
+    /// The half-size buffer the PREVIEW decode already produced and used to
+    /// throw away: 3012×2010 on a 24MP Bayer body, i.e. 4× the proxy's pixels
+    /// for 0 ms of extra work and ~73 MB. It is the same linear half-size
+    /// demosaic as the proxy — more resolution, not better colour — so it is
+    /// not export-truth; `.full` remains that.
+    private var medium = DisplayTier()
+
+    /// Full-resolution decode with the export demosaic. Hundreds of MB, and it
+    /// costs a ~500–700 ms decode the first time.
+    private var full = DisplayTier()
+
+    /// Above this the retained half-size buffer costs more than it is worth
+    /// (12 bytes/px): 20 MP ≈ 240 MB. A 24 MP Bayer body's half-size decode is
+    /// 6 MP and a 61 MP body's is ~15 MP, so both qualify — but an X-Trans
+    /// preview decodes FULL size (half_size aliases the 6×6 CFA), and 24 MP of
+    /// that does not. Those bodies simply get no medium tier and `.mediumIfFree`
+    /// falls through to `.full`, which is exactly today's behaviour.
+    private static let mediumTierPixelBudget = 20_000_000
 
     struct RenderOutput: Sendable {
         let image: CGImage
@@ -167,7 +217,18 @@ actor ImageSession {
     /// of the cost.
     private func prepare(settings: ExposureSettings) throws -> (RGBImage, ExposureAnalysis) {
         if basePreview == nil {
-            basePreview = try RawDecoder().decode(url: url, quality: .preview, maxLongEdge: 1536)
+            // Decode at the sensor's native preview size and downsample HERE,
+            // rather than asking the decoder to cap it, so the buffer it was
+            // already producing can be kept as the medium tier. `basePreview`
+            // is still a single downsample from that same buffer, so the
+            // analysis input is byte-identical to capping inside the decoder.
+            let native = try RawDecoder().decode(url: url, quality: .preview)
+            basePreview = native.downsampled(maxLongEdge: 1536)
+            if native.width * native.height <= Self.mediumTierPixelBudget,
+                native.width > basePreview!.width
+            {
+                medium.base = native
+            }
         }
         // Analysis ignores the CURRENT fine rotation (see meterPreview); 90°
         // steps and flips reshuffle pixels without changing the content set.
@@ -234,71 +295,70 @@ actor ImageSession {
         return (croppedTexture!, roi)
     }
 
-    /// The full-resolution source texture for HQ previews, cached with the
-    /// same decode → orient → crop keying as the proxy path.
-    private func hqSourceTexture(settings: ExposureSettings, uncropped: Bool) throws
-        -> (texture: MTLTexture, roi: (x0: Int, y0: Int, x1: Int, y1: Int)?, oriented: RGBImage)
-    {
-        if hqBase == nil {
-            hqBase = try RawDecoder().decode(url: url, quality: .full)
-        }
+    /// Source texture for a display tier, with the same orient → crop keying as
+    /// the proxy path. `tier.base` must already be decoded.
+    ///
+    /// Crops per tier without trying to match the proxy's pixel window:
+    /// `contentWindow` reports where each bitmap really lands and the canvas
+    /// places it accordingly, which corrects the difference exactly.
+    private func tierSource(
+        _ tier: inout DisplayTier, settings: ExposureSettings, uncropped: Bool
+    ) throws -> (texture: MTLTexture, roi: (x0: Int, y0: Int, x1: Int, y1: Int)?, oriented: RGBImage) {
         let oKey = OrientKey(
             rotation: settings.rotation, flipHorizontal: settings.flipHorizontal,
             fineRotation: settings.fineRotation)
-        if hqOriented == nil || oKey != hqOrientKey {
-            hqOriented = hqBase!.oriented(
+        if tier.oriented == nil || oKey != tier.orientKey {
+            tier.invalidateOrientation()
+            tier.oriented = tier.base!.oriented(
                 rotationCW: settings.rotation, flipHorizontal: settings.flipHorizontal,
                 fineRotation: settings.fineRotation)
-            hqOrientKey = oKey
-            hqFullTexture = nil
-            hqCroppedTexture = nil
-            hqCroppedRect = nil
+            tier.orientKey = oKey
         }
+        let oriented = tier.oriented!
         if uncropped || settings.cropRect == nil {
-            if hqFullTexture == nil { hqFullTexture = try pipeline.upload(hqOriented!) }
-            return (hqFullTexture!, nil, hqOriented!)
+            if tier.fullTexture == nil { tier.fullTexture = try pipeline.upload(oriented) }
+            return (tier.fullTexture!, nil, oriented)
         }
         let crop = settings.cropRect!
-        // Plain per-tier crop. An earlier version re-derived this window from
-        // the one the proxy resolved, to stop the two tiers selecting different
-        // parts of the picture — but `contentWindow` now reports each bitmap's
-        // real window and the canvas places it accordingly, which corrects any
-        // difference EXACTLY rather than shrinking it. The anchoring became
-        // dead weight.
-        if hqCroppedTexture == nil || hqCroppedRect != crop {
-            hqCroppedTexture = try pipeline.upload(hqOriented!.cropped(to: crop))
-            hqCroppedRect = crop
+        if tier.croppedTexture == nil || tier.croppedRect != crop {
+            tier.croppedTexture = try pipeline.upload(oriented.cropped(to: crop))
+            tier.croppedRect = crop
         }
-        let roi = crop.pixelROI(width: hqOriented!.width, height: hqOriented!.height)
-        return (hqCroppedTexture!, roi, hqOriented!)
+        let roi = crop.pixelROI(width: oriented.width, height: oriented.height)
+        return (tier.croppedTexture!, roi, oriented)
     }
 
-    private func clearHQ() {
-        hqBase = nil
-        hqOriented = nil
-        hqOrientKey = nil
-        hqFullTexture = nil
-        hqCroppedTexture = nil
-        hqCroppedRect = nil
+    /// Resolve `.mediumIfFree` against what this body actually gave us.
+    private func resolvedTier(_ requested: RenderTier) -> RenderTier {
+        guard requested == .mediumIfFree else { return requested }
+        return medium.base != nil ? .mediumIfFree : .full
+    }
+
+    private func clearFull() {
+        full.clear()
     }
 
     /// Drop the full-resolution tier while keeping the proxy tower warm.
     /// Called on sessions the LRU retains but isn't showing: the proxy caches
     /// are tens of MB (worth holding for an instant return), the HQ decode is
     /// hundreds (not worth holding for a frame nobody is looking at).
-    func releaseHQ() {
-        clearHQ()
+    func releaseEnhancedTiers() {
+        full.clear()
+        medium.clear()
     }
 
     /// True when the next render must decode or run the heavy prepared stage
     /// (drives the "Analyzing…" indicator; offset-only finalizes are fast and
     /// don't flash it).
-    func needsPreparation(settings: ExposureSettings, hq: Bool = false) -> Bool {
-        if hq {
+    func needsPreparation(settings: ExposureSettings, tier: RenderTier = .proxy) -> Bool {
+        // Only the full tier can stall: its decode is ~500-700 ms. The medium
+        // tier was decoded alongside the proxy, so reaching for it costs an
+        // orient and an upload and must not flash the indicator.
+        if resolvedTier(tier) == .full {
             let oKey = OrientKey(
                 rotation: settings.rotation, flipHorizontal: settings.flipHorizontal,
                 fineRotation: settings.fineRotation)
-            if hqBase == nil || hqOriented == nil || oKey != hqOrientKey { return true }
+            if full.base == nil || full.oriented == nil || oKey != full.orientKey { return true }
         }
         guard preview != nil, prepared != nil, meterPreview != nil else { return true }
         // Fine-rotation-only changes just re-orient (fast) — no meter re-run.
@@ -450,14 +510,16 @@ actor ImageSession {
     /// `uncropped` shows the full frame (used while a selection tool is active
     /// so the user can drag on the whole image, like NegPy's crop_preview_full).
     ///
-    /// `retainHQ` keeps the full-resolution tier alive across a proxy render.
+    /// `retainFull` keeps the full-resolution tier alive across a proxy render.
     /// Auto mode needs it: zooming back out below the threshold is a proxy
     /// render, and dropping the tier there would make the next zoom-in pay the
-    /// whole ~700 ms decode again. The tier is still freed when HQ is switched
-    /// off, and by `releaseHQ()` on every session the LRU isn't showing — so at
-    /// most the on-screen frame holds it, exactly as before.
+    /// whole ~500-700 ms decode again. It is still freed when HQ is switched
+    /// off, and by `releaseEnhancedTiers()` on every session the LRU isn't
+    /// showing — so at most the on-screen frame holds it. The MEDIUM tier is
+    /// never dropped here: it was free, and re-deriving it means re-decoding.
     func render(
-        settings: ExposureSettings, uncropped: Bool = false, hq: Bool = false, retainHQ: Bool = false
+        settings: ExposureSettings, uncropped: Bool = false,
+        tier requested: RenderTier = .proxy, retainFull: Bool = false
     ) throws -> RenderOutput {
         let (image, analysis) = try prepare(settings: settings)
         let params = ExposureKernel.deriveRenderParams(settings, analysis)
@@ -465,14 +527,25 @@ actor ImageSession {
         let roi: (x0: Int, y0: Int, x1: Int, y1: Int)?
         let orientedSource: RGBImage
         let tierBase: RGBImage
-        if hq {
-            let hqSource = try hqSourceTexture(settings: settings, uncropped: uncropped)
-            source = hqSource.texture
-            roi = hqSource.roi
-            orientedSource = hqSource.oriented
-            tierBase = hqBase!
-        } else {
-            if !retainHQ { clearHQ() }
+        switch resolvedTier(requested) {
+        case .full:
+            if full.base == nil {
+                full.base = try RawDecoder().decode(url: url, quality: .full)
+            }
+            let s = try tierSource(&full, settings: settings, uncropped: uncropped)
+            source = s.texture
+            roi = s.roi
+            orientedSource = s.oriented
+            tierBase = full.base!
+        case .mediumIfFree:
+            if !retainFull { clearFull() }
+            let s = try tierSource(&medium, settings: settings, uncropped: uncropped)
+            source = s.texture
+            roi = s.roi
+            orientedSource = s.oriented
+            tierBase = medium.base!
+        case .proxy:
+            if !retainFull { clearFull() }
             let proxySource = try sourceTexture(
                 image: image, settings: settings, uncropped: uncropped)
             source = proxySource.texture

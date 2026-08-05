@@ -89,11 +89,27 @@ full-resolution decode (`ImageSession.hqSourceTexture`; analysis stays on
 the proxy, matching export).
   **`AppModel.HQMode`** (canvas-bar badge cycles off → auto → on, ⇧⌘P, View
   menu picker; session-only — a persisted `.on` would make every launch pay
-  full-res costs): **`.auto` is the default** and decodes nothing until the
-  canvas is magnified to `hqAutoZoomThreshold` (**2×**), then renders full
-  resolution in the background and swaps it in — the proxy stays on screen
-  meanwhile, so it reads as sharpening rather than a reload, and dropping
-  back below is instant off the warm proxy tower. `zoom == 1` is
+  full-res costs): **`.auto` is the default** and stays on the proxy until
+  the canvas is magnified to `hqAutoZoomThreshold` (**2×**). The proxy stays
+  on screen through any swap, so it reads as sharpening rather than a reload,
+  and dropping back below is instant off the warm tower.
+  **Three source tiers** (`ImageSession.RenderTier`, resolved by
+  `AppModel.renderTier(mode:active:)`; analysis ALWAYS runs on the 1536px
+  proxy, so switching tiers can never move the conversion):
+  `.proxy` 1536px · `.mediumIfFree` · `.full`.
+  The **medium tier** is the buffer the PREVIEW decode already produced and
+  used to discard — 3012×2010 on a 24MP Bayer body, 4× the proxy's pixels
+  for 0 ms and ~73 MB. `prepare()` therefore decodes at native preview size
+  and downsamples to 1536 itself rather than asking the decoder to cap
+  (`basePreview` is still ONE downsample from that buffer, so the analysis
+  input is byte-identical). Retained only under
+  `mediumTierPixelBudget` (20 MP): an X-Trans preview decodes full-size, and
+  those bodies get no medium tier — `.mediumIfFree` falls through to `.full`,
+  i.e. today's behaviour. **`.auto` uses the medium tier and so never
+  triggers a decode** (instant, but the half-size linear demosaic — more
+  resolution, not export colour); **`.on` uses `.full`** and is the
+  export-truth answer, paying the ~500–700 ms decode. `DisplayTier` holds the
+  base/oriented/texture bookkeeping once and is instantiated per tier. `zoom == 1` is
   fit-to-window, so a "proxy is out of real pixels" threshold would fire at
   rest on any Retina display and make auto indistinguishable from on; 2×
   keeps the trigger a property of the gesture, not the window size.
