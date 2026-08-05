@@ -57,13 +57,34 @@ struct HistogramView: View {
         }
     }
 
+    /// How hard the log view compresses the sparse end. Chosen to reproduce
+    /// what the 1536px proxy used to draw (within ~1 percentage point at every
+    /// height), so the look is unchanged for the common case.
+    static let logCompression = 100_000.0
+
+    /// Bar height in 0…1, as a function of the bin's share of the PEAK bin —
+    /// deliberately not of its raw count.
+    ///
+    /// `log1p(count)/log1p(maxCount)` looks scale-invariant and isn't: scaling
+    /// every count by k adds ln(k) to numerator and denominator, pushing every
+    /// ratio toward 1. The full-resolution tier bins ~15× as many pixels as the
+    /// proxy, so the SAME picture drew a visibly fuller curve with HQ on —
+    /// sparse bins lifted by 7–14 percentage points. (It also meant two images
+    /// with identical shapes but different peaks drew differently.) Normalizing
+    /// to the peak first and compressing with a FIXED constant makes the curve
+    /// a property of the histogram's shape alone.
+    static func barHeight(count: UInt32, maxCount: UInt32, log: Bool) -> Double {
+        let f = Double(count) / Double(max(maxCount, 1))
+        guard log else { return f }
+        return log1p(f * logCompression) / log1p(logCompression)
+    }
+
     private func canvas(bins: [UInt32], size: CGSize) -> some View {
         Canvas { context, size in
             let maxCount = max(bins.max() ?? 1, 1)
 
             func height(_ count: UInt32) -> Double {
-                let v = Double(count)
-                return logScale ? log1p(v) / log1p(Double(maxCount)) : v / Double(maxCount)
+                Self.barHeight(count: count, maxCount: maxCount, log: logScale)
             }
 
             func path(channel: Int, closed: Bool) -> Path {

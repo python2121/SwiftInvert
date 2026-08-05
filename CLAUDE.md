@@ -344,7 +344,13 @@ One command buffer, passes in order (`RenderPipeline.render` /
 4. **`histogram256`** — 4×256 atomic bins (R,G,B + Rec.709 luma) from the
    linear content, OETF-encoded in-shader so bins match display values —
    including the levels remap (below), so the interactive histogram
-   reshapes live under a drag.
+   reshapes live under a drag. Bins are RAW COUNTS, and the HQ tier bins
+   ~15× as many pixels as the proxy, so anything drawn from them must be a
+   function of the histogram's SHAPE only (`HistogramView.barHeight`
+   normalizes to the peak bin, then compresses with a FIXED constant;
+   `log1p(count)/log1p(maxCount)` looks scale-free but adds ln(pixelCount)
+   to both ends, and lifted sparse bins 7–14 percentage points with HQ on).
+   `clipFractions` and the hover read-out already divide by the total.
 5. **`outputEncode`** — working-space OETF (Adobe RGB 1998 TRC: pure
    563/256 = 2.19921875 power, no linear segment — b3490eb), then the
    **levels remap** (interactive histogram, SwiftInvert-only): per channel
