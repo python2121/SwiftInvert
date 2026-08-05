@@ -41,6 +41,25 @@ updates this file. The manual procedure, for reference:
 
 ## Review history
 
+### 2026-08-04 (second) — convergence, not a review
+
+Not an upstream range: closing an approximation of ours that had drifted
+from the reference. `RGBImage.downsampled`'s docstring called it a
+"stand-in for NegPy's cv2 INTER_AREA preview resize"
+(`services/rendering/image_processor.py`), but it used integer box
+boundaries (`Int(ox·s)`) rather than INTER_AREA's fractional weights. At
+the preview's 1.96 ratio that gives boxes of 1 or 2 source pixels whose
+centres drift up to 0.97 source px from the ideal grid, sliding smoothly
+across the frame — a low-frequency geometric warp, which surfaced as local
+misalignment between the proxy and the HQ preview at high zoom. Now a
+separable fractional-weight area filter, matching INTER_AREA's kernel.
+
+**This moved the default look slightly** — the proxy feeds analysis, so
+the meters read a marginally different grid: probes shift ~0.05 D and one
+reference frame crossed a zone boundary. Accepted deliberately as
+convergence with the reference. Fixtures are synthetic and never touch
+the decode/downsample path, so parity is unaffected (275 tests green).
+
 ### 2026-08-04 — through `bd81b85` (0.47.0, 4 commits)
 
 **Kernel status: a genuine null.** The path-filtered log over

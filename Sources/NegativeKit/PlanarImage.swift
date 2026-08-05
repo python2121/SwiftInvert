@@ -168,48 +168,123 @@ public struct RGBImage: @unchecked Sendable {
         return out
     }
 
-    /// Area-average downsample so the long edge is at most `maxLongEdge`
-    /// (stand-in for NegPy's cv2 INTER_AREA preview resize).
+    /// Fractional box taps for a 1-D area resample: output `j` covers the
+    /// source span `[j·s, (j+1)·s)` and each source cell is weighted by how
+    /// much of it that span actually covers. Weights are pre-normalized.
+    ///
+    /// This is cv2's INTER_AREA kernel. The distinction that matters is the
+    /// SAMPLE PHASE: integer box boundaries (`Int(j·s)`) give boxes of varying
+    /// width whose centres drift from the ideal grid — up to 0.97 source px at
+    /// the preview's 1.96 ratio, sliding smoothly across the frame. That is a
+    /// low-frequency geometric warp, not a blur, and it made the proxy and the
+    /// full-resolution tier disagree locally by ~1.5 pt at 4× zoom. Fractional
+    /// weights put every sample exactly on the ideal centre.
+    static func areaTaps(src: Int, dst: Int) -> (start: [Int], weight: [Float], stride: Int) {
+        let s = Double(src) / Double(dst)
+        let stride = Int(s.rounded(.up)) + 1
+        var start = [Int](repeating: 0, count: dst)
+        var weight = [Float](repeating: 0, count: dst * stride)
+        for j in 0..<dst {
+            let f0 = Double(j) * s, f1 = Double(j + 1) * s
+            let i0 = max(Int(f0.rounded(.down)), 0)
+            let i1 = min(src, max(Int(f1.rounded(.up)), i0 + 1))
+            start[j] = i0
+            var norm = 0.0
+            for k in 0..<min(stride, i1 - i0) {
+                let i = i0 + k
+                let overlap = min(Double(i + 1), f1) - max(Double(i), f0)
+                if overlap > 0 {
+                    weight[j * stride + k] = Float(overlap)
+                    norm += overlap
+                }
+            }
+            if norm > 0 {
+                let inv = Float(1.0 / norm)
+                for k in 0..<stride { weight[j * stride + k] *= inv }
+            } else {
+                weight[j * stride] = 1  // degenerate span: take the one cell
+            }
+        }
+        return (start, weight, stride)
+    }
+
+    /// Area-average downsample so the long edge is at most `maxLongEdge` —
+    /// NegPy's `cv2.resize(..., INTER_AREA)` preview resize
+    /// (`services/rendering/image_processor.py`), which this now matches in
+    /// kernel as well as in intent.
+    ///
+    /// Separable: a 2-D area box is the product of two 1-D boxes, so a
+    /// horizontal pass followed by a vertical one is exactly the 2-D average
+    /// and costs far less than the naive form.
     public func downsampled(maxLongEdge: Int) -> RGBImage {
         let long = max(width, height)
         guard long > maxLongEdge else { return self }
         let scale = Double(maxLongEdge) / Double(long)
         let ow = max(1, Int((Double(width) * scale).rounded()))
         let oh = max(1, Int((Double(height) * scale).rounded()))
-        let sx = Double(width) / Double(ow)
-        let sy = Double(height) / Double(oh)
         let w = width, h = height
-        return RGBImage(width: ow, height: oh) { dst in
+        let hx = Self.areaTaps(src: w, dst: ow)
+        let vy = Self.areaTaps(src: h, dst: oh)
+
+        // Horizontal pass into an ow × h intermediate. Rows are independent,
+        // and each output sample's taps are summed in a fixed order, so the
+        // parallel split is bit-for-bit the serial result.
+        let mid = [Float](unsafeUninitializedCapacity: ow * h * 3) { buf, count in
+            let m = buf.baseAddress!
             pixels.withUnsafeBufferPointer { src in
-                let out = dst.baseAddress!
                 let sp = src.baseAddress!
-                // Output rows are disjoint, and each reads a disjoint band of
-                // input rows — so distributing the row loop leaves every box's
-                // accumulation order, and therefore every output float, exactly
-                // as the serial version produced it (11.9 → 2.7 ms on the
-                // 3012×2010 → 1536×1025 preview step).
+                let slices = min(8, h)
+                let per = (h + slices - 1) / slices
+                DispatchQueue.concurrentPerform(iterations: slices) { slice in
+                    let first = min(slice * per, h), last = min(h, first + per)
+                    for y in first..<last {
+                        let row = y * w
+                        for ox in 0..<ow {
+                            let s0 = hx.start[ox]
+                            var r: Float = 0, g: Float = 0, b: Float = 0
+                            for k in 0..<hx.stride {
+                                let weight = hx.weight[ox * hx.stride + k]
+                                if weight == 0 { continue }
+                                let i = (row + min(s0 + k, w - 1)) * 3
+                                r += sp[i] * weight
+                                g += sp[i + 1] * weight
+                                b += sp[i + 2] * weight
+                            }
+                            let o = (y * ow + ox) * 3
+                            m[o] = r
+                            m[o + 1] = g
+                            m[o + 2] = b
+                        }
+                    }
+                }
+            }
+            count = ow * h * 3
+        }
+
+        return RGBImage(width: ow, height: oh) { dst in
+            let out = dst.baseAddress!
+            mid.withUnsafeBufferPointer { src in
+                let mp = src.baseAddress!
                 let slices = min(8, oh)
                 let per = (oh + slices - 1) / slices
                 DispatchQueue.concurrentPerform(iterations: slices) { slice in
-                    // `per * slices` can exceed `oh` (e.g. oh = 10 over 8
-                    // slices), leaving the tail slices with no rows at all.
-                    let firstRow = min(slice * per, oh)
-                    let lastRow = min(oh, firstRow + per)
-                    for oy in firstRow..<lastRow {
-                        let y0 = Int(Double(oy) * sy), y1 = min(h, max(y0 + 1, Int(Double(oy + 1) * sy)))
+                    let first = min(slice * per, oh), last = min(oh, first + per)
+                    for oy in first..<last {
+                        let s0 = vy.start[oy]
                         for ox in 0..<ow {
-                            let x0 = Int(Double(ox) * sx), x1 = min(w, max(x0 + 1, Int(Double(ox + 1) * sx)))
-                            var acc: (Float, Float, Float) = (0, 0, 0)
-                            for y in y0..<y1 {
-                                let row = y * w
-                                for x in x0..<x1 {
-                                    let i = (row + x) * 3
-                                    acc.0 += sp[i]; acc.1 += sp[i + 1]; acc.2 += sp[i + 2]
-                                }
+                            var r: Float = 0, g: Float = 0, b: Float = 0
+                            for k in 0..<vy.stride {
+                                let weight = vy.weight[oy * vy.stride + k]
+                                if weight == 0 { continue }
+                                let i = (min(s0 + k, h - 1) * ow + ox) * 3
+                                r += mp[i] * weight
+                                g += mp[i + 1] * weight
+                                b += mp[i + 2] * weight
                             }
-                            let n = Float((y1 - y0) * (x1 - x0))
                             let o = (oy * ow + ox) * 3
-                            out[o] = acc.0 / n; out[o + 1] = acc.1 / n; out[o + 2] = acc.2 / n
+                            out[o] = r
+                            out[o + 1] = g
+                            out[o + 2] = b
                         }
                     }
                 }

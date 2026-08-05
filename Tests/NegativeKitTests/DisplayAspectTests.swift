@@ -145,58 +145,6 @@ import simd
         }
     }
 
-    // MARK: - The crop WINDOW, not just its shape
-
-    /// The bigger half of the HQ-swap shift: `pixelROI` truncates on each
-    /// tier's own grid, so the same normalized rect selects a different part of
-    /// the picture at 1536px than at 6024px. `hqSourceTexture` re-derives the
-    /// full-resolution window from the proxy's instead; this pins that the
-    /// re-derivation lands on the same normalized window.
-    private func anchored(_ roi: (x0: Int, y0: Int, x1: Int, y1: Int), from p: SIMD2<Double>,
-        to f: SIMD2<Double>) -> (x0: Int, y0: Int, x1: Int, y1: Int)
-    {
-        let sx = f.x / p.x, sy = f.y / p.y
-        let x0 = min(max(Int((Double(roi.x0) * sx).rounded()), 0), Int(f.x) - 1)
-        let y0 = min(max(Int((Double(roi.y0) * sy).rounded()), 0), Int(f.y) - 1)
-        let x1 = min(max(Int((Double(roi.x1) * sx).rounded()), x0 + 1), Int(f.x))
-        let y1 = min(max(Int((Double(roi.y1) * sy).rounded()), y0 + 1), Int(f.y))
-        return (x0, y0, x1, y1)
-    }
-
-    @Test func anchoringPutsBothTiersOnTheSameNormalizedWindow() {
-        for case let crop? in crops {
-            guard let p = crop.pixelROI(width: Int(proxy.x), height: Int(proxy.y)),
-                let independent = crop.pixelROI(width: Int(full.x), height: Int(full.y))
-            else { continue }
-            let a = anchored(p, from: proxy, to: full)
-
-            // Independent truncation drifts by up to ~5e-4 of frame width —
-            // several points of CONTENT movement at 4x zoom.
-            let independentDrift = max(
-                abs(Double(p.x0) / proxy.x - Double(independent.x0) / full.x),
-                abs(Double(p.y0) / proxy.y - Double(independent.y0) / full.y))
-            // Anchoring leaves only the full-res grid's own half pixel.
-            let anchoredDrift = max(
-                abs(Double(p.x0) / proxy.x - Double(a.x0) / full.x),
-                abs(Double(p.y0) / proxy.y - Double(a.y0) / full.y))
-
-            // Half a full-res pixel, on whichever axis is coarser.
-            let halfPixel = max(0.5 / full.x, 0.5 / full.y)
-            #expect(anchoredDrift <= halfPixel + 1e-12, "origin drift for \(crop)")
-            #expect(
-                anchoredDrift <= independentDrift + 1e-12,
-                "anchoring must never be worse than truncating: \(crop)")
-
-            // Same for the window's extent, which is what sets the aspect.
-            let wDrift = abs(
-                Double(p.x1 - p.x0) / proxy.x - Double(a.x1 - a.x0) / full.x)
-            let hDrift = abs(
-                Double(p.y1 - p.y0) / proxy.y - Double(a.y1 - a.y0) / full.y)
-            #expect(wDrift <= 1.0 / full.x + 1e-12, "width drift for \(crop)")
-            #expect(hDrift <= 1.0 / full.y + 1e-12, "height drift for \(crop)")
-        }
-    }
-
     /// `cropped(toPixels:)` is the primitive the anchoring rides on: it must
     /// select exactly the requested window and refuse degenerate ones.
     @Test func croppedToPixelsSelectsExactlyTheRequestedWindow() {
@@ -229,29 +177,19 @@ import simd
     /// frame). Returns the screen x/y in points.
     private func screenPosition(
         of f: SIMD2<Double>, frame: SIMD2<Double>, radians: Double, crop: NormalizedRect?,
-        anchorTo reference: SIMD2<Double>? = nil, fittedWidth: Double = 1200
+        fittedWidth: Double = 1200
     ) -> SIMD2<Double> {
         let inscribed = CropGeometry.inscribedSize(frame: frame, radians: radians)
         // The oriented bitmap: inscribed rect floored to whole pixels.
         let ow = Double(max(Int(inscribed.x.rounded(.down)), 1))
         let oh = Double(max(Int(inscribed.y.rounded(.down)), 1))
 
+        // Each tier crops independently on its own grid — no anchoring. The
+        // placement must be exact anyway.
         var roi: SIMD4<Double>?
         if let crop {
-            if let reference {
-                // The HQ tier adopts the window the proxy resolved.
-                let rInsc = CropGeometry.inscribedSize(frame: reference, radians: radians)
-                let rw = Double(max(Int(rInsc.x.rounded(.down)), 1))
-                let rh = Double(max(Int(rInsc.y.rounded(.down)), 1))
-                guard let p = crop.pixelROI(width: Int(rw), height: Int(rh)) else { return .zero }
-                let sx = ow / rw, sy = oh / rh
-                roi = SIMD4(
-                    (Double(p.x0) * sx).rounded(), (Double(p.y0) * sy).rounded(),
-                    (Double(p.x1) * sx).rounded(), (Double(p.y1) * sy).rounded())
-            } else {
-                guard let p = crop.pixelROI(width: Int(ow), height: Int(oh)) else { return .zero }
-                roi = SIMD4(Double(p.x0), Double(p.y0), Double(p.x1), Double(p.y1))
-            }
+            guard let p = crop.pixelROI(width: Int(ow), height: Int(oh)) else { return .zero }
+            roi = SIMD4(Double(p.x0), Double(p.y0), Double(p.x1), Double(p.y1))
         }
 
         // Each tier measures its own bitmap against its OWN frame...
@@ -290,8 +228,7 @@ import simd
                     SIMD2(0.2, 0.2), SIMD2(0.5, 0.5), SIMD2(0.8, 0.75), SIMD2(0.35, 0.62),
                 ] {
                     let p = screenPosition(of: f, frame: proxy, radians: radians, crop: crop)
-                    let h = screenPosition(
-                        of: f, frame: full, radians: radians, crop: crop, anchorTo: proxy)
+                    let h = screenPosition(of: f, frame: full, radians: radians, crop: crop)
                     let drift = max(abs(p.x - h.x), abs(p.y - h.y))
                     // Float noise, not geometry: ~1e-4 pt on a 1200 pt canvas
                     // is a billionth of the frame. The user-visible figure this
@@ -312,28 +249,17 @@ import simd
         let f = SIMD2(0.5, 0.5)
 
         // Filling: f maps through each bitmap's own window onto the same rect.
-        func filled(_ frame: SIMD2<Double>, anchorTo reference: SIMD2<Double>?) -> Double {
+        func filled(_ frame: SIMD2<Double>) -> Double {
             let ow = frame.x, oh = frame.y
-            let roi: (x0: Int, y0: Int, x1: Int, y1: Int)
-            if let reference {
-                guard let p = crop.pixelROI(width: Int(reference.x), height: Int(reference.y))
-                else { return 0 }
-                let sx = ow / reference.x, sy = oh / reference.y
-                roi = (
-                    Int((Double(p.x0) * sx).rounded()), Int((Double(p.y0) * sy).rounded()),
-                    Int((Double(p.x1) * sx).rounded()), Int((Double(p.y1) * sy).rounded()))
-            } else {
-                guard let p = crop.pixelROI(width: Int(ow), height: Int(oh)) else { return 0 }
-                roi = p
-            }
+            guard let roi = crop.pixelROI(width: Int(ow), height: Int(oh)) else { return 0 }
             let ax = Double(roi.x0) / ow, aw = Double(roi.x1 - roi.x0) / ow
             return 1200.0 * ((f.x - ax) / aw)
         }
-        let fillDrift = abs(filled(proxy, anchorTo: nil) - filled(full, anchorTo: proxy))
+        let fillDrift = abs(filled(proxy) - filled(full))
 
         let placeDrift = abs(
             screenPosition(of: f, frame: proxy, radians: 0, crop: crop).x
-                - screenPosition(of: f, frame: full, radians: 0, crop: crop, anchorTo: proxy).x)
+                - screenPosition(of: f, frame: full, radians: 0, crop: crop).x)
 
         #expect(fillDrift > 0.01, "filling should still drift; got \(fillDrift) pt")
         #expect(

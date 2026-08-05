@@ -50,11 +50,10 @@ extension RGBImage {
         return cropped(toPixels: roi)
     }
 
-    /// Crop to an explicit pixel ROI. The HQ preview path uses this to adopt
-    /// the window the proxy tier resolved instead of re-truncating a normalized
-    /// rect on a different pixel grid — the two grids disagree by enough to
-    /// visibly shift the picture when the tiers swap.
-    public func cropped(toPixels roi: (x0: Int, y0: Int, x1: Int, y1: Int)) -> RGBImage {
+    /// Crop to an explicit pixel ROI (the shared implementation behind
+    /// `cropped(to:)`; clamps out-of-range bounds and returns self when the
+    /// window is degenerate).
+    func cropped(toPixels roi: (x0: Int, y0: Int, x1: Int, y1: Int)) -> RGBImage {
         let clamped = (
             x0: max(roi.x0, 0), y0: max(roi.y0, 0),
             x1: min(roi.x1, width), y1: min(roi.y1, height)

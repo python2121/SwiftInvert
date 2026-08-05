@@ -259,54 +259,18 @@ actor ImageSession {
             return (hqFullTexture!, nil, hqOriented!)
         }
         let crop = settings.cropRect!
+        // Plain per-tier crop. An earlier version re-derived this window from
+        // the one the proxy resolved, to stop the two tiers selecting different
+        // parts of the picture — but `contentWindow` now reports each bitmap's
+        // real window and the canvas places it accordingly, which corrects any
+        // difference EXACTLY rather than shrinking it. The anchoring became
+        // dead weight.
         if hqCroppedTexture == nil || hqCroppedRect != crop {
-            // Crop to the window the PROXY resolved, not to an independently
-            // truncated one. `pixelROI` floors to whole pixels, and the two
-            // tiers have different grids: at 1536 px a boundary lands on
-            // multiples of 0.065%, at 6024 px on multiples of 0.017%, so the
-            // same normalized rect selects visibly different windows. That —
-            // not the aspect — is the bulk of the shift you saw when HQ swapped
-            // in, up to ~6 pt of CONTENT movement at 4× zoom.
-            //
-            // Re-deriving the HQ window from the proxy's leaves only HQ's own
-            // half-pixel of rounding (≈8e-5 of frame width), which is sub-pixel
-            // in the source.
-            let source = hqOriented!
-            let roi = proxyAnchoredROI(crop: crop, in: source)
-            hqCroppedTexture = try pipeline.upload(
-                roi.map { source.cropped(toPixels: $0) } ?? source.cropped(to: crop))
+            hqCroppedTexture = try pipeline.upload(hqOriented!.cropped(to: crop))
             hqCroppedRect = crop
         }
-        return (hqCroppedTexture!, hqROI(crop: crop, in: hqOriented!), hqOriented!)
-    }
-
-    /// The window `hqSourceTexture` cropped to, recomputed (it is pure and
-    /// cheap) so the cached-texture path reports the same one it uploaded.
-    private func hqROI(crop: NormalizedRect, in source: RGBImage)
-        -> (x0: Int, y0: Int, x1: Int, y1: Int)?
-    {
-        proxyAnchoredROI(crop: crop, in: source)
-            ?? crop.pixelROI(width: source.width, height: source.height)
-    }
-
-    /// The crop window the proxy tier resolved, re-expressed on the
-    /// full-resolution grid so both tiers show the SAME part of the picture.
-    /// Returns nil when the proxy geometry isn't available or the rect is
-    /// degenerate, in which case the caller falls back to a plain crop.
-    private func proxyAnchoredROI(crop: NormalizedRect, in source: RGBImage)
-        -> (x0: Int, y0: Int, x1: Int, y1: Int)?
-    {
-        guard let proxy = preview,
-            let roi = crop.pixelROI(width: proxy.width, height: proxy.height)
-        else { return nil }
-        let sx = Double(source.width) / Double(proxy.width)
-        let sy = Double(source.height) / Double(proxy.height)
-        let x0 = min(max(Int((Double(roi.x0) * sx).rounded()), 0), source.width - 1)
-        let y0 = min(max(Int((Double(roi.y0) * sy).rounded()), 0), source.height - 1)
-        let x1 = min(max(Int((Double(roi.x1) * sx).rounded()), x0 + 1), source.width)
-        let y1 = min(max(Int((Double(roi.y1) * sy).rounded()), y0 + 1), source.height)
-        guard x1 - x0 >= 2, y1 - y0 >= 2 else { return nil }
-        return (x0, y0, x1, y1)
+        let roi = crop.pixelROI(width: hqOriented!.width, height: hqOriented!.height)
+        return (hqCroppedTexture!, roi, hqOriented!)
     }
 
     private func clearHQ() {

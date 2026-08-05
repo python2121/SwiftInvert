@@ -114,25 +114,36 @@ the proxy, matching export).
   multiplies any error by the zoom, i.e. worst exactly when the swap fires).
   `pixelROI` truncates and `fineRotated` floors on each tier's own grid, so
   a 1536px and a 6024px render of one setting genuinely cover different
-  windows. Three layers, all in `CropGeometry` + `DisplayAspectTests`:
+  windows, and the proxy was additionally WARPED. Three layers:
   1. **Lay out from `RenderOutput.displayAspect`** (`CropGeometry
      .displayAspect`: continuous frame → inscribed → crop, never a pixel
      count) — bitmap ratios differ up to 0.2% between tiers.
-  2. **`hqSourceTexture` crops to the window the PROXY resolved**
-     (`proxyAnchoredROI` + `RGBImage.cropped(toPixels:)`) rather than
-     re-truncating at 6024px, which selected a different part of the
-     picture — ~6 pt of content shift at 4× zoom, the bulk of the jump.
-  3. **Place each bitmap at the window it really covers**
+  2. **Place each bitmap at the window it really covers**
      (`RenderOutput.contentWindow` → DetailView's `contentSize`/
-     `contentOffset`), instead of stretching both to fill. Anchoring alone
-     still left half a full-res pixel (~1 pt at 4×) — the floor for
-     pixel-aligned cropping. Positioning removes it exactly: both tiers
-     resolve to the same affine frame→screen map. **`contentWindow` must
-     measure a tier's bitmap against ITS OWN frame** (`orientedFrameSize(of:)`)
-     — using the proxy's frame for the HQ bitmap yields a window ~3.9× the
-     ideal rect. The probe normalizes by the image's frame, not `window`.
-  `DisplayAspectTests` pins tier-equality of the final screen position, and
-  deliberately keeps cases asserting the OLD behaviours really did drift, so
+     `contentOffset`), instead of stretching both to fill. Both tiers then
+     resolve to the same affine frame→screen map, so the crop ROI landing on
+     a different pixel in each is corrected EXACTLY rather than merely
+     shrunk. **`contentWindow` must measure a tier's bitmap against ITS OWN
+     frame** (`orientedFrameSize(of:)`) — using the proxy's frame for the HQ
+     bitmap yields a window ~3.9× the ideal rect. The probe normalizes by
+     the image's frame, not `window`. (An earlier layer that re-derived the
+     HQ crop window from the proxy's was removed once this landed: it only
+     shrank the error, and this removes it.)
+  3. **`RGBImage.downsampled` is a real area filter.** Integer box
+     boundaries (`Int(ox·s)`) give boxes of varying width whose centres
+     drift from the ideal grid — 0.97 source px at the preview's 1.96 ratio,
+     sliding smoothly across the frame. That is a low-frequency geometric
+     WARP of the proxy, so no rigid correction could fix it; it read as
+     local misalignment (~1.5 pt at 4× zoom) against the true full-res tier.
+     Now separable fractional-weight taps (`areaTaps`), which is cv2's
+     INTER_AREA — matching NegPy's preview resize
+     (`services/rendering/image_processor.py`) in kernel, not just intent.
+     This MOVED the default look slightly (it feeds analysis): probes shift
+     ~0.05 D, one test frame crossed a zone boundary. Separable keeps it
+     free (prepare ~17 ms, unchanged; the naive 2-D form cost 28.8 ms).
+  `DisplayAspectTests` pins tier-equality of the final screen position and
+  `ImagePipelineSeamTests` pins the filter's uniform sample phase; both
+  deliberately keep cases asserting the OLD behaviours really did drift, so
   the equality tests can't go vacuous.
 - **Full path** (export): LibRaw default (best) demosaic, full resolution.
 - EXIF orientation baked in Swift afterwards (`applyingFlip`, dcraw codes:
