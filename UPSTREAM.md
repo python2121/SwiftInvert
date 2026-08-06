@@ -9,9 +9,9 @@ and appending a history entry.
 ## Last reviewed
 
 ```
-commit:   bd81b85  ("feat: clickable empty state, canvas-tracked centring,
-          foldable branding (#757)")
-reviewed: 2026-08-04
+commit:   7a07f5c  ("Hue Trim, and one home for the capture-side colour
+          corrections (#763)")
+reviewed: 2026-08-05
 fixtures: Tests/Fixtures/ dumped from 0369b10 except lab_color (partially
           re-dumped from a09cc46, 2026-07-31, with the pure gamut boost —
           the b8c596c dump had carried the interim in-boost skin damping).
@@ -40,6 +40,92 @@ updates this file. The manual procedure, for reference:
 6. Update the **Last reviewed** marker and append to the history below.
 
 ## Review history
+
+### 2026-08-05 — through `7a07f5c` (0.47.0, 4 commits)
+
+**One pipeline commit, and it is a real port candidate for us specifically:
+`7a07f5c` Hue Trim.** No golden move (`test_scene_linear_relocation.py` /
+`test_characteristic_curve.py` untouched), no constants drift, no change to
+`normalization.py` or `logic.py`.
+
+**To port (proposed, not yet implemented):**
+
+1. **`7a07f5c` — Hue Trim** (`process.hue_trim`, degrees, ±30, **0 = off**).
+   A rotation of `a*`/`b*` about the neutral axis in the working CIELAB,
+   applied to the scene-linear print — after the H&D curve, before the
+   working OETF. `L*` untouched; the origin is a fixed point, so neutrals
+   cannot move and it cannot fight the cast removal.
+
+   The evidence is the good part: one negative scanned twice (narrowband-ish
+   panel vs broadband white LED, same body, same frame), `|ΔH|` held within
+   16–21° across CIELAB chroma 4 to 60+. A cast would have SHRUNK with
+   chroma (a fixed a*/b* offset barely turns a saturated colour); a channel
+   mix would have GROWN. Flat in chroma is the signature of a rotation, so
+   the correction is one — and white balance cannot fix it, because there is
+   no grey that is wrong.
+
+   **Unusually applicable to us.** We are camera-RAW only, i.e. everyone
+   here is camera-scanning on some light source, which is exactly the
+   variable this corrects; cheap LED panels are routinely narrowband-ish.
+   This is arguably more relevant to SwiftInvert's scope than to the scanner
+   half of NegPy's.
+
+   Maps cleanly, and the port is close to mechanical:
+   - Their Lab is **Adobe RGB primaries, D65** — byte-for-byte the same
+     matrices we already carry in `LabColor.swift` and `NegPipeline.metal`
+     since the b3490eb port (checked: 0.5767309…, 2.0413690…, D65 white,
+     0.008856 eps all identical).
+   - Their GPU inlines rgb→Lab→rgb because WGSL has no includes; **we need
+     no new conversions at all** — `colorPop` already does that round trip,
+     so the rotation drops in at the TOP of the existing Lab block, before
+     the colour mixer, which is also the right stage order (upstream applies
+     it before the look controls).
+   - `colorPopActive` must gain the term (academic in practice —
+     `skinProtection` 0.5 already dispatches the pass every frame).
+   - Full control checklist: settings field + decoder line + HistoryLabels
+     (tripwire 49 → 50), derive passthrough (degrees → radians), both
+     kernels, LabUniforms + `LayoutTests`, a slider, tests.
+   - **No fixture re-dump** — identity at 0, like every SwiftInvert-only
+     control.
+
+   **Adaptation to decide:** upstream makes it *sticky across files* (a rig
+   property). We already have that mechanism generically — bake it into a
+   `SettingsProfile` and it carries to every fresh frame — so a normal
+   sidecar-backed setting plus the default profile achieves the same thing
+   without a new stickiness concept.
+
+   Effort: small-to-moderate (~half day), almost all of it checklist and
+   tests rather than math.
+
+**Deliberately skipped:** the other half of `7a07f5c` reorganizes the
+crosstalk UI (section renamed "Calibration", profiles renamed to
+`kodak_*`, "Default" → "Generic C41", a new provenance `type` key grouping
+the dropdown, all 16 bundled matrices marked "(approx)"). Crosstalk is a
+recorded skip. **But log the reframing**, because it bears on that skip and
+on the `negcli chart-solve` idea: upstream now says a crosstalk matrix is
+properly a property of a whole SCANNING SETUP, not of a film stock — the
+light's spectrum and the sensor's CFA mix channels too, and in log density
+all three arrive as the same linear operator, so one 3×3 absorbs them
+jointly. Their bundled matrices are datasheet-derived from dyes alone and
+now say so, telling the whole story only for a true RGB scan or a
+calibrated trichrome rig. That is an argument FOR a measured/solved matrix
+over a shipped one, if we ever revisit.
+
+**Not applicable:** `183553a` Linear Output batch config leak + XMP
+metadata (their export path; Linear Output is a recorded N/A), `d93afd2`
+SANE scan-exposure-time slider (capture), `8823afc` half-frame rectangle
+editor (their scan-crop UI; we ship no rectangle editor).
+
+**dump_fixtures.py:** compatible. `normalization.py`/`logic.py`/exposure
+`models.py` are untouched; the only imported symbol whose file moved is
+`ProcessConfig` (`features/process/models.py`), and both changes there are
+benign — an added defaulted field (`hue_trim = 0.0`) and a renamed
+`crosstalk_profile` default, which does not affect the render (a None
+matrix still falls back to the built-in).
+
+**Still open (carried over):** colour ring-around (±4cc/2cc spec),
+`91a1b78` tunable Auto Density/Grade targets (user-initiated only), the
+on-scan Color Mixer band re-tune pass (ours).
 
 ### 2026-08-04 (second) — convergence, not a review
 
