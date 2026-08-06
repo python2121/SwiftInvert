@@ -9,9 +9,8 @@ and appending a history entry.
 ## Last reviewed
 
 ```
-commit:   7a07f5c  ("Hue Trim, and one home for the capture-side colour
-          corrections (#763)")
-reviewed: 2026-08-05
+commit:   7eb6837  ("Update CHANGELOG.md for version 0.48.0")
+reviewed: 2026-08-06
 fixtures: Tests/Fixtures/ dumped from 0369b10 except lab_color (partially
           re-dumped from a09cc46, 2026-07-31, with the pure gamut boost —
           the b8c596c dump had carried the interim in-boost skin damping).
@@ -40,6 +39,44 @@ updates this file. The manual procedure, for reference:
 6. Update the **Last reviewed** marker and append to the history below.
 
 ## Review history
+
+### 2026-08-06 — through `7eb6837` (0.48.0 release, 3 commits)
+
+**Kernel status: a genuine null.** The path-filtered log over
+`features/exposure/`, `features/process/`, `kernel/image/` and both
+characterization goldens is EMPTY; no renames. 0.48.0 was tagged in this
+range, and its headline pipeline items — Hue Trim and the Calibration
+section — are the PREVIOUS range, already reviewed (2026-08-05). Everything
+new here is the scanner/Linear-Output half.
+
+**Ported:** nothing (nothing required).
+
+**Not applicable:**
+- `53b36ae` **Scanner formats as Linear Output sources** — Coolscan NEF
+  (TIFF-structured, largest RGB SubIFD), Flextight FFF including SGI LogLuv,
+  Noritsu headerless BGR16, and generic TIFF with an input-gamma selector;
+  plus IR dust removal baked into Linear Output. All of it lands in
+  `infrastructure/loaders/` and `services/export/`, and touches zero
+  exposure/kernel lines. We are camera-RAW only and ship no Linear Output
+  (recorded N/A since `6410002`). **One fragment noted in passing:** their
+  LogLuv decoder normalizes per channel at the 0.2/99.8th percentile,
+  because LogLuv is HDR and routinely exceeds 1.0 so a bare `clip(0,1)` was
+  truncating data — and the same step happens to correct Flextight CCD
+  per-channel black/gain offset. Irrelevant while we read camera RAW only.
+- `01232ed` / `7eb6837` release chore + changelog for 0.48.0.
+
+**Decode contract re-checked** (it is a pinned reference for us, so the
+PIPELINE.md Camera RAW line moving warranted a look): wording only —
+"matching the MakeTiff/ColorPerfect convention" became "following the
+`RAW-WB` XMP convention used by external linear-workflow tools". Every
+rawpy parameter is unchanged.
+
+**dump_fixtures.py:** unaffected — nothing it imports was touched.
+
+**Still open (carried over):** **`7a07f5c` Hue Trim** (proposed 2026-08-05,
+not yet ported — the live candidate), colour ring-around (±4cc/2cc spec),
+`91a1b78` tunable Auto Density/Grade targets (user-initiated only), the
+on-scan Color Mixer band re-tune pass (ours).
 
 ### 2026-08-05 — through `7a07f5c` (0.47.0, 4 commits)
 
