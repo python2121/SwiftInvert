@@ -53,7 +53,8 @@ public struct CurveUniforms {
     // (0 = off); pads keep the 16-byte stride.
     public var separationDamping: Float
     public var skinProtection: Float
-    public var _pad2: Float = 0
+    /// Hue Trim in radians (rides the ex-pad slot: stride unchanged at 272).
+    public var hueTrim: Float = 0
     public var _pad3: Float = 0
 }
 
@@ -112,7 +113,8 @@ public enum UniformsBuilder {
             bandHues: SIMD4<Float>(params.bandHues),
             bandSaturations: SIMD4<Float>(params.bandSaturations),
             separationDamping: Float(params.separationDamping),
-            skinProtection: Float(params.skinProtection)
+            skinProtection: Float(params.skinProtection),
+            hueTrim: Float(params.hueTrim)
         )
     }
 

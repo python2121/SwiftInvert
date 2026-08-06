@@ -78,6 +78,28 @@ public enum LabColor {
         return t * t * (3.0 - 2.0 * t)
     }
 
+    /// Hue Trim (NegPy 7a07f5c): rotate one linear pixel's colour about the
+    /// neutral axis by `radians` in the working CIELAB a*b* plane. L* is
+    /// untouched and the origin is a fixed point, so neutrals cannot move —
+    /// which is why this can never fight the cast removal in analysis.
+    ///
+    /// Corrects a scanning light that ROTATES hues (narrowband or odd
+    /// phosphor) rather than casting them; white balance cannot, because no
+    /// grey is wrong. Runs FIRST in the colour-pop stage, so the mixer,
+    /// vibrance and saturation all see corrected hues — matching upstream,
+    /// where it rides the exposure pass ahead of their Lab look stage.
+    public static func applyHueTrim(_ rgb: SIMD3<Double>, radians: Double) -> SIMD3<Double> {
+        guard radians != 0 else { return rgb }
+        var lab = rgbToLab(rgb)
+        let c = cos(radians), s = sin(radians)
+        let a = lab.y, b = lab.z
+        lab.y = a * c - b * s
+        lab.z = a * s + b * c
+        let out = labToRgb(lab)
+        return SIMD3(
+            min(max(out.x, 0), 1), min(max(out.y, 0), 1), min(max(out.z, 0), 1))
+    }
+
     /// Per-band hue rotation + chroma scale on one linear pixel (band order
     /// R/Y/G/B). All band weights read the ORIGINAL hue and compose jointly,
     /// so overlapping feathers are order-independent; the shared chroma gate

@@ -148,6 +148,7 @@ enum Fixtures2 {
         settings.colorHighs = SIMD3(0.3, 0.1, 0.6)
         settings.printSaturation = 1.4
         settings.separationDamping = 0.7
+        settings.hueTrim = 17.0
         let params = ExposureKernel.deriveRenderParams(settings, analysis)
 
         let cpu = ReferenceCurve.encodeOutput(
@@ -158,6 +159,43 @@ enum Fixtures2 {
 
         let (mean, maxV) = Self.diffStats(gpu.pixels, cpu.pixels)
         #expect(mean < 0.01 && maxV < 0.04, "tone controls GPU/CPU: mean \(mean), max \(maxV)")
+    }
+
+    /// Hue Trim alone, at the tight gate. The bundled tone-controls case above
+    /// would let a hue-only regression hide inside its 0.04 max — and upstream
+    /// learned the hard way (their WGSL mirror once went dead and still passed
+    /// a loose test), so this asserts the rotation ACTUALLY MOVES the frame
+    /// before comparing the two implementations.
+    @Test func hueTrimTightParity() throws {
+        let pipeline = try #require(GPU.pipeline, "Metal unavailable")
+        let pixels = try Fixtures2.floats("synthetic64/input.bin")
+        let input = RGBImage(pixels: pixels, width: 64, height: 64)
+        let analysis = ExposureKernel.analyze(linearImage: input, analysisBuffer: 0.05)
+
+        var settings = ExposureSettings()
+        // Deliberately chromatic: a rotation barely moves low-chroma pixels, so
+        // a neutral frame makes both parity AND has-any-effect pass vacuously.
+        settings.preSaturation = 1.6
+        settings.saturation = 1.5
+        var off = settings
+        off.hueTrim = 0
+        settings.hueTrim = 24.0
+
+        let offParams = ExposureKernel.deriveRenderParams(off, analysis)
+        let onParams = ExposureKernel.deriveRenderParams(settings, analysis)
+        let source = try pipeline.upload(input)
+
+        // Precondition: it must do something.
+        let gpuOff = try pipeline.render(source: source, params: offParams).encoded
+        let gpuOn = try pipeline.render(source: source, params: onParams).encoded
+        let (movedMean, _) = Self.diffStats(gpuOn.pixels, gpuOff.pixels)
+        #expect(movedMean > 2e-3, "hue trim barely moved the frame (\(movedMean))")
+
+        let cpu = ReferenceCurve.encodeOutput(
+            ReferenceCurve.applyPrintCurve(
+                ReferenceCurve.normalize(input, bounds: onParams.finalBounds), params: onParams))
+        let (mean, maxV) = Self.diffStats(gpuOn.pixels, cpu.pixels)
+        #expect(mean < 1e-3 && maxV < 0.02, "hue trim GPU/CPU: mean \(mean), max \(maxV)")
     }
 
     @Test func displayPathMatchesFloatPath() throws {

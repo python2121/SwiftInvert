@@ -327,14 +327,27 @@ One command buffer, passes in order (`RenderPipeline.render` /
       (negative toe raises the clip point); clamp [0,1] → **linear
       reflectance** out.
 3. **`colorPop`** (dispatched when a color-pop control is off-default —
-   vibrance/saturation/band controls — or skinProtection > 0, which is
+   vibrance/saturation/band controls, hueTrim — or skinProtection > 0, which is
    the DEFAULT (0.5): in practice the pass runs every frame, accepted with
    the port — though the ~7.2 ms/frame recorded then no longer reproduces;
    bench measures 4.3–4.6 ms/frame with the pass confirmed dispatching)
    — CIELAB
    (Adobe RGB (1998) primaries, D65 since the b3490eb port; matrices
    duplicated in MSL and
-   `LabColor.swift` — keep in sync): the **Color Mixer** first
+   `LabColor.swift` — keep in sync): **Hue Trim** first
+   (`LabColor.applyHueTrim`, NegPy 7a07f5c port — `hueTrim`, degrees ±30,
+   0 = off, radians in `RenderParams`): a rotation of a*/b* about the
+   neutral axis. It corrects the CAPTURE, not the negative — a narrowband
+   or odd-phosphor scanning light ROTATES hues instead of casting them, and
+   white balance cannot fix that because no grey is wrong (upstream measured
+   |ΔH| flat at 16–21° from chroma 4 to 60+; a cast would shrink with
+   chroma, a channel mix would grow). A rotation fixes the origin, so
+   neutrals cannot move and it can never fight the cast removal. Runs FIRST
+   so every control below acts on corrected hues, matching upstream where it
+   rides the exposure pass ahead of their Lab stage. DIVERGENCE: upstream
+   makes it sticky across frames; ours is an ordinary sidecar setting —
+   bake it into a `SettingsProfile` for the same effect without a second
+   stickiness mechanism. Then the **Color Mixer**
    (`LabColor.applyColorMixer`, SwiftInvert-only, no NegPy equivalent —
    chroma-gated hue-targeted R/Y/G/B bands: per-band raised-cosine hue
    windows × a shared chroma ramp that zeroes at the neutral axis, so
@@ -445,8 +458,7 @@ verifies every stage boundary:
 
 Beyond parity, the suite covers the seams the fixtures reach only
 transitively, plus the app layer:
-- `SidecarCodecTests` + `HistoryLabelTests` are **drift-catchers**: each pins
-  `ExposureSettings`' stored-property count (49) and exercises every field —
+- `SidecarCodecTests` + `HistoryLabelTests` are **drift-catchers**: each pins `ExposureSettings`' stored-property count (52) and exercises every field —
   adding a settings field fails both until the decoder, `HistoryLabels`, and
   the tests' mutation lists all get their line (see the control checklist).
 - `ImagePipelineSeamTests`: the prepare/finalize cache split (a reused
@@ -681,7 +693,7 @@ values where needed):
    decoder** (sidecar back-compat), **plus `historyLabel`**
    (HistoryLabels.swift) — and `RenderParams` + its init if the kernel
    needs it. Two tripwires enforce this: `SidecarCodecTests` and
-   `HistoryLabelTests` both pin the stored-property count (49) and mutate
+   `HistoryLabelTests` both pin the stored-property count (52) and mutate
    every field, so `make test` fails until all the lists have their line.
 2. `deriveRenderParams`: map settings → params (fold into existing params
    where the algebra allows — see overall contrast/exposure — before adding

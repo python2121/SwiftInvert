@@ -40,6 +40,60 @@ updates this file. The manual procedure, for reference:
 
 ## Review history
 
+### 2026-08-06 (second) — PORTED Hue Trim (`7a07f5c`)
+
+Proposed 2026-08-05, user approved. Landed as `hueTrim` (degrees, ±30,
+**0 = off**) through the full control checklist: settings field + decoder
+line + HistoryLabels (tripwire 51 → 52 — note the count recorded in
+CLAUDE.md had drifted at 49 and is corrected), derive passthrough
+(degrees → radians, clamped to the slider range), both kernels, the
+CurveUniforms ex-pad slot (stride unchanged at 272), `colorPopActive`, a
+slider, and tests.
+
+The port was close to mechanical because their working Lab is Adobe RGB /
+D65 — byte-for-byte the matrices we have carried since b3490eb. Where
+their GPU has to inline `rgb_to_lab`/`lab_to_rgb` (WGSL has no includes),
+ours needed **no new conversions at all**: `colorPop` already does that
+round trip, so the rotation is one block at the top of it. It runs FIRST,
+ahead of the mixer/vibrance/saturation, which matches upstream (theirs
+rides the exposure pass ahead of their Lab stage) and is the right order —
+a capture correction should precede the look controls.
+
+**Divergence recorded:** upstream makes it sticky across frames since the
+light is a rig property. Ours is an ordinary sidecar-backed setting; bake
+it into a `SettingsProfile` and it carries to every fresh frame, which is
+the same behaviour through the mechanism we already have.
+
+No fixture re-dump — identity at 0, so every NegPy fixture is untouched;
+`negcli meter` is unchanged across four CR3s and the rendered TIFF hashes
+identically. 286 tests green; prepare 16.8 ms and slider 4.3 ms/frame,
+unchanged.
+
+`HueTrimTests` pins the invariants that make it safe to sit in front of
+everything else: identity at 0, neutrals stay neutral at every angle, L*
+and chroma preserved, the measured rotation equals the angle asked,
+opposite angles cancel, and — the distinction upstream's whole measurement
+rests on — the effect GROWS with chroma, where a cast would not.
+`GPUParityTests.hueTrimTightParity` runs it alone at the tight gate on a
+deliberately chromatic frame, and asserts the rotation actually moves the
+frame BEFORE comparing implementations (upstream's own lesson: a dead GPU
+mirror once passed a loose test).
+
+One tolerance worth recording, since it bit twice while writing the tests:
+"a rotation preserves chroma exactly" is NOT assertable at 1e-6 on a
+neutral. The working matrix's rowsums differ from the D65 reference white
+in the 7th digit, so `rgbToLab` already reports a few times 1e-6 of chroma
+for a perfect grey, and the rgb→Lab→rgb round trip perturbs it by as much
+again. Swept 994 greys × 121 angles the worst residual chroma is 1.05e-5
+and the worst channel spread 1.3e-7 — roughly 48,000× below a visible
+difference. The test bounds absolute residual instead.
+
+**Still open (carried over):** colour ring-around (±4cc/2cc spec),
+`91a1b78` tunable Auto Density/Grade targets (user-initiated only), the
+on-scan Color Mixer band re-tune pass (ours — and now best done AFTER
+living with Hue Trim, since some of what the mixer compensates for may be
+light rotation this fixes at the source).
+
 ### 2026-08-06 — through `7eb6837` (0.48.0 release, 3 commits)
 
 **Kernel status: a genuine null.** The path-filtered log over

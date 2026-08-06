@@ -161,8 +161,11 @@ public enum ReferenceCurve {
                 // stage: vibrance, then saturation), identity at defaults.
                 if params.bandHues != .zero || params.bandSaturations != SIMD4(repeating: 1.0)
                     || params.vibrance != 1.0 || params.saturation != 1.0
-                    || params.skinProtection > 0 {
+                    || params.skinProtection > 0 || params.hueTrim != 0 {
                     var rgb = SIMD3(Double(buf[i]), Double(buf[i + 1]), Double(buf[i + 2]))
+                    // Hue Trim first: it corrects the capture, so the look
+                    // controls below should act on corrected hues.
+                    rgb = LabColor.applyHueTrim(rgb, radians: params.hueTrim)
                     rgb = LabColor.applyColorMixer(
                         rgb, hues: params.bandHues, saturations: params.bandSaturations)
                     let res = LabColor.applyVibranceSaturation(

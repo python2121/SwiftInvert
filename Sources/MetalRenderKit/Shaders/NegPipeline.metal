@@ -88,7 +88,7 @@ struct CurveUniforms {
     // (0 = off); pads keep the 16-byte stride.
     float separationDamping;
     float skinProtection;
-    float _pad2;
+    float hueTrim;
     float _pad3;
 };
 
@@ -377,6 +377,19 @@ kernel void colorPop(
 ) {
     if (gid.x >= input.get_width() || gid.y >= input.get_height()) { return; }
     float3 result = input.read(gid).rgb;
+
+    // Hue Trim (mirrors LabColor.applyHueTrim): rotate about the neutral axis
+    // in the working CIELAB a*b* plane. Corrects the CAPTURE — a narrowband
+    // light rotates hues instead of casting them — so it runs FIRST and the
+    // look controls below act on corrected hues. L* untouched, and the origin
+    // is a fixed point, so neutrals cannot move.
+    if (p.hueTrim != 0.0f) {
+        float3 lab = rgb_to_lab(result);
+        float c = cos(p.hueTrim);
+        float s = sin(p.hueTrim);
+        lab = float3(lab.x, lab.y * c - lab.z * s, lab.y * s + lab.z * c);
+        result = clamp(lab_to_rgb(lab), float3(0.0f), float3(1.0f));
+    }
 
     // Color mixer: chroma-gated hue-targeted bands, R/Y/G/B (mirrors
     // LabColor.applyColorMixer — literals mirror the bandCentersDeg /

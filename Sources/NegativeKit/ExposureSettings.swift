@@ -94,6 +94,23 @@ public struct ExposureSettings: Codable, Equatable, Sendable {
     /// it has no effect of its own). 0 = off.
     public var separationDamping: Double = 0
 
+    /// Hue Trim (NegPy 7a07f5c): degrees of rotation of the print's colours
+    /// about the neutral axis in the working CIELAB a*b* plane. 0 = off.
+    ///
+    /// Corrects the CAPTURE, not the negative: a narrowband or odd-phosphor
+    /// scanning light ROTATES hues rather than casting them, which white
+    /// balance cannot fix because no grey is wrong. Upstream measured one
+    /// negative under two lights and found |ΔH| flat at 16–21° from CIELAB
+    /// chroma 4 to 60+ — a cast would shrink with chroma and a channel mix
+    /// would grow, so flat means the error is a rotation.
+    ///
+    /// A rotation fixes the origin, so neutrals cannot move and this can
+    /// never fight the cast removal in analysis. Unlike upstream's, this is
+    /// an ordinary sidecar-backed setting: bake it into a `SettingsProfile`
+    /// and it carries to every fresh frame, which is their "sticky" without
+    /// a second stickiness mechanism.
+    public var hueTrim: Double = 0
+
     // Pre-saturation (Negative Lab Pro concept): scales per-pixel density
     // deviations from neutral in normalized log space BEFORE the print curve,
     // restoring the inter-channel separation the per-channel normalization
@@ -188,6 +205,7 @@ public struct ExposureSettings: Codable, Equatable, Sendable {
         blueSaturation = d(.blueSaturation, 1.0)
         printSaturation = d(.printSaturation, 1.0)
         separationDamping = d(.separationDamping, 0)
+        hueTrim = d(.hueTrim, 0)
         preSaturation = d(.preSaturation, 1.15)
         temp = d(.temp, 0)
         tint = d(.tint, 0)
@@ -268,6 +286,9 @@ public struct RenderParams: Equatable, Sendable {
     /// Inert at printSaturation 1.0 (it redistributes that slider's push,
     /// it has no effect of its own). 0 = off.
     public var separationDamping: Double = 0
+    /// Hue Trim in RADIANS (the kernels want radians; the slider is degrees).
+    /// 0 = off.
+    public var hueTrim: Double = 0
     /// Black point compensation (paper Dmax → display black).
     public var trueBlack: Bool = false
     // Per-band CMY density offsets (already scaled to density units).
@@ -289,6 +310,7 @@ public struct RenderParams: Equatable, Sendable {
         bandHues: SIMD4<Double> = .zero, bandSaturations: SIMD4<Double> = SIMD4(repeating: 1.0),
         preSaturation: Double = 1.0, printSaturation: Double = 1.0,
         separationDamping: Double = 0,
+        hueTrim: Double = 0,
         trueBlack: Bool = false,
         shadowCMY: SIMD3<Double> = .zero, midCMY: SIMD3<Double> = .zero,
         highlightCMY: SIMD3<Double> = .zero,
@@ -318,6 +340,7 @@ public struct RenderParams: Equatable, Sendable {
         self.preSaturation = preSaturation
         self.printSaturation = printSaturation
         self.separationDamping = separationDamping
+        self.hueTrim = hueTrim
         self.trueBlack = trueBlack
         self.shadowCMY = shadowCMY
         self.midCMY = midCMY
@@ -512,6 +535,7 @@ public enum ExposureKernel {
             preSaturation: settings.preSaturation,
             printSaturation: min(max(settings.printSaturation, 0.0), K.printSaturationMax),
             separationDamping: min(max(settings.separationDamping, 0.0), 1.0),
+            hueTrim: min(max(settings.hueTrim, -30.0), 30.0) * .pi / 180.0,
             trueBlack: settings.trueBlack,
             // Band sliders ±1 → ±cmy_max_density print-density offsets
             // (NegPy's shadow/highlight CMY scale, plus a mids band).

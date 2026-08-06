@@ -226,6 +226,13 @@ struct ControlsSidebar: View {
                             range: 0...2, format: "%.2f", defaultValue: 0.5,
                             help: "How strongly the measured color cast on the neutral axis is removed; above 1 overcorrects past neutral.")
                         Divider()
+                        // Capture correction, not a look — and it runs BEFORE
+                        // every control below it, so they act on corrected hues.
+                        LabeledSlider(
+                            label: "Hue Trim", value: $model.settings.hueTrim,
+                            range: -30...30, format: "%.1f°", defaultValue: 0,
+                            help: "Rotates every color about neutral, in degrees — for a narrowband or odd-phosphor light that turns hues instead of casting them. White balance can't fix that, because no gray is wrong. Neutrals never move. This is a property of your light, not the frame: bake it into a default profile to carry it across a roll.")
+                        Divider()
                         LabeledSlider(
                             label: "Print Saturation", value: $model.settings.printSaturation,
                             range: 0...2, format: "%.2f", defaultValue: 1.0,
