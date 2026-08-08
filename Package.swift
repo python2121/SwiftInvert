@@ -20,15 +20,32 @@ var targets: [Target] = [
     ),
 ]
 
-// negcli builds everywhere; only the macOS build links the Metal renderer
-// (elsewhere it renders via the CPU ReferenceCurve chain). Declared per-branch
+// negcli builds everywhere; only the macOS build links the Metal renderer.
+// On Linux the GPU path is VulkanRenderKit (compute mirror of the Metal
+// chain; ReferenceCurve remains the no-GPU fallback). Declared per-branch
 // because SwiftPM validates conditional dependency names even when the
 // condition is false.
 #if !os(macOS)
 targets += [
+    .systemLibrary(
+        name: "CVulkan",
+        pkgConfig: "vulkan",
+        providers: [.apt(["libvulkan-dev"])]
+    ),
+    .target(
+        name: "VulkanRenderKit",
+        dependencies: ["CVulkan", "NegativeKit"],
+        resources: [.copy("Shaders")],
+        swiftSettings: v5
+    ),
     .executableTarget(
         name: "negcli",
-        dependencies: ["RawDecodeKit", "NegativeKit"],
+        dependencies: ["RawDecodeKit", "NegativeKit", "VulkanRenderKit"],
+        swiftSettings: v5
+    ),
+    .testTarget(
+        name: "VulkanRenderKitTests",
+        dependencies: ["VulkanRenderKit", "NegativeKit"],
         swiftSettings: v5
     ),
 ]

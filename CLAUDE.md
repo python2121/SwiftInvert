@@ -29,30 +29,58 @@ make install                # copy the bundle to /Applications
 cd ~/Documents/code/NegPy && uv run python ~/Documents/code/SwiftInvert/scripts/dump_fixtures.py
 
 # Linux (SteamOS, Qt-frontend port in progress) — inside the `swiftdev`
-# distrobox (Ubuntu 24.04; Swift via swiftly; apt libraw-dev/liblcms2-dev):
+# distrobox (Ubuntu 24.04; Swift via swiftly; apt libraw-dev/liblcms2-dev/
+# libvulkan-dev/glslang-tools/mesa-vulkan-drivers):
 distrobox enter swiftdev -- bash -lc 'cd ~/Documents/code/SwiftInvert && swift build && swift test'
 # Bare `swift test` DOES work on Linux (Swift Testing ships in the toolchain).
-# negcli builds there too (decode/thumb/render/bench/meter, CPU render path).
+# negcli builds there too (decode/thumb/render/bench/meter, Vulkan render).
+
+# Regenerate the checked-in SPIR-V after editing NegPipeline.comp:
+./scripts/compile_vulkan_shaders.sh   # (in the box; needs glslangValidator)
 ```
 
 **Linux port status:** `Package.swift` computes its target list — the
-portable core (CLibRaw, NegativeKit, RawDecodeKit, NegativeKitTests) and
-negcli build everywhere; MetalRenderKit, SwiftInvert and their test targets
-are gated behind `#if os(macOS)` (the manifest runs on the build host, which
-is exactly the right question for Metal/SwiftUI; negcli is declared
-per-branch because SwiftPM validates conditional dependency names even when
-false). Apple-only APIs in the core sit behind `#if canImport(Accelerate)`
-with scalar fallbacks (`Prefilter.logImage`, `RawDecoder`'s u16→float) and
+portable core (CLibRaw, NegativeKit, RawDecodeKit, NegativeKitTests),
+negcli, and the Linux GPU stack (CVulkan, VulkanRenderKit + its tests)
+build on Linux; MetalRenderKit, SwiftInvert and their test targets are
+gated behind `#if os(macOS)` (the manifest runs on the build host, which
+is exactly the right question for Metal/SwiftUI; per-branch declarations
+because SwiftPM validates conditional dependency names even when false).
+Apple-only APIs in the core sit behind `#if canImport(Accelerate)` with
+scalar fallbacks (`Prefilter.logImage`, `RawDecoder`'s u16→float) and
 `#if canImport(simd)` with stdlib-backed shims
 (`NegativeKit/SimdShims.swift` — the full parity suite passes on Linux
-against the same fixtures, so the fallbacks are pinned). negcli's Linux
-render/meter/bench use the CPU `ReferenceCurve` chain (full pipeline incl.
-the Lab stage) and an ImageIO-free baseline-TIFF writer
-(`negcli/TIFF16.swift`, untagged — bytes are Adobe RGB-encoded). Measured
-on the Steam Machine at 1536px: ~509 ms/frame — fine for headless/batch,
-NOT interactive, so the Vulkan compute port of the five kernels is the
-required next render step (then littleCMS for display/export color
-management, converging with NegPy's own stack).
+against the same fixtures, so the fallbacks are pinned).
+
+**VulkanRenderKit** is the Linux mirror of MetalRenderKit's chain:
+- `Shaders/NegPipeline.comp` — GLSL port of NegPipeline.metal, all six
+  kernels (`normalize`/`print_curve`/`color_pop`/`histogram`/`encode_f`/
+  `encode_u8`) in one file selected by `-DKERNEL_*`; the checked-in `.spv`
+  binaries are the build inputs (`scripts/compile_vulkan_shaders.sh`
+  regenerates — rerun + commit them with ANY `.comp` edit).
+- SSBOs of interleaved RGB floats (RGBImage's own layout — upload/readback
+  are memcpys), 1-D dispatch, std140 uniform blocks that are byte-identical
+  to the shared `ShaderTypes.swift` (a SYMLINK into MetalRenderKit — one
+  source of truth for uniform packing; `VulkanLayoutTests` pins offsets).
+- **Memory discipline (learned at 3.9 s/frame):** readback targets
+  (encoded float, display u8, histogram) MUST be `hostReadback: true` —
+  HOST_CACHED system RAM. Everything else sits in DEVICE_LOCAL|HOST_VISIBLE
+  (BAR), which the CPU must never read: BAR is write-combined and uncached
+  reads are ~1000× slower. `DeviceBuffer` holds the context strongly so
+  the VkDevice outlives every buffer (teardown order crashed otherwise).
+- `VulkanParityTests` verify GPU vs the CPU `ReferenceCurve` chain at the
+  Mac suite's gates (mean<0.01, max<0.04) across every control group —
+  chaining the Vulkan renderer to the NegPy fixtures through the CPU
+  reference. `NEGCLI_VK_CPU=1` forces llvmpipe where no GPU is visible.
+- Measured on the Steam Machine (RADV NAVI33) at 1536px: **1.7 ms/frame
+  (~590 fps) renderDisplay incl. readback**; 24 MP export render 0.39 s.
+  The CPU `ReferenceCurve` chain (~509 ms/frame) remains the no-GPU
+  fallback in negcli.
+
+negcli's Linux TIFF output is ImageIO-free (`negcli/TIFF16.swift`,
+untagged baseline TIFF — bytes are Adobe RGB-encoded); littleCMS-based
+display/export color management is still to come, converging with NegPy's
+own stack.
 
 **Toolchain constraints (this machine has Command Line Tools, no Xcode):**
 - No XCTest and Testing.framework lives outside default search paths → tests

@@ -1,6 +1,11 @@
+// NOTE: this file is shared — Sources/VulkanRenderKit/ShaderTypes.swift is a
+// symlink to it, so the uniform packing has exactly one source of truth on
+// both platforms. Keep it building without Apple frameworks.
 import Foundation
 import NegativeKit
+#if canImport(simd)
 import simd
+#endif
 
 /// Swift mirrors of the MSL uniform structs in NegPipeline.metal. Field order
 /// and alignment must match exactly — LayoutTests asserts the strides.

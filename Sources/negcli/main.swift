@@ -6,6 +6,9 @@ import ImageIO
 import MetalRenderKit
 import UniformTypeIdentifiers
 #endif
+#if canImport(VulkanRenderKit)
+import VulkanRenderKit
+#endif
 
 func usage() -> Never {
     print(
@@ -160,7 +163,12 @@ do {
         let pipeline = try RenderPipeline()
         let (encoded, _) = try pipeline.render(image: img, params: params, computeHistogram: false)
         #else
-        let encoded = ReferenceCurve.render(linearImage: img, settings: settings, analysis: analysis)
+        let encoded: RGBImage
+        if let pipeline = try? VulkanRenderPipeline() {
+            encoded = try pipeline.render(image: img, params: params, computeHistogram: false).encoded
+        } else {
+            encoded = ReferenceCurve.render(linearImage: img, settings: settings, analysis: analysis)
+        }
         #endif
         let tRender = -start.timeIntervalSinceNow - tDecode - tAnalyze
         try writeTIFF16(encoded, to: URL(fileURLWithPath: output), romm: true)
@@ -184,7 +192,13 @@ do {
         let pipeline = try RenderPipeline()
         let (encoded, _) = try pipeline.render(image: img, params: params, computeHistogram: false)
         #else
-        let encoded = ReferenceCurve.render(linearImage: img, settings: settings, analysis: analysis)
+        let encoded: RGBImage
+        if let pipeline = try? VulkanRenderPipeline() {
+            let params = ExposureKernel.deriveRenderParams(settings, analysis)
+            encoded = try pipeline.render(image: img, params: params, computeHistogram: false).encoded
+        } else {
+            encoded = ReferenceCurve.render(linearImage: img, settings: settings, analysis: analysis)
+        }
         #endif
 
         // Negative character reads the pre-offset range — the same value the
@@ -275,19 +289,36 @@ do {
             frames, img.width, img.height, reupload ? " (re-upload/frame)" : "",
             total / Double(frames) * 1000, Double(frames) / total))
         #else
-        // No GPU pipeline on this platform (yet): bench the CPU reference
-        // chain — the interim Linux render path — same slider-drag pattern.
-        _ = ReferenceCurve.render(linearImage: img, settings: settings, analysis: analysis)  // warm-up
-        let start = Date()
-        for i in 0..<frames {
-            settings.density = 1.0 + Double(i % 10) * 0.05  // vary like a slider drag
-            _ = ReferenceCurve.render(linearImage: img, settings: settings, analysis: analysis)
+        if let pipeline = try? VulkanRenderPipeline() {
+            // Vulkan compute — the app's interactive path on Linux.
+            let source = try pipeline.upload(img)
+            _ = try pipeline.render(source: source, params: ExposureKernel.deriveRenderParams(settings, analysis))  // warm-up
+            let start = Date()
+            for i in 0..<frames {
+                settings.density = 1.0 + Double(i % 10) * 0.05  // vary like a slider drag
+                let params = ExposureKernel.deriveRenderParams(settings, analysis)
+                _ = try pipeline.renderDisplay(source: source, params: params)
+            }
+            let total = -start.timeIntervalSinceNow
+            print(String(
+                format: "%d frames at %dx%d: %.1f ms/frame (%.1f fps), derive+render+readback",
+                frames, img.width, img.height,
+                total / Double(frames) * 1000, Double(frames) / total)
+                + " (Vulkan: \(pipeline.deviceName))")
+        } else {
+            // No Vulkan device: bench the CPU reference chain fallback.
+            _ = ReferenceCurve.render(linearImage: img, settings: settings, analysis: analysis)  // warm-up
+            let start = Date()
+            for i in 0..<frames {
+                settings.density = 1.0 + Double(i % 10) * 0.05  // vary like a slider drag
+                _ = ReferenceCurve.render(linearImage: img, settings: settings, analysis: analysis)
+            }
+            let total = -start.timeIntervalSinceNow
+            print(String(
+                format: "%d frames at %dx%d: %.1f ms/frame (%.1f fps), derive+render (CPU reference chain)",
+                frames, img.width, img.height,
+                total / Double(frames) * 1000, Double(frames) / total))
         }
-        let total = -start.timeIntervalSinceNow
-        print(String(
-            format: "%d frames at %dx%d: %.1f ms/frame (%.1f fps), derive+render (CPU reference chain)",
-            frames, img.width, img.height,
-            total / Double(frames) * 1000, Double(frames) / total))
         #endif
     default:
         usage()
