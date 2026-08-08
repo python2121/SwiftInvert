@@ -36,6 +36,15 @@ const QStringList kRawPatterns = {
     "*.orf", "*.rw2", "*.pef", "*.srw", "*.iiq", "*.3fr",
 };
 
+// One scanned folder (AppModel.FolderNode): its own RAW files, then its
+// subfolders — RAW-less branches pruned by the scanner.
+struct FolderScan {
+    QString name;
+    QStringList files;  // absolute paths, natural-sorted
+    std::vector<FolderScan> subfolders;
+    int totalCount = 0;
+};
+
 struct RenderOutcome {
     QImage image;
     QVector<quint32> histogram;  // 1024 bins: R,G,B,luma × 256
@@ -207,13 +216,13 @@ public:
         if (session_) si_close(session_);
     }
 
-    // Recursive scan with the Mac's rules (AppModel.buildTree/flatten):
-    // depth-capped at 8, hidden entries skipped, natural sort, and a
-    // folder's own files before its subfolders — the filmstrip order
-    // behind index numbers there and here.
-    static void scanFolder(const QString &path, const QString &rootPath, int depth,
-                           QStringList &out) {
-        if (depth > 8) return;
+    // Recursive scan with the Mac's rules (AppModel.buildTree): depth-capped
+    // at 8, hidden entries skipped, natural sort, a folder's own files before
+    // its subfolders, RAW-less branches pruned.
+    static FolderScan scanFolder(const QString &path, int depth) {
+        FolderScan node;
+        node.name = QFileInfo(path).fileName();
+        if (depth > 8) return node;
         QDir dir(path);
         QCollator collator;
         collator.setNumericMode(true);
@@ -221,13 +230,89 @@ public:
         std::sort(files.begin(), files.end(), [&](const QFileInfo &a, const QFileInfo &b) {
             return collator.compare(a.fileName(), b.fileName()) < 0;
         });
-        for (const QFileInfo &info : files) out.append(info.absoluteFilePath());
+        for (const QFileInfo &info : files) node.files.append(info.absoluteFilePath());
         QFileInfoList dirs = dir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot);
         std::sort(dirs.begin(), dirs.end(), [&](const QFileInfo &a, const QFileInfo &b) {
             return collator.compare(a.fileName(), b.fileName()) < 0;
         });
-        for (const QFileInfo &info : dirs)
-            scanFolder(info.absoluteFilePath(), rootPath, depth + 1, out);
+        for (const QFileInfo &info : dirs) {
+            FolderScan sub = scanFolder(info.absoluteFilePath(), depth + 1);
+            if (sub.totalCount > 0) node.subfolders.push_back(std::move(sub));
+        }
+        node.totalCount = node.files.size();
+        for (const FolderScan &sub : node.subfolders) node.totalCount += sub.totalCount;
+        return node;
+    }
+
+    // Build tree items: file leaves (thumbnails land on them) first, then
+    // folder rows — "name — N", enabled but not selectable, single click
+    // toggles collapse (the Mac's folderRow). Depth-first order into
+    // fileItems_/filePaths_ = the Mac's flatten = navigation order.
+    void populateTree(QTreeWidgetItem *parent, const FolderScan &node) {
+        for (const QString &file : node.files) {
+            auto *item = new QTreeWidgetItem;
+            item->setText(0, QFileInfo(file).fileName());
+            item->setData(0, Qt::UserRole, file);
+            if (parent)
+                parent->addChild(item);
+            else
+                fileList_->addTopLevelItem(item);
+            fileItems_.append(item);
+            filePaths_.append(file);
+        }
+        for (const FolderScan &sub : node.subfolders) {
+            auto *folder = new QTreeWidgetItem;
+            folder->setText(0, QStringLiteral("%1 — %2").arg(sub.name).arg(sub.totalCount));
+            folder->setFlags(Qt::ItemIsEnabled);
+            QFont bold = folder->font(0);
+            bold.setBold(true);
+            folder->setFont(0, bold);
+            if (parent)
+                parent->addChild(folder);
+            else
+                fileList_->addTopLevelItem(folder);
+            populateTree(folder, sub);
+        }
+    }
+
+    // Collapse state persists per root (QSettings), like the Mac's
+    // collapsed-folder set. Folder identity = the row's display path.
+    QString collapsedKey() const {
+        QString key = rootPath_;
+        key.replace('/', '|');
+        return QStringLiteral("collapsed/") + key;
+    }
+
+    QString folderIdentity(QTreeWidgetItem *item) const {
+        QStringList parts;
+        for (QTreeWidgetItem *it = item; it; it = it->parent()) parts.prepend(it->text(0));
+        return parts.join('/');
+    }
+
+    void applyCollapsedState() {
+        const QStringList collapsed =
+            QSettings("SwiftInvert", "qt").value(collapsedKey()).toStringList();
+        fileList_->expandAll();
+        std::function<void(QTreeWidgetItem *)> walk = [&](QTreeWidgetItem *item) {
+            if (item->flags() == Qt::ItemIsEnabled &&
+                collapsed.contains(folderIdentity(item)))
+                item->setExpanded(false);
+            for (int i = 0; i < item->childCount(); ++i) walk(item->child(i));
+        };
+        for (int i = 0; i < fileList_->topLevelItemCount(); ++i) walk(fileList_->topLevelItem(i));
+    }
+
+    void saveCollapsedState() {
+        if (restoringTree_ || rootPath_.isEmpty()) return;
+        QStringList collapsed;
+        std::function<void(QTreeWidgetItem *)> walk = [&](QTreeWidgetItem *item) {
+            if (item->flags() == Qt::ItemIsEnabled && item->childCount() > 0 &&
+                !item->isExpanded())
+                collapsed.append(folderIdentity(item));
+            for (int i = 0; i < item->childCount(); ++i) walk(item->child(i));
+        };
+        for (int i = 0; i < fileList_->topLevelItemCount(); ++i) walk(fileList_->topLevelItem(i));
+        QSettings("SwiftInvert", "qt").setValue(collapsedKey(), collapsed);
     }
 
     void openFolder(const QString &path) {
@@ -236,28 +321,27 @@ public:
         // must not clobber the user's real library.
         if (persistFolder_)
             QSettings("SwiftInvert", "qt").setValue("libraryFolder", path);
+        rootPath_ = path;
         fileList_->clear();
+        fileItems_.clear();
+        filePaths_.clear();
         statusBar()->showMessage(tr("Scanning %1…").arg(path));
-        auto *watcher = new QFutureWatcher<QStringList>(this);
-        connect(watcher, &QFutureWatcher<QStringList>::finished, this, [this, watcher, path] {
+        auto *watcher = new QFutureWatcher<FolderScan>(this);
+        connect(watcher, &QFutureWatcher<FolderScan>::finished, this, [this, watcher] {
             watcher->deleteLater();
-            const QStringList files = watcher->result();
-            const QDir root(path);
-            for (const QString &file : files) {
-                const QString relative = root.relativeFilePath(file);
-                auto *item = new QListWidgetItem(relative);
-                item->setData(Qt::UserRole, file);
-                fileList_->addItem(item);
-            }
-            statusBar()->showMessage(tr("%1 frames").arg(files.size()));
+            const FolderScan tree = watcher->result();
+            restoringTree_ = true;
+            fileList_->clear();
+            fileItems_.clear();
+            filePaths_.clear();
+            populateTree(nullptr, tree);
+            applyCollapsedState();
+            restoringTree_ = false;
+            statusBar()->showMessage(tr("%1 frames").arg(filePaths_.size()));
             loadThumbnailsAsync();
-            if (fileList_->count() > 0) fileList_->setCurrentRow(0);
+            if (!fileItems_.isEmpty()) fileList_->setCurrentItem(fileItems_.first());
         });
-        watcher->setFuture(QtConcurrent::run([path] {
-            QStringList out;
-            scanFolder(path, path, 0, out);
-            return out;
-        }));
+        watcher->setFuture(QtConcurrent::run([path] { return scanFolder(path, 0); }));
     }
 
     void selectFile(const QString &path) {
@@ -390,8 +474,9 @@ protected:
         if (key == Qt::Key_Left || key == Qt::Key_Up || key == Qt::Key_Right ||
             key == Qt::Key_Down) {
             const int delta = (key == Qt::Key_Left || key == Qt::Key_Up) ? -1 : 1;
-            const int row = fileList_->currentRow() + delta;
-            if (row >= 0 && row < fileList_->count()) fileList_->setCurrentRow(row);
+            const int index = fileItems_.indexOf(fileList_->currentItem()) + delta;
+            if (index >= 0 && index < fileItems_.size())
+                fileList_->setCurrentItem(fileItems_[index]);
             return;
         }
         QMainWindow::keyPressEvent(event);
@@ -1163,9 +1248,7 @@ private:
     // one) using each frame's own sidecar; the current frame uses the live
     // settings (flushed to its sidecar first).
     void showExportDialog() {
-        QStringList paths;
-        for (QListWidgetItem *item : fileList_->selectedItems())
-            paths.append(item->data(Qt::UserRole).toString());
+        QStringList paths = selectedFilePaths();
         if (paths.isEmpty() && !currentPath_.isEmpty()) paths.append(currentPath_);
         if (paths.isEmpty()) return;
 
@@ -1312,24 +1395,38 @@ private:
     }
 
     QWidget *makeLibraryPanel() {
-        fileList_ = new QListWidget;
+        fileList_ = new QTreeWidget;
+        fileList_->setHeaderHidden(true);
         fileList_->setSelectionMode(QAbstractItemView::ExtendedSelection);
         fileList_->setIconSize(QSize(148, 112));
         fileList_->setMinimumWidth(230);
-        fileList_->setMaximumWidth(300);
-        fileList_->setSpacing(2);
-        connect(fileList_, &QListWidget::currentItemChanged, this,
-                [this](QListWidgetItem *item, QListWidgetItem *) {
-                    if (item) selectFile(item->data(Qt::UserRole).toString());
+        fileList_->setMaximumWidth(320);
+        fileList_->setIndentation(12);
+        connect(fileList_, &QTreeWidget::currentItemChanged, this,
+                [this](QTreeWidgetItem *item, QTreeWidgetItem *) {
+                    if (!item) return;
+                    const QString path = item->data(0, Qt::UserRole).toString();
+                    if (!path.isEmpty()) selectFile(path);
                 });
+        // Single click on a folder row toggles it, like the Mac/VSCode tree.
+        connect(fileList_, &QTreeWidget::itemClicked, this,
+                [this](QTreeWidgetItem *item, int) {
+                    if (item->data(0, Qt::UserRole).toString().isEmpty())
+                        item->setExpanded(!item->isExpanded());
+                });
+        connect(fileList_, &QTreeWidget::itemExpanded, this,
+                [this](QTreeWidgetItem *) { saveCollapsedState(); });
+        connect(fileList_, &QTreeWidget::itemCollapsed, this,
+                [this](QTreeWidgetItem *) { saveCollapsedState(); });
         fileList_->setContextMenuPolicy(Qt::CustomContextMenu);
         connect(fileList_, &QWidget::customContextMenuRequested, this,
                 [this](const QPoint &pos) {
-                    QListWidgetItem *item = fileList_->itemAt(pos);
+                    QTreeWidgetItem *item = fileList_->itemAt(pos);
                     if (!item) return;
-                    const QString path = item->data(Qt::UserRole).toString();
+                    const QString path = item->data(0, Qt::UserRole).toString();
+                    if (path.isEmpty()) return;  // folder rows: no menu (yet)
                     QMenu menu;
-                    const int selected = fileList_->selectedItems().size();
+                    const int selected = selectedFilePaths().size();
                     menu.addAction(
                         selected > 1 ? tr("Export %1 Images…").arg(selected)
                                      : tr("Export Image…"),
@@ -1342,10 +1439,17 @@ private:
         return fileList_;
     }
 
+    QStringList selectedFilePaths() const {
+        QStringList out;
+        for (QTreeWidgetItem *item : fileList_->selectedItems()) {
+            const QString path = item->data(0, Qt::UserRole).toString();
+            if (!path.isEmpty()) out.append(path);
+        }
+        return out;
+    }
+
     void loadThumbnailsAsync() {
-        QStringList paths;
-        for (int i = 0; i < fileList_->count(); ++i)
-            paths.append(fileList_->item(i)->data(Qt::UserRole).toString());
+        const QStringList paths = filePaths_;
         thumbGeneration_ += 1;
         const quint64 generation = thumbGeneration_;
         auto *self = this;
@@ -1365,8 +1469,8 @@ private:
                 if (!alive->load()) return;
                 QMetaObject::invokeMethod(self, [self, i, image, generation] {
                     if (generation != self->thumbGeneration_) return;
-                    if (i < self->fileList_->count())
-                        self->fileList_->item(i)->setIcon(QIcon(QPixmap::fromImage(image)));
+                    if (i < self->fileItems_.size())
+                        self->fileItems_[i]->setIcon(0, QIcon(QPixmap::fromImage(image)));
                 }, Qt::QueuedConnection);
             }
         });
@@ -1420,7 +1524,11 @@ private:
 
     // ── State ─────────────────────────────────────────────────────────────
 
-    QListWidget *fileList_ = nullptr;
+    QTreeWidget *fileList_ = nullptr;
+    QVector<QTreeWidgetItem *> fileItems_;  // depth-first file order (Mac flatten)
+    QStringList filePaths_;
+    QString rootPath_;
+    bool restoringTree_ = false;
     ImageView *canvas_ = nullptr;
     HistogramWidget *histogram_ = nullptr;
     QLabel *infoRow_ = nullptr;
@@ -1484,11 +1592,11 @@ bool MainWindow::selfTest(const QString &target, const QString &screenshotPath) 
     openFolder(info.isDir() ? target : info.absolutePath());
     // The folder scan is async now — pump until the filmstrip populates.
     QDeadlineTimer scanDeadline(8000);
-    while (fileList_->count() == 0 && !scanDeadline.hasExpired())
+    while (fileItems_.isEmpty() && !scanDeadline.hasExpired())
         QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
     if (info.isDir()) {
-        if (fileList_->count() == 0) return false;
-        file = fileList_->item(0)->data(Qt::UserRole).toString();
+        if (fileItems_.isEmpty()) return false;
+        file = filePaths_.first();
     }
     const int64_t handle = si_open(file.toUtf8().constData());
     if (!handle) {
@@ -1524,9 +1632,9 @@ bool MainWindow::selfTest(const QString &target, const QString &screenshotPath) 
     while (!deadline.hasExpired()) {
         QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
         QThread::msleep(20);
-        bool allIconsSet = fileList_->count() > 0;
-        for (int i = 0; i < fileList_->count(); ++i)
-            if (fileList_->item(i)->icon().isNull()) allIconsSet = false;
+        bool allIconsSet = !fileItems_.isEmpty();
+        for (QTreeWidgetItem *item : fileItems_)
+            if (item->icon(0).isNull()) allIconsSet = false;
         if (allIconsSet) break;
     }
     QCoreApplication::processEvents();

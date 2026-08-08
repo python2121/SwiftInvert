@@ -201,9 +201,13 @@ click or Ctrl+Shift+P) and the three canvas-color swatches
 (gray/very-dark/black, sticky via QSettings); rotate/flip/HQ left the
 top toolbar for it (their shortcuts stayed window-level). Zones + the
 densitometer read-out join the bar when those features are ported. The
-filmstrip scans RECURSIVELY with AppModel.buildTree's rules (depth ≤ 8,
-hidden skipped, natural sort, a folder's own files before its
-subfolders) — async, labels are root-relative paths. Thumbnails build
+filmstrip is a COLLAPSIBLE FOLDER TREE (QTreeWidget — the Mac
+LibraryView's VSCode-style sidebar): scan follows AppModel.buildTree's
+rules (depth ≤ 8, hidden skipped, natural sort, a folder's own files
+before its subfolders, RAW-less branches pruned), folder rows show
+"name — N" and toggle on single click, collapse state persists per root
+(QSettings), and ←/→ navigation walks the depth-first file order (the
+Mac's flatten) skipping folder rows. Thumbnails build
 QImage on the worker but QPixmap/QIcon ONLY on the GUI thread (QPixmap
 off-thread aborts at teardown), guarded by an alive flag.
 
