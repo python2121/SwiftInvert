@@ -1,9 +1,11 @@
 import Foundation
-import ImageIO
-import MetalRenderKit
 import NegativeKit
 import RawDecodeKit
+#if canImport(MetalRenderKit)
+import ImageIO
+import MetalRenderKit
 import UniformTypeIdentifiers
+#endif
 
 func usage() -> Never {
     print(
@@ -56,6 +58,13 @@ func parseFlags(_ args: [String]) -> (positional: [String], options: [String: St
     return (positional, options, flags)
 }
 
+#if !canImport(ImageIO)
+/// Linux: untagged baseline TIFF (see TIFF16.swift); `romm` is advisory only
+/// until the lcms2 export path lands.
+func writeTIFF16(_ img: RGBImage, to url: URL, romm: Bool = false) throws {
+    try TIFF16.write(img, to: url)
+}
+#else
 /// Write an RGBImage as a 16-bit TIFF. `romm: true` tags Adobe RGB (1998) —
 /// exactly the pipeline's encoded output space (name kept for call-site
 /// stability); false tags linear sRGB (debug dumps of linear sensor data).
@@ -81,6 +90,7 @@ func writeTIFF16(_ img: RGBImage, to url: URL, romm: Bool = false) throws {
         throw NSError(domain: "negcli", code: 2, userInfo: [NSLocalizedDescriptionKey: "TIFF write failed"])
     }
 }
+#endif
 
 let args = Array(CommandLine.arguments.dropFirst())
 guard let command = args.first else { usage() }
@@ -146,8 +156,12 @@ do {
         let analysis = ExposureKernel.analyze(linearImage: analysisImage)
         let params = ExposureKernel.deriveRenderParams(settings, analysis)
         let tAnalyze = -start.timeIntervalSinceNow - tDecode
+        #if canImport(MetalRenderKit)
         let pipeline = try RenderPipeline()
         let (encoded, _) = try pipeline.render(image: img, params: params, computeHistogram: false)
+        #else
+        let encoded = ReferenceCurve.render(linearImage: img, settings: settings, analysis: analysis)
+        #endif
         let tRender = -start.timeIntervalSinceNow - tDecode - tAnalyze
         try writeTIFF16(encoded, to: URL(fileURLWithPath: output), romm: true)
         print(
@@ -165,9 +179,13 @@ do {
         let img = try RawDecoder().decode(
             url: URL(fileURLWithPath: input), quality: .preview, maxLongEdge: 1536)
         let analysis = ExposureKernel.analyze(linearImage: img)
+        #if canImport(MetalRenderKit)
         let params = ExposureKernel.deriveRenderParams(settings, analysis)
         let pipeline = try RenderPipeline()
         let (encoded, _) = try pipeline.render(image: img, params: params, computeHistogram: false)
+        #else
+        let encoded = ReferenceCurve.render(linearImage: img, settings: settings, analysis: analysis)
+        #endif
 
         // Negative character reads the pre-offset range — the same value the
         // curve's grade logic reads (NegPy's norm_density_range).
@@ -238,9 +256,10 @@ do {
             format: "analysis: prepare %.1f ms, finalize %.1f ms",
             prepMS, -tFin.timeIntervalSinceNow * 1000 / 20))
         let analysis = ExposureKernel.finalize(prep)
+        var settings = ExposureSettings()
+        #if canImport(MetalRenderKit)
         let pipeline = try RenderPipeline()
         let source = try pipeline.upload(img)
-        var settings = ExposureSettings()
         _ = try pipeline.render(source: source, params: ExposureKernel.deriveRenderParams(settings, analysis))  // warm-up
         let reupload = flags.contains("--reupload")  // simulate pre-cache behavior
         let start = Date()
@@ -255,6 +274,21 @@ do {
             format: "%d frames at %dx%d%@: %.1f ms/frame (%.1f fps), derive+render+readback",
             frames, img.width, img.height, reupload ? " (re-upload/frame)" : "",
             total / Double(frames) * 1000, Double(frames) / total))
+        #else
+        // No GPU pipeline on this platform (yet): bench the CPU reference
+        // chain — the interim Linux render path — same slider-drag pattern.
+        _ = ReferenceCurve.render(linearImage: img, settings: settings, analysis: analysis)  // warm-up
+        let start = Date()
+        for i in 0..<frames {
+            settings.density = 1.0 + Double(i % 10) * 0.05  // vary like a slider drag
+            _ = ReferenceCurve.render(linearImage: img, settings: settings, analysis: analysis)
+        }
+        let total = -start.timeIntervalSinceNow
+        print(String(
+            format: "%d frames at %dx%d: %.1f ms/frame (%.1f fps), derive+render (CPU reference chain)",
+            frames, img.width, img.height,
+            total / Double(frames) * 1000, Double(frames) / total))
+        #endif
     default:
         usage()
     }

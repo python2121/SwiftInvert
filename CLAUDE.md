@@ -27,7 +27,32 @@ make install                # copy the bundle to /Applications
 
 # Regenerate parity fixtures (after deliberate NegPy kernel/constant changes):
 cd ~/Documents/code/NegPy && uv run python ~/Documents/code/SwiftInvert/scripts/dump_fixtures.py
+
+# Linux (SteamOS, Qt-frontend port in progress) — inside the `swiftdev`
+# distrobox (Ubuntu 24.04; Swift via swiftly; apt libraw-dev/liblcms2-dev):
+distrobox enter swiftdev -- bash -lc 'cd ~/Documents/code/SwiftInvert && swift build && swift test'
+# Bare `swift test` DOES work on Linux (Swift Testing ships in the toolchain).
+# negcli builds there too (decode/thumb/render/bench/meter, CPU render path).
 ```
+
+**Linux port status:** `Package.swift` computes its target list — the
+portable core (CLibRaw, NegativeKit, RawDecodeKit, NegativeKitTests) and
+negcli build everywhere; MetalRenderKit, SwiftInvert and their test targets
+are gated behind `#if os(macOS)` (the manifest runs on the build host, which
+is exactly the right question for Metal/SwiftUI; negcli is declared
+per-branch because SwiftPM validates conditional dependency names even when
+false). Apple-only APIs in the core sit behind `#if canImport(Accelerate)`
+with scalar fallbacks (`Prefilter.logImage`, `RawDecoder`'s u16→float) and
+`#if canImport(simd)` with stdlib-backed shims
+(`NegativeKit/SimdShims.swift` — the full parity suite passes on Linux
+against the same fixtures, so the fallbacks are pinned). negcli's Linux
+render/meter/bench use the CPU `ReferenceCurve` chain (full pipeline incl.
+the Lab stage) and an ImageIO-free baseline-TIFF writer
+(`negcli/TIFF16.swift`, untagged — bytes are Adobe RGB-encoded). Measured
+on the Steam Machine at 1536px: ~509 ms/frame — fine for headless/batch,
+NOT interactive, so the Vulkan compute port of the five kernels is the
+required next render step (then littleCMS for display/export color
+management, converging with NegPy's own stack).
 
 **Toolchain constraints (this machine has Command Line Tools, no Xcode):**
 - No XCTest and Testing.framework lives outside default search paths → tests

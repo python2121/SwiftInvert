@@ -1,4 +1,6 @@
+#if canImport(Accelerate)
 import Accelerate
+#endif
 import Foundation
 
 /// Log-density prefilter chain shared by all meters
@@ -11,13 +13,19 @@ public enum Prefilter {
     /// (vDSP_vclip maps them unpredictably — don't feed it synthetic garbage).
     public static func logImage(_ image: RGBImage) -> RGBImage {
         var out = image
-        var lo: Float = 1e-6, hi: Float = 1.0
-        var n = Int32(out.pixels.count)
         out.pixels.withUnsafeMutableBufferPointer { buf in
+            #if canImport(Accelerate)
+            var lo: Float = 1e-6, hi: Float = 1.0
+            var n = Int32(buf.count)
             image.pixels.withUnsafeBufferPointer { src in
                 vDSP_vclip(src.baseAddress!, 1, &lo, &hi, buf.baseAddress!, 1, vDSP_Length(src.count))
             }
             vvlog10f(buf.baseAddress!, buf.baseAddress!, &n)
+            #else
+            for i in buf.indices {
+                buf[i] = log10f(min(max(buf[i], 1e-6), 1.0))
+            }
+            #endif
         }
         return out
     }
