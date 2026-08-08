@@ -207,8 +207,18 @@ subfolders) — async, labels are root-relative paths. Thumbnails build
 QImage on the worker but QPixmap/QIcon ONLY on the GUI thread (QPixmap
 off-thread aborts at teardown), guarded by an alive flag.
 
-- Still missing (Phase D+): test strip, levels drag on the histogram,
-  densitometer/zones, ICC-tagged output (lcms2).
+Interactive histogram (2026-08-08): double-click the sidebar histogram →
+`qt/levelswindow.cpp`, the Mac InteractiveHistogram ported whole: R/G/B
+picker, per-channel/all resets, linear peak-normalized plot with inactive
+channels dimmed, drag = grab-near-anchor-or-plant (inverse remap so you
+grab what you SEE; gap 0.01, tolerance 0.015, clamp 0.02, max 8 — the Mac
+constants), outputs clamped between neighbours, ✕ strip below the plot,
+live re-binning from every render, history labels per channel. The
+inverse remap is re-expressed in C++ (the kernel stays the rendering
+source of truth).
+
+- Still missing (Phase D+): test strip, densitometer/zones, ICC-tagged
+  output (lcms2).
 
 **Toolchain constraints (this machine has Command Line Tools, no Xcode):**
 - No XCTest and Testing.framework lives outside default search paths → tests

@@ -17,7 +17,7 @@ find_package(Qt6 REQUIRED COMPONENTS Widgets Concurrent)
 set(SWIFT_BUILD_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../.build/release"
     CACHE PATH "Directory containing libSwiftInvertCore.so")
 
-add_executable(swiftinvert-qt main.cpp imageview.cpp)
+add_executable(swiftinvert-qt main.cpp imageview.cpp levelswindow.cpp)
 target_include_directories(swiftinvert-qt PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(swiftinvert-qt PRIVATE
     Qt6::Widgets Qt6::Concurrent

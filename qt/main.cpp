@@ -19,6 +19,7 @@
 #include <QtWidgets>
 
 #include "imageview.h"
+#include "levelswindow.h"
 #include "swiftinvert_core.h"
 
 namespace {
@@ -76,13 +77,19 @@ public:
     explicit HistogramWidget(QWidget *parent = nullptr) : QWidget(parent) {
         setFixedHeight(92);
         setMinimumWidth(200);
+        setToolTip(tr("Double-click for the interactive histogram: drag a "
+                      "channel's tones to redistribute them"));
     }
+    std::function<void()> onDoubleClick;
     void setBins(const QVector<quint32> &bins) {
         bins_ = bins;
         update();
     }
 
 protected:
+    void mouseDoubleClickEvent(QMouseEvent *) override {
+        if (onDoubleClick) onDoubleClick();
+    }
     void paintEvent(QPaintEvent *) override {
         QPainter p(this);
         p.fillRect(rect(), QColor(24, 24, 26));
@@ -310,6 +317,10 @@ public:
                 backBuffer_ = 1 - back;  // `back` is now on screen; write the other next
                 canvas_->setImage(outcome.image);
                 histogram_->setBins(outcome.histogram);
+                if (levelsWindow_ && levelsWindow_->isVisible()) {
+                    levelsWindow_->setBins(outcome.histogram);
+                    levelsWindow_->refreshFromSettings();
+                }
                 updateInfoRow();
                 const char *tierName[] = {"proxy", "HQ", "full"};
                 statusBar()->showMessage(
@@ -394,6 +405,45 @@ private:
         markDirtyAndRender();
     }
 
+    static const char *levelsKey(int channel) {
+        static const char *keys[3] = {"levelsRed", "levelsGreen", "levelsBlue"};
+        return keys[channel];
+    }
+
+    QVector<QPointF> levelsAnchors(int channel) const {
+        QVector<QPointF> out;
+        for (const QJsonValue &v : settings_.value(levelsKey(channel)).toArray()) {
+            const QJsonArray pair = v.toArray();
+            if (pair.size() == 2) out.append(QPointF(pair[0].toDouble(), pair[1].toDouble()));
+        }
+        return out;
+    }
+
+    void setLevelsAnchors(int channel, const QVector<QPointF> &anchors) {
+        QJsonArray array;
+        for (const QPointF &a : anchors) array.append(QJsonArray{a.x(), a.y()});
+        if (anchors.isEmpty())
+            settings_.insert(levelsKey(channel), QJsonArray());
+        else
+            settings_.insert(levelsKey(channel), array);
+        markDirtyAndRender();
+    }
+
+    void openLevelsWindow() {
+        if (!levelsWindow_) {
+            levelsWindow_ = new LevelsWindow(this);
+            levelsWindow_->getAnchors = [this](int ch) { return levelsAnchors(ch); };
+            levelsWindow_->setAnchors = [this](int ch, const QVector<QPointF> &pts) {
+                setLevelsAnchors(ch, pts);
+            };
+            levelsWindow_->commitHistory = [this](const QString &label) { commitHistory(label); };
+        }
+        levelsWindow_->refreshFromSettings();
+        levelsWindow_->show();
+        levelsWindow_->raise();
+        levelsWindow_->activateWindow();
+    }
+
     void markDirtyAndRender() {
         if (!restoring_) {
             sidecarDirty_ = true;
@@ -436,6 +486,7 @@ private:
     void refreshAllControls() {
         for (const auto &refresh : refreshers_) refresh();
         refreshDependentStates();
+        if (levelsWindow_ && levelsWindow_->isVisible()) levelsWindow_->refreshFromSettings();
     }
 
     void refreshDependentStates() {
@@ -903,6 +954,7 @@ private:
         }
 
         histogram_ = new HistogramWidget;
+        histogram_->onDoubleClick = [this] { openLevelsWindow(); };
         layout->addWidget(histogram_);
 
         auto *viewOriginal = new QPushButton(tr("View Original (hold)"));
@@ -1336,6 +1388,7 @@ private:
     QToolButton *hqBadge_ = nullptr;
     QScrollArea *controlsScroll_ = nullptr;
     QListWidget *historyList_ = nullptr;
+    LevelsWindow *levelsWindow_ = nullptr;
     QJsonObject defaults_;
     QJsonObject settings_;
     QJsonObject toolSnapshot_;
@@ -1442,7 +1495,30 @@ bool MainWindow::selfTest(const QString &target, const QString &screenshotPath) 
     if (!grab().save(cropShot)) return false;
     QString panelShot = screenshotPath;
     panelShot.replace(QStringLiteral(".png"), QStringLiteral("_controls.png"));
-    return controlsScroll_->widget()->grab().save(panelShot);
+    if (!controlsScroll_->widget()->grab().save(panelShot)) return false;
+
+    // Levels editor: plant anchors (restoring_ guard keeps the selftest from
+    // dirtying the real sidecar), open the window, render for live bins.
+    setTool(Tool::None, false);
+    restoring_ = true;
+    setLevelsAnchors(1, {QPointF(0.35, 0.25), QPointF(0.75, 0.85)});
+    restoring_ = false;
+    openLevelsWindow();
+    levelsWindow_->selectChannel(1);
+    {
+        int32_t w = 0, h = 0;
+        QVector<quint32> bins(1024);
+        const QByteArray json = QJsonDocument(renderSettings()).toJson(QJsonDocument::Compact);
+        uint8_t *rgba = si_render(session_, json.constData(), 1, 0, &w, &h, bins.data());
+        if (!rgba) return false;
+        si_free(rgba);
+        levelsWindow_->setBins(bins);
+        levelsWindow_->refreshFromSettings();
+    }
+    QCoreApplication::processEvents();
+    QString levelsShot = screenshotPath;
+    levelsShot.replace(QStringLiteral(".png"), QStringLiteral("_levels.png"));
+    return levelsWindow_->grab().save(levelsShot);
 }
 
 int main(int argc, char **argv) {
