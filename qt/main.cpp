@@ -160,6 +160,7 @@ public:
             if (desiredTier() != lastTier_) requestRender();  // threshold crossing
         };
         canvasLayout->addWidget(canvas_, 1);
+        canvasLayout->addWidget(makeCanvasBar());
 
         auto *splitter = new QSplitter(this);
         splitter->addWidget(makeLibraryPanel());
@@ -183,22 +184,57 @@ public:
     }
 
     ~MainWindow() override {
+        alive_->store(false);
         flushSidecar();
         if (session_) si_close(session_);
     }
 
+    // Recursive scan with the Mac's rules (AppModel.buildTree/flatten):
+    // depth-capped at 8, hidden entries skipped, natural sort, and a
+    // folder's own files before its subfolders — the filmstrip order
+    // behind index numbers there and here.
+    static void scanFolder(const QString &path, const QString &rootPath, int depth,
+                           QStringList &out) {
+        if (depth > 8) return;
+        QDir dir(path);
+        QCollator collator;
+        collator.setNumericMode(true);
+        QFileInfoList files = dir.entryInfoList(kRawPatterns, QDir::Files);
+        std::sort(files.begin(), files.end(), [&](const QFileInfo &a, const QFileInfo &b) {
+            return collator.compare(a.fileName(), b.fileName()) < 0;
+        });
+        for (const QFileInfo &info : files) out.append(info.absoluteFilePath());
+        QFileInfoList dirs = dir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot);
+        std::sort(dirs.begin(), dirs.end(), [&](const QFileInfo &a, const QFileInfo &b) {
+            return collator.compare(a.fileName(), b.fileName()) < 0;
+        });
+        for (const QFileInfo &info : dirs)
+            scanFolder(info.absoluteFilePath(), rootPath, depth + 1, out);
+    }
+
     void openFolder(const QString &path) {
         fileList_->clear();
-        const QDir dir(path);
-        const QFileInfoList files = dir.entryInfoList(kRawPatterns, QDir::Files, QDir::Name);
-        for (const QFileInfo &info : files) {
-            auto *item = new QListWidgetItem(info.fileName());
-            item->setData(Qt::UserRole, info.absoluteFilePath());
-            fileList_->addItem(item);
-        }
-        statusBar()->showMessage(tr("%1 frames").arg(files.size()));
-        loadThumbnailsAsync();
-        if (fileList_->count() > 0) fileList_->setCurrentRow(0);
+        statusBar()->showMessage(tr("Scanning %1…").arg(path));
+        auto *watcher = new QFutureWatcher<QStringList>(this);
+        connect(watcher, &QFutureWatcher<QStringList>::finished, this, [this, watcher, path] {
+            watcher->deleteLater();
+            const QStringList files = watcher->result();
+            const QDir root(path);
+            for (const QString &file : files) {
+                const QString relative = root.relativeFilePath(file);
+                auto *item = new QListWidgetItem(relative);
+                item->setData(Qt::UserRole, file);
+                fileList_->addItem(item);
+            }
+            statusBar()->showMessage(tr("%1 frames").arg(files.size()));
+            loadThumbnailsAsync();
+            if (fileList_->count() > 0) fileList_->setCurrentRow(0);
+        });
+        watcher->setFuture(QtConcurrent::run([path] {
+            QStringList out;
+            scanFolder(path, path, 0, out);
+            return out;
+        }));
     }
 
     void selectFile(const QString &path) {
@@ -528,13 +564,6 @@ private:
             connect(a, &QAction::triggered, this, slot);
             return a;
         };
-        act(tr("⟲ Rotate"), QKeySequence("Ctrl+["), [this] { rotate(-90); });
-        act(tr("⟳ Rotate"), QKeySequence("Ctrl+]"), [this] { rotate(90); });
-        act(tr("Flip"), QKeySequence("Ctrl+Shift+H"), [this] {
-            editSetting("flipHorizontal", !settingBool("flipHorizontal"));
-            commitHistory(tr("Flip"));
-        });
-        bar->addSeparator();
         cropAction_ = act(tr("Crop"), QKeySequence("Ctrl+K"), [this] {
             setTool(tool_ == Tool::Crop ? Tool::None : Tool::Crop, false);
         });
@@ -547,15 +576,119 @@ private:
         act(tr("Undo"), QKeySequence::Undo, [this] { jumpHistory(history().index - 1); });
         act(tr("Redo"), QKeySequence::Redo, [this] { jumpHistory(history().index + 1); });
         bar->addSeparator();
-        hqAction_ = act(tr("HQ: Auto"), QKeySequence("Ctrl+Shift+P"), [this] {
-            hqMode_ = (hqMode_ + 1) % 3;
-            const char *names[] = {"HQ: Off", "HQ: Auto", "HQ: On"};
-            hqAction_->setText(tr(names[hqMode_]));
-            if (desiredTier() != lastTier_) requestRender();
-        });
-        bar->addSeparator();
         exportAction_ = act(tr("Export…"), QKeySequence("Ctrl+E"),
                             [this] { showExportDialog(); });
+
+        // Window-level shortcuts for controls that live on the bottom canvas
+        // bar (the Mac's control bar), not in this toolbar.
+        auto shortcut = [&](const QKeySequence &seq, auto slot) {
+            auto *a = new QAction(this);
+            a->setShortcut(seq);
+            connect(a, &QAction::triggered, this, slot);
+            addAction(a);
+        };
+        shortcut(QKeySequence("Ctrl+["), [this] { rotate(-90); });
+        shortcut(QKeySequence("Ctrl+]"), [this] { rotate(90); });
+        shortcut(QKeySequence("Ctrl+Shift+H"), [this] { flip(); });
+        shortcut(QKeySequence("Ctrl+Shift+P"), [this] { cycleHQ(); });
+    }
+
+    void flip() {
+        editSetting("flipHorizontal", !settingBool("flipHorizontal"));
+        commitHistory(tr("Flip"));
+    }
+
+    void cycleHQ() {
+        hqMode_ = (hqMode_ + 1) % 3;
+        updateHQBadge();
+        if (desiredTier() != lastTier_) requestRender();
+    }
+
+    void updateHQBadge() {
+        if (!hqBadge_) return;
+        const QColor accent = palette().color(QPalette::Highlight);
+        QString style;
+        switch (hqMode_) {
+            case 0:  // off: faint neutral chip
+                style = QString("QToolButton { font-weight: 600; padding: 2px 7px;"
+                                " border: 1px solid rgba(128,128,128,102);"
+                                " border-radius: 4px; background: rgba(128,128,128,15); }");
+                break;
+            case 1:  // auto: accent tint
+                style = QString("QToolButton { font-weight: 600; padding: 2px 7px;"
+                                " border: 1px solid rgba(%1,%2,%3,140); border-radius: 4px;"
+                                " background: rgba(%1,%2,%3,46); }")
+                            .arg(accent.red()).arg(accent.green()).arg(accent.blue());
+                break;
+            default:  // on: filled accent, light label
+                style = QString("QToolButton { font-weight: 600; padding: 2px 7px;"
+                                " border: 1px solid rgb(%1,%2,%3); border-radius: 4px;"
+                                " background: rgba(%1,%2,%3,217); color: white; }")
+                            .arg(accent.red()).arg(accent.green()).arg(accent.blue());
+        }
+        hqBadge_->setStyleSheet(style);
+        const char *tips[] = {"HQ preview off — proxy at any zoom",
+                              "HQ preview auto — sharper source past 2× zoom",
+                              "HQ preview on — full resolution always"};
+        hqBadge_->setToolTip(tr(tips[hqMode_]) + tr(" (Ctrl+Shift+P)"));
+    }
+
+    // The Mac's canvas control bar, under the image: rotate/flip, the HQ
+    // badge, and the canvas color swatches. (Zones + the densitometer
+    // read-out join when those features are ported.)
+    QWidget *makeCanvasBar() {
+        auto *bar = new QWidget;
+        auto *layout = new QHBoxLayout(bar);
+        layout->setContentsMargins(12, 4, 12, 4);
+        layout->setSpacing(10);
+
+        auto tool = [&](const QString &text, const QString &tip, auto slot) {
+            auto *b = new QToolButton;
+            b->setText(text);
+            b->setToolTip(tip);
+            b->setAutoRaise(true);
+            connect(b, &QToolButton::clicked, this, slot);
+            layout->addWidget(b);
+            return b;
+        };
+        tool(tr("⟲"), tr("Rotate counterclockwise (Ctrl+[)"), [this] { rotate(-90); });
+        tool(tr("⟳"), tr("Rotate clockwise (Ctrl+])"), [this] { rotate(90); });
+        tool(tr("⇋"), tr("Flip horizontally (Ctrl+Shift+H)"), [this] { flip(); });
+        hqBadge_ = tool(tr("HQ"), QString(), [this] { cycleHQ(); });
+        updateHQBadge();
+
+        layout->addStretch();
+
+        layout->addWidget(new QLabel(tr("Canvas")));
+        QSettings sticky("SwiftInvert", "qt");
+        const int savedCanvas = sticky.value("canvasColor", 1).toInt();
+        static const QColor swatches[3] = {
+            QColor(128, 128, 128), QColor(31, 31, 31), QColor(0, 0, 0)};
+        static const char *swatchNames[3] = {"Gray", "Very dark gray", "Black"};
+        auto *group = new QButtonGroup(bar);
+        group->setExclusive(true);
+        for (int i = 0; i < 3; ++i) {
+            auto *b = new QToolButton;
+            b->setCheckable(true);
+            b->setChecked(i == savedCanvas);
+            b->setFixedSize(20, 20);
+            b->setToolTip(tr(swatchNames[i]));
+            b->setStyleSheet(QString(
+                "QToolButton { background: %1; border: 1px solid rgba(128,128,128,120);"
+                " border-radius: 10px; }"
+                "QToolButton:checked { border: 2px solid palette(highlight); }")
+                .arg(swatches[i].name()));
+            group->addButton(b, i);
+            layout->addWidget(b);
+        }
+        connect(group, &QButtonGroup::idClicked, this, [this](int i) {
+            static const QColor colors[3] = {
+                QColor(128, 128, 128), QColor(31, 31, 31), QColor(0, 0, 0)};
+            canvas_->setCanvasColor(colors[i]);
+            QSettings("SwiftInvert", "qt").setValue("canvasColor", i);
+        });
+        canvas_->setCanvasColor(swatches[savedCanvas]);
+        return bar;
     }
 
     void rotate(int delta) {
@@ -1089,19 +1222,24 @@ private:
         thumbGeneration_ += 1;
         const quint64 generation = thumbGeneration_;
         auto *self = this;
-        (void)QtConcurrent::run([self, paths, generation] {
+        auto alive = alive_;
+        (void)QtConcurrent::run([self, alive, paths, generation] {
             for (int i = 0; i < paths.size(); ++i) {
+                if (!alive->load()) return;  // window gone: stop touching it
                 int32_t length = 0;
                 uint8_t *jpeg = si_thumbnail(paths[i].toUtf8().constData(), &length);
                 if (!jpeg) continue;
                 QImage image = QImage::fromData(jpeg, length);
                 si_free(jpeg);
                 if (image.isNull()) continue;
-                const QIcon icon(QPixmap::fromImage(
-                    image.scaled(148, 112, Qt::KeepAspectRatio, Qt::SmoothTransformation)));
-                QMetaObject::invokeMethod(self, [self, i, icon, generation] {
+                // QImage is thread-safe to build here; QPixmap/QIcon are
+                // GUI-thread-only, so the conversion happens in the lambda.
+                image = image.scaled(148, 112, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+                if (!alive->load()) return;
+                QMetaObject::invokeMethod(self, [self, i, image, generation] {
                     if (generation != self->thumbGeneration_) return;
-                    if (i < self->fileList_->count()) self->fileList_->item(i)->setIcon(icon);
+                    if (i < self->fileList_->count())
+                        self->fileList_->item(i)->setIcon(QIcon(QPixmap::fromImage(image)));
                 }, Qt::QueuedConnection);
             }
         });
@@ -1166,7 +1304,7 @@ private:
     QAction *cropAction_ = nullptr;
     QAction *analysisAction_ = nullptr;
     QAction *exportAction_ = nullptr;
-    QAction *hqAction_ = nullptr;
+    QToolButton *hqBadge_ = nullptr;
     QScrollArea *controlsScroll_ = nullptr;
     QListWidget *historyList_ = nullptr;
     QJsonObject defaults_;
@@ -1195,6 +1333,9 @@ private:
 
 public:
     quint64 thumbGeneration_ = 0;
+
+private:
+    std::shared_ptr<std::atomic_bool> alive_ = std::make_shared<std::atomic_bool>(true);
 };
 
 // Headless proof: open a file (or a folder's first RAW), render synchronously
@@ -1204,12 +1345,14 @@ public:
 bool MainWindow::selfTest(const QString &target, const QString &screenshotPath) {
     QFileInfo info(target);
     QString file = target;
+    openFolder(info.isDir() ? target : info.absolutePath());
+    // The folder scan is async now — pump until the filmstrip populates.
+    QDeadlineTimer scanDeadline(8000);
+    while (fileList_->count() == 0 && !scanDeadline.hasExpired())
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
     if (info.isDir()) {
-        openFolder(target);
         if (fileList_->count() == 0) return false;
         file = fileList_->item(0)->data(Qt::UserRole).toString();
-    } else {
-        openFolder(info.absolutePath());
     }
     const int64_t handle = si_open(file.toUtf8().constData());
     if (!handle) {

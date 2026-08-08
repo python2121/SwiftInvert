@@ -35,6 +35,13 @@ ImageView::ImageView(QWidget *parent) : QWidget(parent) {
     setMouseTracking(false);
 }
 
+void ImageView::setCanvasColor(const QColor &color) {
+    QPalette pal = palette();
+    pal.setColor(QPalette::Window, color);
+    setPalette(pal);
+    update();
+}
+
 void ImageView::setImage(const QImage &image) {
     const bool sizeChanged = image.size() != image_.size();
     image_ = image;

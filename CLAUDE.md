@@ -181,6 +181,19 @@ hqAutoZoomThreshold); tools pin the proxy; status bar names the tier.
 Also: wheel events on sliders are swallowed and forwarded to the
 controls scroll area — the wheel never changes a slider value.
 
+Canvas control bar + library recursion (2026-08-08): the Mac's
+under-canvas control bar is ported — rotate ⟲/⟳, flip, the HQ badge
+(off = faint chip / auto = accent tint / on = filled accent, cycling on
+click or Ctrl+Shift+P) and the three canvas-color swatches
+(gray/very-dark/black, sticky via QSettings); rotate/flip/HQ left the
+top toolbar for it (their shortcuts stayed window-level). Zones + the
+densitometer read-out join the bar when those features are ported. The
+filmstrip scans RECURSIVELY with AppModel.buildTree's rules (depth ≤ 8,
+hidden skipped, natural sort, a folder's own files before its
+subfolders) — async, labels are root-relative paths. Thumbnails build
+QImage on the worker but QPixmap/QIcon ONLY on the GUI thread (QPixmap
+off-thread aborts at teardown), guarded by an alive flag.
+
 - Still missing (Phase D+): test strip, levels drag on the histogram,
   densitometer/zones, ICC-tagged output (lcms2).
 

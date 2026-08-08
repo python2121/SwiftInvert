@@ -16,6 +16,7 @@ public:
     explicit ImageView(QWidget *parent = nullptr);
 
     void setImage(const QImage &image);
+    void setCanvasColor(const QColor &color);
     void setMode(Mode mode);
     Mode mode() const { return mode_; }
 
