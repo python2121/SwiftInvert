@@ -44,6 +44,21 @@ QJsonObject rectToJson(const QRectF &r) {
     return {{"x", r.x()}, {"y", r.y()}, {"width", r.width()}, {"height", r.height()}};
 }
 
+// Gradient track for a slider, mirroring the Mac's GradientSlider: the
+// groove carries the control's color meaning (2 or 3 stops), the handle
+// stays neutral. Colors are the Mac sections' exact literals.
+QString gradientStyle(const QStringList &stops) {
+    QString bg = "qlineargradient(x1:0, y1:0, x2:1, y2:0";
+    for (int i = 0; i < stops.size(); ++i)
+        bg += QString(", stop:%1 %2").arg(double(i) / (stops.size() - 1)).arg(stops[i]);
+    bg += ")";
+    return QString(
+        "QSlider::groove:horizontal { height: 6px; border-radius: 3px; background: %1; }"
+        "QSlider::handle:horizontal { width: 12px; margin: -4px 0; border-radius: 6px;"
+        " background: #EEEEEE; border: 1px solid #999999; }")
+        .arg(bg);
+}
+
 QRectF rectFromJson(const QJsonValue &v) {
     if (!v.isObject()) return {};
     const QJsonObject o = v.toObject();
@@ -593,7 +608,8 @@ private:
     // immediately (programmatic sets like the reset buttons).
     QWidget *sliderRow(const QString &label, double minimum, double maximum, double step,
                       double defaultValue, int decimals, const QString &suffix,
-                      std::function<double()> get, std::function<void(double)> set) {
+                      std::function<double()> get, std::function<void(double)> set,
+                      const QStringList &gradient = {}, QSlider **outSlider = nullptr) {
         auto *row = new QWidget;
         auto *grid = new QGridLayout(row);
         grid->setContentsMargins(0, 0, 0, 0);
@@ -612,6 +628,8 @@ private:
         auto *slider = new QSlider(Qt::Horizontal);
         const int ticks = int((maximum - minimum) / step + 0.5);
         slider->setRange(0, ticks);
+        if (!gradient.isEmpty()) slider->setStyleSheet(gradientStyle(gradient));
+        if (outSlider) *outSlider = slider;
 
         auto toTicks = [minimum, step](double v) { return int((v - minimum) / step + 0.5); };
         auto fromTicks = [minimum, step](int t) { return minimum + t * step; };
@@ -661,11 +679,11 @@ private:
 
     QWidget *settingSlider(const QString &label, const QString &key, double minimum,
                            double maximum, double step, double defaultValue, int decimals = 2,
-                           const QString &suffix = QString()) {
+                           const QString &suffix = QString(), const QStringList &gradient = {}) {
         return sliderRow(
             label, minimum, maximum, step, defaultValue, decimals, suffix,
             [this, key] { return settingValue(key); },
-            [this, key](double v) { editSetting(key, v); });
+            [this, key](double v) { editSetting(key, v); }, gradient);
     }
 
     QCheckBox *settingToggle(const QString &label, const QString &key) {
@@ -798,23 +816,39 @@ private:
             static const char *hueKeys[4] = {"redHue", "yellowHue", "greenHue", "blueHue"};
             static const char *satKeys[4] = {"redSaturation", "yellowSaturation",
                                              "greenSaturation", "blueSaturation"};
-            auto *picker = bandPicker({tr("R"), tr("Y"), tr("G"), tr("B")}, 0, [this](int band) {
-                mixerBand_ = band;
-                refreshAllControls();
-            });
-            layout->addWidget(section(
-                tr("Color Mixer"),
-                {
-                    picker,
-                    sliderRow(
-                        tr("Hue"), -1.5, 1.5, 0.01, 0, 2, QString(),
-                        [this] { return settingValue(hueKeys[mixerBand_]); },
-                        [this](double v) { editSetting(hueKeys[mixerBand_], v); }),
-                    sliderRow(
-                        tr("Saturation"), 0, 2, 0.01, 1.0, 2, QString(),
-                        [this] { return settingValue(satKeys[mixerBand_]); },
-                        [this](double v) { editSetting(satKeys[mixerBand_], v); }),
-                }));
+            // Track colors per band: [− destination, band color, + destination]
+            // (+ rotates ccw in Lab: red→orange, yellow→green, green→teal,
+            // blue→purple) — ColorMixerSection.hueColors verbatim.
+            static const QStringList hueGradients[4] = {
+                {"#D93380", "#D93333", "#E68C26"},
+                {"#E68C26", "#E0CC33", "#99D140"},
+                {"#99D140", "#40B84D", "#26B899"},
+                {"#26ADCC", "#4073E0", "#8C4DD9"},
+            };
+            auto satGradient = [](int band) {
+                return QStringList{"#666666", hueGradients[band][1]};
+            };
+            QSlider *hueSlider = nullptr;
+            QSlider *satSlider = nullptr;
+            auto *hueRow = sliderRow(
+                tr("Hue"), -1.5, 1.5, 0.01, 0, 2, QString(),
+                [this] { return settingValue(hueKeys[mixerBand_]); },
+                [this](double v) { editSetting(hueKeys[mixerBand_], v); },
+                hueGradients[0], &hueSlider);
+            auto *satRow = sliderRow(
+                tr("Saturation"), 0, 2, 0.01, 1.0, 2, QString(),
+                [this] { return settingValue(satKeys[mixerBand_]); },
+                [this](double v) { editSetting(satKeys[mixerBand_], v); },
+                satGradient(0), &satSlider);
+            auto *picker = bandPicker(
+                {tr("R"), tr("Y"), tr("G"), tr("B")}, 0,
+                [this, hueSlider, satSlider, satGradient](int band) {
+                    mixerBand_ = band;
+                    hueSlider->setStyleSheet(gradientStyle(hueGradients[band]));
+                    satSlider->setStyleSheet(gradientStyle(satGradient(band)));
+                    refreshAllControls();
+                });
+            layout->addWidget(section(tr("Color Mixer"), {picker, hueRow, satRow}));
         }
 
         {
@@ -824,21 +858,25 @@ private:
                     gradingBand_ = band;
                     refreshAllControls();
                 });
-            auto channelSlider = [this](const QString &label, int component) {
+            auto channelSlider = [this](const QString &label, int component,
+                                        const QStringList &gradient) {
                 return sliderRow(
                     label, -1, 1, 0.01, 0, 2, QString(),
                     [this, component] { return gradingValue(bandKeys[gradingBand_], component); },
-                    [this, component](double v) { editGrading(bandKeys[gradingBand_], component, v); });
+                    [this, component](double v) { editGrading(bandKeys[gradingBand_], component, v); },
+                    gradient);
             };
             layout->addWidget(section(
                 tr("Color Grading"),
                 {
-                    settingSlider(tr("Temp"), "temp", -1, 1, 0.01, 0),
-                    settingSlider(tr("Tint"), "tint", -1, 1, 0.01, 0),
+                    settingSlider(tr("Temp"), "temp", -1, 1, 0.01, 0, 2, QString(),
+                                  {"#4059D9", "#666666", "#BFB326"}),
+                    settingSlider(tr("Tint"), "tint", -1, 1, 0.01, 0, 2, QString(),
+                                  {"#33BF40", "#666666", "#B333BF"}),
                     picker,
-                    channelSlider(tr("R ↔ C"), 0),
-                    channelSlider(tr("G ↔ M"), 1),
-                    channelSlider(tr("B ↔ Y"), 2),
+                    channelSlider(tr("R ↔ C"), 0, {"#D93333", "#666666", "#1ABFCC"}),
+                    channelSlider(tr("G ↔ M"), 1, {"#33BF40", "#666666", "#B333BF"}),
+                    channelSlider(tr("B ↔ Y"), 2, {"#4059D9", "#666666", "#CCBF33"}),
                 }));
         }
 
@@ -1223,7 +1261,10 @@ bool MainWindow::selfTest(const QString &target, const QString &screenshotPath) 
     QCoreApplication::processEvents();
     QString cropShot = screenshotPath;
     cropShot.replace(QStringLiteral(".png"), QStringLiteral("_crop.png"));
-    return grab().save(cropShot);
+    if (!grab().save(cropShot)) return false;
+    QString panelShot = screenshotPath;
+    panelShot.replace(QStringLiteral(".png"), QStringLiteral("_controls.png"));
+    return controlsScroll_->widget()->grab().save(panelShot);
 }
 
 int main(int argc, char **argv) {

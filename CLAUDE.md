@@ -108,8 +108,11 @@ Shell feature state (Phase A, 2026-08-08):
 - **Controls mirror `ControlsSidebar` exactly** — same sections, ranges,
   defaults and direction conventions (Brightness = 2 − density, right =
   brighter), per-control reset-⨯ + double-click reset, Separation Damping
-  disabled at printSaturation 1, mixer/grading band pickers. When the Mac
-  sidebar gains a control, add it to `makeControlsPanel` with the same spec.
+  disabled at printSaturation 1, mixer/grading band pickers, and the
+  GradientSlider color tracks (grading Temp/Tint/R↔C/G↔M/B↔Y static;
+  mixer Hue/Saturation restyled per band — the Mac sections' exact color
+  literals, stylesheet gradients on the groove). When the Mac sidebar
+  gains a control, add it to `makeControlsPanel` with the same spec.
 - **Histogram** from the render's 4×256 bins (`si_render`'s out-param),
   drawn with HistogramView's shape-only rule (peak-normalize, fixed
   log1p compression 100000).
