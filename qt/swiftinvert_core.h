@@ -45,6 +45,18 @@ uint8_t *si_thumbnail(const char *path, int32_t *length);
 /* Default ExposureSettings as JSON — the slider defaults, single-sourced. */
 char *si_default_settings(void);
 
+/* Export: full-resolution best-demosaic decode, the frame's own sidecar-
+ * style settings, analysis from the preview-sized proxy (so exports match
+ * the interactive preview exactly). options JSON:
+ *   {"colorspace":"srgb"|"adobe", "maxLongEdge":N}   (absent/0 = full size)
+ * si_export_render returns RGBA8 for the frontend to encode (JPEG);
+ * si_export_tiff writes an untagged 16-bit baseline TIFF itself.
+ * Both take ~3–6 s per frame — call off the UI thread. */
+uint8_t *si_export_render(const char *path, const char *settings_json,
+                          const char *options_json, int32_t *width, int32_t *height);
+int32_t si_export_tiff(const char *path, const char *dest,
+                       const char *settings_json, const char *options_json);
+
 /* Vulkan device name ("" until the first render initializes the GPU). */
 char *si_device_name(void);
 

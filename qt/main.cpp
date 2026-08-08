@@ -510,6 +510,9 @@ private:
         bar->addSeparator();
         act(tr("Undo"), QKeySequence::Undo, [this] { jumpHistory(history().index - 1); });
         act(tr("Redo"), QKeySequence::Redo, [this] { jumpHistory(history().index + 1); });
+        bar->addSeparator();
+        exportAction_ = act(tr("Export…"), QKeySequence("Ctrl+E"),
+                            [this] { showExportDialog(); });
     }
 
     void rotate(int delta) {
@@ -841,6 +844,150 @@ private:
         return scroll;
     }
 
+    // ── Export ────────────────────────────────────────────────────────────
+
+    // Options dialog mirroring the Mac's ExportSheet: format, colorspace,
+    // resize, JPEG quality, destination (next-to-source or a folder), with
+    // sticky last-used values. Exports every selected frame (or the current
+    // one) using each frame's own sidecar; the current frame uses the live
+    // settings (flushed to its sidecar first).
+    void showExportDialog() {
+        QStringList paths;
+        for (QListWidgetItem *item : fileList_->selectedItems())
+            paths.append(item->data(Qt::UserRole).toString());
+        if (paths.isEmpty() && !currentPath_.isEmpty()) paths.append(currentPath_);
+        if (paths.isEmpty()) return;
+
+        QSettings sticky("SwiftInvert", "qt");
+        QDialog dialog(this);
+        dialog.setWindowTitle(tr("Export %n frame(s)", nullptr, paths.size()));
+        auto *form = new QFormLayout(&dialog);
+
+        auto *format = new QComboBox;
+        format->addItems({tr("JPEG"), tr("TIFF (16-bit)")});
+        format->setCurrentIndex(sticky.value("export/format", 0).toInt());
+        form->addRow(tr("Format"), format);
+
+        auto *colorspace = new QComboBox;
+        colorspace->addItems({tr("sRGB"), tr("Adobe RGB (wide gamut)")});
+        colorspace->setCurrentIndex(sticky.value("export/colorspace", 0).toInt());
+        form->addRow(tr("Color space"), colorspace);
+
+        auto *quality = new QSpinBox;
+        quality->setRange(50, 100);
+        quality->setValue(sticky.value("export/quality", 92).toInt());
+        form->addRow(tr("JPEG quality"), quality);
+        auto syncQuality = [format, quality] { quality->setEnabled(format->currentIndex() == 0); };
+        connect(format, &QComboBox::currentIndexChanged, &dialog, syncQuality);
+        syncQuality();
+
+        auto *resize = new QCheckBox(tr("Resize long edge to"));
+        resize->setChecked(sticky.value("export/resize", true).toBool());
+        auto *edge = new QSpinBox;
+        edge->setRange(16, 20000);
+        edge->setValue(sticky.value("export/maxLongEdge", 3000).toInt());
+        auto *resizeRow = new QWidget;
+        auto *resizeLayout = new QHBoxLayout(resizeRow);
+        resizeLayout->setContentsMargins(0, 0, 0, 0);
+        resizeLayout->addWidget(resize);
+        resizeLayout->addWidget(edge);
+        connect(resize, &QCheckBox::toggled, edge, &QWidget::setEnabled);
+        edge->setEnabled(resize->isChecked());
+        form->addRow(resizeRow);
+
+        auto *nextToSource = new QRadioButton(tr("Next to source"));
+        auto *toFolder = new QRadioButton(tr("Folder:"));
+        auto *folderEdit = new QLineEdit(sticky.value("export/folder").toString());
+        auto *browse = new QPushButton(tr("…"));
+        browse->setMaximumWidth(32);
+        connect(browse, &QPushButton::clicked, &dialog, [&dialog, folderEdit, toFolder] {
+            const QString dir = QFileDialog::getExistingDirectory(&dialog, tr("Export Folder"));
+            if (!dir.isEmpty()) {
+                folderEdit->setText(dir);
+                toFolder->setChecked(true);
+            }
+        });
+        (sticky.value("export/toFolder", false).toBool() ? toFolder : nextToSource)->setChecked(true);
+        auto *destRow = new QWidget;
+        auto *destLayout = new QHBoxLayout(destRow);
+        destLayout->setContentsMargins(0, 0, 0, 0);
+        destLayout->addWidget(nextToSource);
+        destLayout->addWidget(toFolder);
+        destLayout->addWidget(folderEdit, 1);
+        destLayout->addWidget(browse);
+        form->addRow(destRow);
+
+        auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+        buttons->button(QDialogButtonBox::Ok)->setText(tr("Export"));
+        connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+        connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        form->addRow(buttons);
+
+        if (dialog.exec() != QDialog::Accepted) return;
+
+        sticky.setValue("export/format", format->currentIndex());
+        sticky.setValue("export/colorspace", colorspace->currentIndex());
+        sticky.setValue("export/quality", quality->value());
+        sticky.setValue("export/resize", resize->isChecked());
+        sticky.setValue("export/maxLongEdge", edge->value());
+        sticky.setValue("export/toFolder", toFolder->isChecked());
+        sticky.setValue("export/folder", folderEdit->text());
+
+        QJsonObject options;
+        options.insert("colorspace", colorspace->currentIndex() == 0 ? "srgb" : "adobe");
+        if (resize->isChecked()) options.insert("maxLongEdge", edge->value());
+        runExport(paths, format->currentIndex() == 1, options, quality->value(),
+                  toFolder->isChecked() ? folderEdit->text() : QString());
+    }
+
+    void runExport(const QStringList &paths, bool tiff, const QJsonObject &options,
+                   int quality, const QString &folder) {
+        flushSidecar();  // the current frame's live edits become its sidecar
+        exportAction_->setEnabled(false);
+        const QByteArray optionsJson = QJsonDocument(options).toJson(QJsonDocument::Compact);
+        auto *self = this;
+        (void)QtConcurrent::run([self, paths, tiff, optionsJson, quality, folder] {
+            int done = 0, failed = 0;
+            for (const QString &path : paths) {
+                QMetaObject::invokeMethod(self, [self, done, total = paths.size(), path] {
+                    self->statusBar()->showMessage(
+                        tr("Exporting %1/%2 — %3…").arg(done + 1).arg(total)
+                            .arg(QFileInfo(path).fileName()));
+                }, Qt::QueuedConnection);
+
+                const QFileInfo info(path);
+                const QString dir = folder.isEmpty() ? info.absolutePath() : folder;
+                const QString dest = dir + "/" + info.completeBaseName() + (tiff ? ".tiff" : ".jpg");
+                char *sidecar = si_sidecar_load(path.toUtf8().constData());
+                const QByteArray settings = sidecar ? QByteArray(sidecar) : QByteArray("{}");
+                if (sidecar) si_free(sidecar);
+
+                bool ok = false;
+                if (tiff) {
+                    ok = si_export_tiff(path.toUtf8().constData(), dest.toUtf8().constData(),
+                                        settings.constData(), optionsJson.constData());
+                } else {
+                    int32_t w = 0, h = 0;
+                    uint8_t *rgba = si_export_render(path.toUtf8().constData(), settings.constData(),
+                                                     optionsJson.constData(), &w, &h);
+                    if (rgba) {
+                        const QImage img(rgba, w, h, w * 4, QImage::Format_RGBA8888);
+                        ok = img.save(dest, "JPEG", quality);
+                        si_free(rgba);
+                    }
+                }
+                ok ? ++done : ++failed;
+            }
+            QMetaObject::invokeMethod(self, [self, done, failed] {
+                self->exportAction_->setEnabled(true);
+                self->statusBar()->showMessage(
+                    failed ? tr("Exported %1, failed %2: %3").arg(done).arg(failed)
+                                 .arg(takeString(si_last_error()))
+                           : tr("Exported %1 frame(s)").arg(done));
+            }, Qt::QueuedConnection);
+        });
+    }
+
     // ── Library ───────────────────────────────────────────────────────────
 
     QString deviceName() {
@@ -855,6 +1002,7 @@ private:
 
     QWidget *makeLibraryPanel() {
         fileList_ = new QListWidget;
+        fileList_->setSelectionMode(QAbstractItemView::ExtendedSelection);
         fileList_->setIconSize(QSize(148, 112));
         fileList_->setMinimumWidth(230);
         fileList_->setMaximumWidth(300);
@@ -933,6 +1081,7 @@ private:
     QLabel *straightenValue_ = nullptr;
     QAction *cropAction_ = nullptr;
     QAction *analysisAction_ = nullptr;
+    QAction *exportAction_ = nullptr;
     QListWidget *historyList_ = nullptr;
     QJsonObject defaults_;
     QJsonObject settings_;

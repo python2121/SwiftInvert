@@ -358,6 +358,116 @@ public func si_default_settings() -> UnsafeMutablePointer<CChar> {
     return mallocCString(String(decoding: data, as: UTF8.self))
 }
 
+// ── Export ────────────────────────────────────────────────────────────────
+
+private struct ExportOptions: Decodable {
+    var colorspace: String? = nil  // "srgb" (default) | "adobe"
+    var maxLongEdge: Int? = nil    // 0/absent = full resolution
+}
+
+/// The export pipeline, mirroring the Mac's Exporter + negcli --full:
+/// analysis comes from the PREVIEW-SIZED decode (the same proxy the
+/// interactive session meters, so the export matches the preview — the
+/// what-you-see invariant), while pixels come from the full-resolution
+/// best-demosaic decode with the same orientation → fine rotation → crop
+/// chain. Resize happens on the encoded output (Mac order), colorspace
+/// conversion in-kernel.
+private func exportRender(
+    path: String, settingsJSON: String, optionsJSON: String
+) throws -> RGBImage {
+    let url = URL(fileURLWithPath: path)
+    var settings = ExposureSettings()
+    if !settingsJSON.isEmpty, settingsJSON != "{}" {
+        settings = try JSONDecoder().decode(ExposureSettings.self, from: Data(settingsJSON.utf8))
+    }
+    var options = ExportOptions()
+    if !optionsJSON.isEmpty {
+        options = try JSONDecoder().decode(ExportOptions.self, from: Data(optionsJSON.utf8))
+    }
+
+    let decoder = RawDecoder()
+    let preview = try decoder.decode(url: url, quality: .preview, maxLongEdge: 1536)
+    let meter = preview.oriented(rotationCW: settings.rotation, flipHorizontal: settings.flipHorizontal)
+    let analysis = ExposureKernel.analyze(
+        linearImage: meter, cropRect: settings.cropRect, analysisRect: settings.analysisRect)
+
+    var full = try decoder.decode(url: url, quality: .full, maxLongEdge: nil)
+    full = full.oriented(
+        rotationCW: settings.rotation, flipHorizontal: settings.flipHorizontal,
+        fineRotation: settings.fineRotation)
+    if let crop = settings.cropRect {
+        full = full.cropped(to: crop)
+    }
+
+    let pipeline = try Bridge.shared.getPipeline()
+    let params = ExposureKernel.deriveRenderParams(settings, analysis)
+    let source = try pipeline.upload(full)
+    let srgb = (options.colorspace ?? "srgb") != "adobe"
+    var encoded = try pipeline.render(
+        source: source, params: params, computeHistogram: false, srgbEncode: srgb
+    ).encoded
+    if let maxEdge = options.maxLongEdge, maxEdge >= 16 {
+        encoded = encoded.downsampled(maxLongEdge: maxEdge)
+    }
+    return encoded
+}
+
+/// Full-resolution export render as RGBA8 in the requested colorspace, for
+/// the frontend to encode (JPEG). ~3–6 s per frame; call off the UI thread.
+/// Caller frees.
+@_cdecl("si_export_render")
+public func si_export_render(
+    _ path: UnsafePointer<CChar>?, _ settingsJSON: UnsafePointer<CChar>?,
+    _ optionsJSON: UnsafePointer<CChar>?,
+    _ outWidth: UnsafeMutablePointer<Int32>?, _ outHeight: UnsafeMutablePointer<Int32>?
+) -> UnsafeMutablePointer<UInt8>? {
+    guard let path else { return nil }
+    do {
+        let img = try exportRender(
+            path: String(cString: path),
+            settingsJSON: settingsJSON.map { String(cString: $0) } ?? "",
+            optionsJSON: optionsJSON.map { String(cString: $0) } ?? "")
+        let n = img.width * img.height
+        outWidth?.pointee = Int32(img.width)
+        outHeight?.pointee = Int32(img.height)
+        let ptr = malloc(n * 4)!.assumingMemoryBound(to: UInt8.self)
+        img.pixels.withUnsafeBufferPointer { src in
+            for i in 0..<n {
+                ptr[i * 4] = UInt8(max(0, min(255, src[i * 3] * 255 + 0.5)))
+                ptr[i * 4 + 1] = UInt8(max(0, min(255, src[i * 3 + 1] * 255 + 0.5)))
+                ptr[i * 4 + 2] = UInt8(max(0, min(255, src[i * 3 + 2] * 255 + 0.5)))
+                ptr[i * 4 + 3] = 255
+            }
+        }
+        return ptr
+    } catch {
+        Bridge.shared.setError("export \(String(cString: path)): \(error)")
+        return nil
+    }
+}
+
+/// Same pipeline written by the core as an untagged 16-bit baseline TIFF
+/// (bytes in the requested colorspace — sRGB by default, which is what
+/// untagged viewers assume). Returns 1 on success.
+@_cdecl("si_export_tiff")
+public func si_export_tiff(
+    _ path: UnsafePointer<CChar>?, _ dest: UnsafePointer<CChar>?,
+    _ settingsJSON: UnsafePointer<CChar>?, _ optionsJSON: UnsafePointer<CChar>?
+) -> Int32 {
+    guard let path, let dest else { return 0 }
+    do {
+        let img = try exportRender(
+            path: String(cString: path),
+            settingsJSON: settingsJSON.map { String(cString: $0) } ?? "",
+            optionsJSON: optionsJSON.map { String(cString: $0) } ?? "")
+        try TIFF16.write(img, to: URL(fileURLWithPath: String(cString: dest)))
+        return 1
+    } catch {
+        Bridge.shared.setError("export tiff \(String(cString: path)): \(error)")
+        return 0
+    }
+}
+
 /// Vulkan device the renders run on (diagnostics; "" until first render).
 @_cdecl("si_device_name")
 public func si_device_name() -> UnsafeMutablePointer<CChar> {

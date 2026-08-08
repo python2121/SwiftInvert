@@ -665,9 +665,11 @@ public final class VulkanRenderPipeline: @unchecked Sendable {
         return Array(UnsafeBufferPointer(start: ptr, count: 1024))
     }
 
+    /// `srgbEncode`: re-express the float output as sRGB in-kernel (the sRGB
+    /// export leg). Off for parity with the Mac's Adobe-encoded output.
     public func render(
         source: SourceBuffer, params: RenderParams, computeHistogram: Bool = true,
-        wantLinear: Bool = false
+        wantLinear: Bool = false, srgbEncode: Bool = false
     ) throws -> Result {
         renderLock.lock()
         defer { renderLock.unlock() }
@@ -676,7 +678,7 @@ public final class VulkanRenderPipeline: @unchecked Sendable {
         let content = try encodeAndRun(
             source: source, params: params, computeHistogram: computeHistogram,
             encodeKernel: "encode_f", encodeTarget: encodedOpt!,
-            normalized: normalized, linear: linear)
+            normalized: normalized, linear: linear, encodeFlags: srgbEncode ? 1 : 0)
         return Result(
             encoded: readback(encodedOpt!, width: w, height: h),
             linear: wantLinear ? readback(content, width: w, height: h) : nil,

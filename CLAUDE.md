@@ -147,8 +147,26 @@ Phase B (2026-08-08) — geometry + canvas interactions:
   programmatic sets and toggles commit immediately, entries hold full
   settings JSON, redo tail truncates, capped at 100.
 - `--selftest` now also captures `<base>_crop.png` in crop mode.
-- Still missing (Phase C+): test strip, export, levels drag on the
-  histogram, densitometer/zones, HQ tier.
+
+Phase C (2026-08-08) — export:
+- Bridge `si_export_render` (RGBA8 for the frontend's JPEG encode) and
+  `si_export_tiff` (untagged 16-bit baseline TIFF written by the core):
+  full-resolution best-demosaic decode + the same orientation → fine
+  rotation → crop chain, but analysis from the PREVIEW-SIZED proxy — the
+  what-you-see invariant, matching the Mac's exportRender-shares-prepare.
+  Options JSON `{"colorspace":"srgb"|"adobe","maxLongEdge":N}`; the sRGB
+  leg runs in-kernel (`encode_f` honors the same flags bit as the display
+  kernel; `render(srgbEncode:)`), resize on the encoded output via
+  `downsampled` (Mac order). `negcli/TIFF16.swift` is symlinked into
+  CoreBridge (one writer, two targets).
+- Qt: Export… (Ctrl+E) dialog mirroring ExportSheet — JPEG (quality,
+  default 92) / TIFF-16, sRGB (default) / Adobe, resize long edge
+  (default on, 3000), next-to-source or chosen folder, sticky via
+  QSettings; batch over the library multi-selection, each frame using its
+  own sidecar (current frame flushed first); Mac naming (same basename,
+  .jpg/.tiff, overwrite).
+- Still missing (Phase D+): test strip, levels drag on the histogram,
+  densitometer/zones, HQ display tier, ICC-tagged output (lcms2).
 
 **Toolchain constraints (this machine has Command Line Tools, no Xcode):**
 - No XCTest and Testing.framework lives outside default search paths → tests
