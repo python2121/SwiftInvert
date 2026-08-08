@@ -180,6 +180,9 @@ cycle (Ctrl+Shift+P, Auto default = medium at ≥2× canvas zoom, the Mac's
 hqAutoZoomThreshold); tools pin the proxy; status bar names the tier.
 Also: wheel events on sliders are swallowed and forwarded to the
 controls scroll area — the wheel never changes a slider value.
+The watched folder is sticky (QSettings `libraryFolder`, the Mac's
+UserDefault equivalent): reopened on argument-less launch, saved on
+every interactive open, never written by `--selftest`.
 **Frame handoff is zero-allocation** (the big-buffer discipline applied
 to the C ABI): `si_render_into` writes straight from the GPU-mapped
 readback into caller-owned memory (returns -1 + dims when the buffer is

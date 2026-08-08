@@ -213,6 +213,11 @@ public:
     }
 
     void openFolder(const QString &path) {
+        // The watched folder is sticky across launches (the Mac's
+        // libraryFolder UserDefault) — but never from the selftest, which
+        // must not clobber the user's real library.
+        if (persistFolder_)
+            QSettings("SwiftInvert", "qt").setValue("libraryFolder", path);
         fileList_->clear();
         statusBar()->showMessage(tr("Scanning %1…").arg(path));
         auto *watcher = new QFutureWatcher<QStringList>(this);
@@ -1355,6 +1360,9 @@ private:
     std::shared_ptr<std::atomic_bool> alive_ = std::make_shared<std::atomic_bool>(true);
     std::shared_ptr<QByteArray> frameBuffers_[2];
     int backBuffer_ = 0;
+
+public:
+    bool persistFolder_ = true;
 };
 
 // Headless proof: open a file (or a folder's first RAW), render synchronously
@@ -1362,6 +1370,7 @@ private:
 // crop mode with a box and a straighten angle (<base>_crop.png). Run with
 // QT_QPA_PLATFORM=offscreen for CI-style checks.
 bool MainWindow::selfTest(const QString &target, const QString &screenshotPath) {
+    persistFolder_ = false;
     QFileInfo info(target);
     QString file = target;
     openFolder(info.isDir() ? target : info.absolutePath());
@@ -1448,6 +1457,12 @@ int main(int argc, char **argv) {
         return window.selfTest(args.first(), parser.value(selfTestOption)) ? 0 : 1;
     }
     window.show();
-    if (!args.isEmpty()) window.openFolder(args.first());
+    if (!args.isEmpty()) {
+        window.openFolder(args.first());
+    } else {
+        // Reopen the last watched folder (sticky across launches/builds).
+        const QString last = QSettings("SwiftInvert", "qt").value("libraryFolder").toString();
+        if (!last.isEmpty() && QDir(last).exists()) window.openFolder(last);
+    }
     return app.exec();
 }
