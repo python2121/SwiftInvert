@@ -174,11 +174,6 @@ public:
         resize(1500, 940);
         statusBar()->showMessage(tr("Ready"));
 
-        auto *openAction = new QAction(tr("&Open Folder…"), this);
-        openAction->setShortcut(QKeySequence::Open);
-        connect(openAction, &QAction::triggered, this, &MainWindow::chooseFolder);
-        menuBar()->addMenu(tr("&File"))->addAction(openAction);
-
         auto *escape = new QShortcut(QKeySequence(Qt::Key_Escape), this);
         connect(escape, &QShortcut::activated, this, [this] { setTool(Tool::None, false); });
     }
@@ -588,6 +583,8 @@ private:
             connect(a, &QAction::triggered, this, slot);
             return a;
         };
+        act(tr("Open Folder…"), QKeySequence::Open, [this] { chooseFolder(); });
+        bar->addSeparator();
         cropAction_ = act(tr("Crop"), QKeySequence("Ctrl+K"), [this] {
             setTool(tool_ == Tool::Crop ? Tool::None : Tool::Crop, false);
         });
