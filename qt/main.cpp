@@ -281,6 +281,11 @@ public:
 
     // Latest-wins render queue: at most one in flight, newest request replaces
     // any queued one (the same coalescing discipline as the Mac app).
+    // Frames travel zero-copy: the worker writes into the BACK persistent
+    // buffer via si_render_into (no malloc, no intermediate copies) while
+    // the canvas paints the front one; the swap happens only on success,
+    // before any queued render dispatches, so the displayed buffer is never
+    // written. The QImage handed to the canvas WRAPS the buffer.
     void requestRender() {
         if (!session_) return;
         if (renderInFlight_) {
@@ -292,12 +297,17 @@ public:
         const int tier = desiredTier();
         lastTier_ = tier;
         const QByteArray json = QJsonDocument(renderSettings()).toJson(QJsonDocument::Compact);
+        const int back = backBuffer_;
+        if (!frameBuffers_[back]) frameBuffers_[back] = std::make_shared<QByteArray>();
+        auto buffer = frameBuffers_[back];
+
         auto *watcher = new QFutureWatcher<RenderOutcome>(this);
-        connect(watcher, &QFutureWatcher<RenderOutcome>::finished, this, [this, watcher] {
+        connect(watcher, &QFutureWatcher<RenderOutcome>::finished, this, [this, watcher, back] {
             watcher->deleteLater();
             renderInFlight_ = false;
             const RenderOutcome outcome = watcher->result();
             if (!outcome.image.isNull()) {
+                backBuffer_ = 1 - back;  // `back` is now on screen; write the other next
                 canvas_->setImage(outcome.image);
                 histogram_->setBins(outcome.histogram);
                 updateInfoRow();
@@ -315,18 +325,25 @@ public:
                 requestRender();
             }
         });
-        watcher->setFuture(QtConcurrent::run([session, json, tier] {
+        watcher->setFuture(QtConcurrent::run([session, json, tier, buffer] {
             QElapsedTimer timer;
             timer.start();
             RenderOutcome outcome;
             outcome.histogram.resize(1024);
             int32_t w = 0, h = 0;
-            uint8_t *rgba = si_render(session, json.constData(), /*srgb_display=*/1, tier, &w, &h,
-                                      outcome.histogram.data());
+            int32_t r = si_render_into(session, json.constData(), /*srgb_display=*/1, tier,
+                                       reinterpret_cast<uint8_t *>(buffer->data()),
+                                       buffer->size(), &w, &h, outcome.histogram.data());
+            if (r == -1) {  // buffer too small: size it and go again (source cached)
+                buffer->resize(w * h * 4);
+                r = si_render_into(session, json.constData(), 1, tier,
+                                   reinterpret_cast<uint8_t *>(buffer->data()),
+                                   buffer->size(), &w, &h, outcome.histogram.data());
+            }
             outcome.milliseconds = timer.elapsed();
-            if (rgba) {
-                outcome.image = QImage(rgba, w, h, w * 4, QImage::Format_RGBA8888).copy();
-                si_free(rgba);
+            if (r == 1) {
+                outcome.image = QImage(reinterpret_cast<uchar *>(buffer->data()), w, h, w * 4,
+                                       QImage::Format_RGBA8888);
             }
             return outcome;
         }));
@@ -1336,6 +1353,8 @@ public:
 
 private:
     std::shared_ptr<std::atomic_bool> alive_ = std::make_shared<std::atomic_bool>(true);
+    std::shared_ptr<QByteArray> frameBuffers_[2];
+    int backBuffer_ = 0;
 };
 
 // Headless proof: open a file (or a folder's first RAW), render synchronously

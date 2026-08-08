@@ -180,6 +180,16 @@ cycle (Ctrl+Shift+P, Auto default = medium at ≥2× canvas zoom, the Mac's
 hqAutoZoomThreshold); tools pin the proxy; status bar names the tier.
 Also: wheel events on sliders are swallowed and forwarded to the
 controls scroll area — the wheel never changes a slider value.
+**Frame handoff is zero-allocation** (the big-buffer discipline applied
+to the C ABI): `si_render_into` writes straight from the GPU-mapped
+readback into caller-owned memory (returns -1 + dims when the buffer is
+too small — resize and retry, the measured source stays cached); Qt
+double-buffers two persistent QByteArrays and hands the canvas a QImage
+WRAPPING the front one, so only the front is ever painted and only the
+back is ever written. Adjustment costs on the NAVI33 (histogram + sRGB
+included): proxy 2.1 ms (~470 fps), medium 14 ms (~71 fps), full 55 ms
+(~18 fps) — vs 34/131 ms through the malloc-per-frame `si_render`, which
+remains for simple consumers.
 
 Canvas control bar + library recursion (2026-08-08): the Mac's
 under-canvas control bar is ported — rotate ⟲/⟳, flip, the HQ badge

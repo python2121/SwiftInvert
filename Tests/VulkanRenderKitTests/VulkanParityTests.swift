@@ -204,6 +204,24 @@ struct VulkanParityTests {
         #expect(worst <= 1.5, "sRGB display path deviates \(worst)/255 from CPU transform")
     }
 
+    @Test func renderDisplayIntoMatchesAllocatingPath() throws {
+        // The zero-allocation handoff must be byte-identical to the
+        // allocating readback, histogram included.
+        let pipeline = try requirePipeline()
+        let params = ExposureKernel.deriveRenderParams(ExposureSettings(), Self.analysis)
+        let source = try pipeline.upload(Self.image)
+        let allocating = try pipeline.renderDisplay(
+            source: source, params: params, srgbDisplay: true)
+        let n = Self.image.width * Self.image.height * 4
+        let dest = UnsafeMutableRawPointer.allocate(byteCount: n, alignment: 16)
+        defer { dest.deallocate() }
+        let bins = try pipeline.renderDisplay(
+            source: source, params: params, srgbDisplay: true, into: dest)
+        let direct = UnsafeRawBufferPointer(start: dest, count: n)
+        #expect(allocating.rgba.withUnsafeBytes { $0.elementsEqual(direct) })
+        #expect(bins == allocating.histogram)
+    }
+
     @Test func histogramBinsSumToPixelCount() throws {
         let pipeline = try requirePipeline()
         let params = ExposureKernel.deriveRenderParams(ExposureSettings(), Self.analysis)

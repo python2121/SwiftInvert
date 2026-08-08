@@ -693,15 +693,11 @@ public final class VulkanRenderPipeline: @unchecked Sendable {
         return (result.encoded, result.histogram)
     }
 
-    /// `srgbDisplay`: re-express the output as sRGB in-kernel (flags bit 0) —
-    /// for presenting on an unmanaged canvas. Off for parity with the Mac's
-    /// tagged-Adobe readback.
-    public func renderDisplay(
-        source: SourceBuffer, params: RenderParams, computeHistogram: Bool = true,
-        srgbDisplay: Bool = false
-    ) throws -> DisplayResult {
-        renderLock.lock()
-        defer { renderLock.unlock() }
+    /// The display encode chain up to (not including) readback; caller must
+    /// hold `renderLock`. Returns the rgba8 GPU buffer for this size.
+    private func displayEncode(
+        source: SourceBuffer, params: RenderParams, computeHistogram: Bool, srgbDisplay: Bool
+    ) throws -> DeviceBuffer {
         let w = source.width, h = source.height
         let (normalized, linear, _) = try intermediatesFor(width: w, height: h, needEncoded: false)
 
@@ -721,12 +717,47 @@ public final class VulkanRenderPipeline: @unchecked Sendable {
             source: source, params: params, computeHistogram: computeHistogram,
             encodeKernel: "encode_u8", encodeTarget: encoded8,
             normalized: normalized, linear: linear, encodeFlags: srgbDisplay ? 1 : 0)
+        return encoded8
+    }
 
+    /// `srgbDisplay`: re-express the output as sRGB in-kernel (flags bit 0) —
+    /// for presenting on an unmanaged canvas. Off for parity with the Mac's
+    /// tagged-Adobe readback.
+    public func renderDisplay(
+        source: SourceBuffer, params: RenderParams, computeHistogram: Bool = true,
+        srgbDisplay: Bool = false
+    ) throws -> DisplayResult {
+        renderLock.lock()
+        defer { renderLock.unlock() }
+        let w = source.width, h = source.height
+        let encoded8 = try displayEncode(
+            source: source, params: params, computeHistogram: computeHistogram,
+            srgbDisplay: srgbDisplay)
         let rgba = [UInt8](unsafeUninitializedCapacity: w * h * 4) { buf, count in
             buf.baseAddress!.update(
                 from: encoded8.mapped!.assumingMemoryBound(to: UInt8.self), count: w * h * 4)
             count = w * h * 4
         }
         return DisplayResult(rgba: rgba, width: w, height: h, histogram: readHistogram())
+    }
+
+    /// The zero-allocation variant: writes the frame straight from the
+    /// GPU-mapped readback buffer into caller-owned memory (width*height*4
+    /// bytes — the caller reuses one persistent buffer across frames, which
+    /// is the big-buffer discipline applied to the frontend handoff: a fresh
+    /// multi-MB allocation per frame costs a page-fault pass to first-touch).
+    /// Returns the histogram. The destination must not be read concurrently
+    /// with this call.
+    public func renderDisplay(
+        source: SourceBuffer, params: RenderParams, computeHistogram: Bool = true,
+        srgbDisplay: Bool = false, into dest: UnsafeMutableRawPointer
+    ) throws -> [UInt32] {
+        renderLock.lock()
+        defer { renderLock.unlock() }
+        let encoded8 = try displayEncode(
+            source: source, params: params, computeHistogram: computeHistogram,
+            srgbDisplay: srgbDisplay)
+        dest.copyMemory(from: encoded8.mapped!, byteCount: source.width * source.height * 4)
+        return readHistogram()
     }
 }

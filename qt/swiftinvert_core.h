@@ -33,6 +33,17 @@ uint8_t *si_render(int64_t session, const char *settings_json,
                    int32_t *width, int32_t *height,
                    uint32_t *histogram /* uint32[1024] or NULL */);
 
+/* Zero-allocation variant: writes RGBA8 into caller-owned memory reused
+ * across frames. Returns 1 on success; -1 when dest is NULL/too small —
+ * width/height are then set so the caller can resize and retry (cheap:
+ * the measured GPU source stays cached); 0 on failure. Never read dest
+ * while a render is writing it. */
+int32_t si_render_into(int64_t session, const char *settings_json,
+                       int32_t srgb_display, int32_t tier,
+                       uint8_t *dest, int64_t dest_capacity,
+                       int32_t *width, int32_t *height,
+                       uint32_t *histogram /* uint32[1024] or NULL */);
+
 /* Frame facts as JSON: width, height, densityRange, defaultGradeRange,
  * character (optional), anchor, castConfidence (optional). NULL on bad
  * handle. Caller frees. */

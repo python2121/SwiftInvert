@@ -306,6 +306,64 @@ public func si_render(
     }
 }
 
+/// The zero-allocation render: writes RGBA8 into caller-owned memory that
+/// persists across frames (see si_render for the semantics of the other
+/// parameters). Returns 1 on success; -1 when `dest` is NULL or
+/// `destCapacity` is too small — outWidth/outHeight are then set to the
+/// frame's dimensions so the caller can size its buffer and retry (the
+/// GPU source this measured is cached, so the retry pays nothing extra);
+/// 0 on failure (si_last_error explains). The destination must not be
+/// read while a render is writing it.
+@_cdecl("si_render_into")
+public func si_render_into(
+    _ handle: Int64, _ settingsJSON: UnsafePointer<CChar>?, _ srgbDisplay: Int32,
+    _ tier: Int32, _ dest: UnsafeMutableRawPointer?, _ destCapacity: Int64,
+    _ outWidth: UnsafeMutablePointer<Int32>?, _ outHeight: UnsafeMutablePointer<Int32>?,
+    _ histogram: UnsafeMutablePointer<UInt32>?
+) -> Int32 {
+    Bridge.shared.lock.lock()
+    let session = Bridge.shared.sessions[handle]
+    Bridge.shared.lock.unlock()
+    guard let session else {
+        Bridge.shared.setError("render: bad session handle \(handle)")
+        return 0
+    }
+    var settings = ExposureSettings()
+    if let settingsJSON {
+        let data = Data(String(cString: settingsJSON).utf8)
+        if !data.isEmpty {
+            do {
+                settings = try JSONDecoder().decode(ExposureSettings.self, from: data)
+            } catch {
+                Bridge.shared.setError("render: settings JSON: \(error)")
+                return 0
+            }
+        }
+    }
+    do {
+        let pipeline = try Bridge.shared.getPipeline()
+        let source = try session.source(
+            settings: settings, tier: Session.Tier(rawValue: tier) ?? .proxy,
+            pipeline: pipeline)
+        outWidth?.pointee = Int32(source.width)
+        outHeight?.pointee = Int32(source.height)
+        let needed = Int64(source.width * source.height * 4)
+        guard let dest, destCapacity >= needed else { return -1 }
+        let analysis = session.analysis(settings: settings)
+        let params = ExposureKernel.deriveRenderParams(settings, analysis)
+        let bins = try pipeline.renderDisplay(
+            source: source, params: params, computeHistogram: histogram != nil,
+            srgbDisplay: srgbDisplay != 0, into: dest)
+        if let histogram {
+            bins.withUnsafeBufferPointer { histogram.update(from: $0.baseAddress!, count: 1024) }
+        }
+        return 1
+    } catch {
+        Bridge.shared.setError("render: \(error)")
+        return 0
+    }
+}
+
 /// Frame facts for the UI, as JSON: dimensions, the darkroom "negative
 /// character" row's inputs (measured density range vs the grade default and
 /// its label), the metered anchor, and cast confidence (null when no
