@@ -12,7 +12,7 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets Concurrent)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Concurrent DBus)
 
 set(SWIFT_BUILD_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../.build/release"
     CACHE PATH "Directory containing libSwiftInvertCore.so")
@@ -20,7 +20,7 @@ set(SWIFT_BUILD_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../.build/release"
 add_executable(swiftinvert-qt main.cpp imageview.cpp levelswindow.cpp)
 target_include_directories(swiftinvert-qt PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(swiftinvert-qt PRIVATE
-    Qt6::Widgets Qt6::Concurrent
+    Qt6::Widgets Qt6::Concurrent Qt6::DBus
     ${SWIFT_BUILD_DIR}/libSwiftInvertCore.so)
 # The dylib carries its own RUNPATH to the Swift runtime; the app only needs
 # to find the dylib itself.

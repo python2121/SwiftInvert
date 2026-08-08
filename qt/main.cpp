@@ -16,6 +16,7 @@
 // (no fine rotation, no crop), so its rect maps 1:1 to the metering space.
 
 #include <QtConcurrent/QtConcurrent>
+#include <QtDBus/QtDBus>
 #include <QtWidgets>
 
 #include "imageview.h"
@@ -65,6 +66,21 @@ QRectF rectFromJson(const QJsonValue &v) {
     const QJsonObject o = v.toObject();
     return QRectF(o.value("x").toDouble(), o.value("y").toDouble(),
                   o.value("width").toDouble(), o.value("height").toDouble());
+}
+
+// Highlight `path` in the desktop's file manager (Dolphin on the Steam
+// Machine) via the org.freedesktop.FileManager1 D-Bus interface — the
+// Linux analogue of NSWorkspace.activateFileViewerSelecting. Falls back
+// to opening the containing folder.
+void revealInFileManager(const QString &path) {
+    QDBusMessage call = QDBusMessage::createMethodCall(
+        "org.freedesktop.FileManager1", "/org/freedesktop/FileManager1",
+        "org.freedesktop.FileManager1", "ShowItems");
+    call << QStringList{QUrl::fromLocalFile(path).toString()} << QString();
+    const QDBusMessage reply = QDBusConnection::sessionBus().call(call, QDBus::Block, 2000);
+    if (reply.type() == QDBusMessage::ErrorMessage)
+        QDesktopServices::openUrl(
+            QUrl::fromLocalFile(QFileInfo(path).absolutePath()));
 }
 
 }  // namespace
@@ -368,6 +384,18 @@ protected:
         QMainWindow::closeEvent(event);
     }
 
+    void keyPressEvent(QKeyEvent *event) override {
+        const int key = event->key();
+        if (key == Qt::Key_Left || key == Qt::Key_Up || key == Qt::Key_Right ||
+            key == Qt::Key_Down) {
+            const int delta = (key == Qt::Key_Left || key == Qt::Key_Up) ? -1 : 1;
+            const int row = fileList_->currentRow() + delta;
+            if (row >= 0 && row < fileList_->count()) fileList_->setCurrentRow(row);
+            return;
+        }
+        QMainWindow::keyPressEvent(event);
+    }
+
 private:
     // ── Settings model ────────────────────────────────────────────────────
 
@@ -438,6 +466,7 @@ private:
             };
             levelsWindow_->commitHistory = [this](const QString &label) { commitHistory(label); };
         }
+        levelsWindow_->setBins(lastBins_);
         levelsWindow_->refreshFromSettings();
         levelsWindow_->show();
         levelsWindow_->raise();
@@ -1292,6 +1321,23 @@ private:
                 [this](QListWidgetItem *item, QListWidgetItem *) {
                     if (item) selectFile(item->data(Qt::UserRole).toString());
                 });
+        fileList_->setContextMenuPolicy(Qt::CustomContextMenu);
+        connect(fileList_, &QWidget::customContextMenuRequested, this,
+                [this](const QPoint &pos) {
+                    QListWidgetItem *item = fileList_->itemAt(pos);
+                    if (!item) return;
+                    const QString path = item->data(Qt::UserRole).toString();
+                    QMenu menu;
+                    const int selected = fileList_->selectedItems().size();
+                    menu.addAction(
+                        selected > 1 ? tr("Export %1 Images…").arg(selected)
+                                     : tr("Export Image…"),
+                        [this] { showExportDialog(); });
+                    menu.addSeparator();
+                    menu.addAction(tr("Reveal in File Manager"),
+                                   [path] { revealInFileManager(path); });
+                    menu.exec(fileList_->mapToGlobal(pos));
+                });
         return fileList_;
     }
 
@@ -1420,6 +1466,7 @@ private:
     std::shared_ptr<std::atomic_bool> alive_ = std::make_shared<std::atomic_bool>(true);
     std::shared_ptr<QByteArray> frameBuffers_[2];
     int backBuffer_ = 0;
+    QVector<quint32> lastBins_;
 
 public:
     bool persistFolder_ = true;
@@ -1465,6 +1512,7 @@ bool MainWindow::selfTest(const QString &target, const QString &screenshotPath) 
         canvas_->setImage(QImage(rgba, w, h, w * 4, QImage::Format_RGBA8888).copy());
         si_free(rgba);
         histogram_->setBins(bins);
+        lastBins_ = bins;
         updateInfoRow();
         statusBar()->showMessage(tr("selftest — %1x%2 via %3").arg(w).arg(h).arg(deviceName()));
         return true;
