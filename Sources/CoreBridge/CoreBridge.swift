@@ -12,12 +12,93 @@ import VulkanRenderKit
 //    registry has its own lock, the Vulkan pipeline serializes internally).
 //  - failures return 0/NULL and leave a message for si_last_error.
 
+/// Per-image cache tower, a miniature of the Mac's ImageSession with the
+/// same semantics: user orientation is baked into pixels so every
+/// coordinate space agrees; analysis runs on the ORIENTATION-ONLY image
+/// (fine rotation must not re-meter — the straighten invariant) scoped by
+/// crop/analysis rects; the render source bakes fine rotation (inscribed)
+/// and THEN the crop, so cropRect is normalized on the fine-rotated frame.
+/// Every tier is keyed and rebuilt only when its inputs change — slider
+/// drags hit only derive+render.
 private final class Session {
-    let source: VulkanRenderPipeline.SourceBuffer
-    let analysis: ExposureAnalysis
-    init(source: VulkanRenderPipeline.SourceBuffer, analysis: ExposureAnalysis) {
-        self.source = source
-        self.analysis = analysis
+    let decoded: RGBImage  // preview decode, EXIF orientation baked
+
+    struct OrientKey: Equatable {
+        var rotation: Int
+        var flip: Bool
+    }
+    struct AnalysisKey: Equatable {
+        var orient: OrientKey
+        var cropRect: NormalizedRect?
+        var analysisRect: NormalizedRect?
+    }
+    struct SourceKey: Equatable {
+        var orient: OrientKey
+        var fineRotation: Double
+        var cropRect: NormalizedRect?
+    }
+
+    var meterKey: OrientKey?
+    var meterPreview: RGBImage?
+    var analysisKey: AnalysisKey?
+    var cachedAnalysis: ExposureAnalysis?
+    var sourceKey: SourceKey?
+    var cachedSource: VulkanRenderPipeline.SourceBuffer?
+
+    init(decoded: RGBImage) {
+        self.decoded = decoded
+    }
+
+    /// Orientation-only preview (the analysis input).
+    func meter(settings: ExposureSettings) -> RGBImage {
+        let key = OrientKey(rotation: settings.rotation, flip: settings.flipHorizontal)
+        if let meterPreview, meterKey == key { return meterPreview }
+        let img = (key.rotation == 0 && !key.flip)
+            ? decoded
+            : decoded.oriented(rotationCW: key.rotation, flipHorizontal: key.flip)
+        meterPreview = img
+        meterKey = key
+        return img
+    }
+
+    func analysis(settings: ExposureSettings) -> ExposureAnalysis {
+        let key = AnalysisKey(
+            orient: OrientKey(rotation: settings.rotation, flip: settings.flipHorizontal),
+            cropRect: settings.cropRect, analysisRect: settings.analysisRect)
+        if let cachedAnalysis, analysisKey == key { return cachedAnalysis }
+        let result = ExposureKernel.analyze(
+            linearImage: meter(settings: settings),
+            cropRect: settings.cropRect, analysisRect: settings.analysisRect)
+        cachedAnalysis = result
+        analysisKey = key
+        return result
+    }
+
+    /// GPU source: oriented (+fine rotation, inscribed) then cropped.
+    /// `uncropped` serves the crop tool: full frame at the requested angle.
+    func source(
+        settings: ExposureSettings, uncropped: Bool, pipeline: VulkanRenderPipeline
+    ) throws -> VulkanRenderPipeline.SourceBuffer {
+        let key = SourceKey(
+            orient: OrientKey(rotation: settings.rotation, flip: settings.flipHorizontal),
+            fineRotation: settings.fineRotation,
+            cropRect: uncropped ? nil : settings.cropRect)
+        if let cachedSource, sourceKey == key { return cachedSource }
+        var image: RGBImage
+        if settings.fineRotation == 0 {
+            image = meter(settings: settings)
+        } else {
+            image = decoded.oriented(
+                rotationCW: settings.rotation, flipHorizontal: settings.flipHorizontal,
+                fineRotation: settings.fineRotation)
+        }
+        if let crop = key.cropRect {
+            image = image.cropped(to: crop)
+        }
+        let buffer = try pipeline.upload(image)
+        cachedSource = buffer
+        sourceKey = key
+        return buffer
     }
 }
 
@@ -77,10 +158,7 @@ public func si_open(_ path: UnsafePointer<CChar>?) -> Int64 {
     let url = URL(fileURLWithPath: String(cString: path))
     do {
         let img = try RawDecoder().decode(url: url, quality: .preview, maxLongEdge: 1536)
-        let analysis = ExposureKernel.analyze(linearImage: img)
-        let pipeline = try Bridge.shared.getPipeline()
-        let source = try pipeline.upload(img)
-        let session = Session(source: source, analysis: analysis)
+        let session = Session(decoded: img)
         Bridge.shared.lock.lock()
         defer { Bridge.shared.lock.unlock() }
         let handle = Bridge.shared.nextHandle
@@ -109,8 +187,8 @@ public func si_size(
     let session = Bridge.shared.sessions[handle]
     Bridge.shared.lock.unlock()
     guard let session else { return 0 }
-    outWidth?.pointee = Int32(session.source.width)
-    outHeight?.pointee = Int32(session.source.height)
+    outWidth?.pointee = Int32(session.decoded.width)
+    outHeight?.pointee = Int32(session.decoded.height)
     return 1
 }
 
@@ -147,9 +225,11 @@ public func si_render(
     }
     do {
         let pipeline = try Bridge.shared.getPipeline()
-        let params = ExposureKernel.deriveRenderParams(settings, session.analysis)
+        let analysis = session.analysis(settings: settings)
+        let params = ExposureKernel.deriveRenderParams(settings, analysis)
+        let source = try session.source(settings: settings, uncropped: false, pipeline: pipeline)
         let display = try pipeline.renderDisplay(
-            source: session.source, params: params, computeHistogram: histogram != nil,
+            source: source, params: params, computeHistogram: histogram != nil,
             srgbDisplay: srgbDisplay != 0)
         outWidth?.pointee = Int32(display.width)
         outHeight?.pointee = Int32(display.height)
@@ -175,18 +255,19 @@ public func si_session_info(_ handle: Int64) -> UnsafeMutablePointer<CChar>? {
     let session = Bridge.shared.sessions[handle]
     Bridge.shared.lock.unlock()
     guard let session else { return nil }
-    let range = session.analysis.baseBounds.luminanceDensityRange
+    let analysis = session.cachedAnalysis ?? session.analysis(settings: ExposureSettings())
+    let range = analysis.baseBounds.luminanceDensityRange
     var info: [String: Any] = [
-        "width": session.source.width,
-        "height": session.source.height,
+        "width": session.decoded.width,
+        "height": session.decoded.height,
         "densityRange": range,
         "defaultGradeRange": CurveLogic.defaultGradeRange,
-        "anchor": session.analysis.anchor,
+        "anchor": analysis.anchor,
     ]
     if let label = Densitometry.character(densityRange: range)?.label {
         info["character"] = label
     }
-    if let confidence = session.analysis.neutralConfidence {
+    if let confidence = analysis.neutralConfidence {
         info["castConfidence"] = confidence
     }
     let data = (try? JSONSerialization.data(withJSONObject: info, options: [.sortedKeys])) ?? Data("{}".utf8)

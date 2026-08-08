@@ -126,8 +126,29 @@ Shell feature state (Phase A, 2026-08-08):
 - **View Original** hold renders stock settings ("{}").
 - `si_session_info` feeds the negative-character row (density range,
   label, cast confidence).
-- Still missing (Phase B+): crop/straighten, analysis region, zoom/pan,
-  history/undo, test strip, export, levels drag on the histogram.
+
+Phase B (2026-08-08) — geometry + canvas interactions:
+- The bridge `Session` is a miniature ImageSession cache tower with the
+  SAME semantics: orientation baked into pixels; analysis on the
+  ORIENTATION-ONLY image (straighten never re-meters) scoped by
+  crop/analysis rects; render source = oriented(+fineRotation, inscribed)
+  THEN cropped — so cropRect is normalized on the fine-rotated frame.
+  All tiers keyed; slider drags rebuild nothing.
+- Qt tools exploit that JSON contract with zero new bridge surface: the
+  CROP tool renders with cropRect stripped (the drawn box IS the stored
+  rect, straighten slider ±45° edits fineRotation live; Apply commits,
+  Cancel/Escape restores the entry snapshot); the ANALYSIS tool renders
+  orientation-only (cropRect+fineRotation stripped) so its rect maps 1:1
+  to the metering space (analysisRectFineRotation written as 0).
+- Zoom/pan on the canvas (wheel to cursor, drag pan, double-click
+  fit↔100%); rotate L/R (Ctrl+[/]) and flip (Ctrl+Shift+H) via toolbar.
+- Per-file session history (undo Ctrl+Z / redo / click-to-jump list at
+  the sidebar bottom): slider drags commit one entry on release,
+  programmatic sets and toggles commit immediately, entries hold full
+  settings JSON, redo tail truncates, capped at 100.
+- `--selftest` now also captures `<base>_crop.png` in crop mode.
+- Still missing (Phase C+): test strip, export, levels drag on the
+  histogram, densitometer/zones, HQ tier.
 
 **Toolchain constraints (this machine has Command Line Tools, no Xcode):**
 - No XCTest and Testing.framework lives outside default search paths → tests

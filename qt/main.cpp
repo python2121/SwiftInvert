@@ -1,16 +1,24 @@
 // SwiftInvert's Linux shell: Qt Widgets over the SwiftInvertCore C bridge.
 // Deliberately thin — decode/analysis/render/settings semantics all live in
-// the Swift core; this file is folder browsing, a canvas, controls that edit
-// a settings JSON object, sidecar load/save, and latest-wins async rendering.
+// the Swift core; this file is folder browsing, a canvas with crop/analysis
+// tools, controls that edit a settings JSON object, per-file history,
+// sidecar load/save, and latest-wins async rendering.
 //
 // The control set mirrors the Mac's ControlsSidebar exactly: same sections,
 // same ranges/defaults, same direction conventions (Brightness is 2 − density
 // so right = brighter print). When the Mac sidebar gains a control, add it
 // here with the same spec.
+//
+// Geometry conventions (must match the bridge Session / Mac ImageSession):
+// cropRect is normalized on the FINE-ROTATED inscribed frame — so the crop
+// tool renders uncropped at the current angle and the drawn box IS the
+// stored rect. The analysis tool renders the orientation-only frame
+// (no fine rotation, no crop), so its rect maps 1:1 to the metering space.
 
 #include <QtConcurrent/QtConcurrent>
 #include <QtWidgets>
 
+#include "imageview.h"
 #include "swiftinvert_core.h"
 
 namespace {
@@ -32,41 +40,18 @@ struct RenderOutcome {
     qint64 milliseconds = 0;
 };
 
+QJsonObject rectToJson(const QRectF &r) {
+    return {{"x", r.x()}, {"y", r.y()}, {"width", r.width()}, {"height", r.height()}};
+}
+
+QRectF rectFromJson(const QJsonValue &v) {
+    if (!v.isObject()) return {};
+    const QJsonObject o = v.toObject();
+    return QRectF(o.value("x").toDouble(), o.value("y").toDouble(),
+                  o.value("width").toDouble(), o.value("height").toDouble());
+}
+
 }  // namespace
-
-// ── Canvas ────────────────────────────────────────────────────────────────
-
-class ImageView : public QWidget {
-public:
-    explicit ImageView(QWidget *parent = nullptr) : QWidget(parent) {
-        setMinimumSize(400, 300);
-        QPalette pal = palette();
-        pal.setColor(QPalette::Window, QColor(32, 32, 34));
-        setAutoFillBackground(true);
-        setPalette(pal);
-    }
-    void setImage(const QImage &image) {
-        image_ = image;
-        update();
-    }
-
-protected:
-    void paintEvent(QPaintEvent *) override {
-        QPainter p(this);
-        if (image_.isNull()) {
-            p.setPen(QColor(150, 150, 150));
-            p.drawText(rect(), Qt::AlignCenter, tr("Open a folder and pick a frame"));
-            return;
-        }
-        QSize target = image_.size().scaled(size(), Qt::KeepAspectRatio);
-        QRect dst(QPoint((width() - target.width()) / 2, (height() - target.height()) / 2), target);
-        p.setRenderHint(QPainter::SmoothPixmapTransform);
-        p.drawImage(dst, image_);
-    }
-
-private:
-    QImage image_;
-};
 
 // ── Histogram (mirrors HistogramView: peak-normalized, fixed log
 //    compression so the curve is a property of the shape alone) ────────────
@@ -135,6 +120,8 @@ private:
 
 class MainWindow : public QMainWindow {
 public:
+    enum class Tool { None, Crop, Analysis };
+
     MainWindow() {
         defaults_ = QJsonDocument::fromJson(takeString(si_default_settings()).toUtf8()).object();
         settings_ = defaults_;
@@ -144,10 +131,20 @@ public:
         saveTimer_->setInterval(1000);  // Mac: debounced 1 s sidecar save
         connect(saveTimer_, &QTimer::timeout, this, &MainWindow::flushSidecar);
 
+        makeToolBar();
+
+        auto *canvasColumn = new QWidget;
+        auto *canvasLayout = new QVBoxLayout(canvasColumn);
+        canvasLayout->setContentsMargins(0, 0, 0, 0);
+        canvasLayout->setSpacing(0);
+        canvasLayout->addWidget(makeCropBar());
+        canvas_ = new ImageView;
+        canvas_->onBoxCommitted = [this] { boxCommitted(); };
+        canvasLayout->addWidget(canvas_, 1);
+
         auto *splitter = new QSplitter(this);
         splitter->addWidget(makeLibraryPanel());
-        canvas_ = new ImageView;
-        splitter->addWidget(canvas_);
+        splitter->addWidget(canvasColumn);
         splitter->addWidget(makeControlsPanel());
         splitter->setStretchFactor(0, 0);
         splitter->setStretchFactor(1, 1);
@@ -161,6 +158,9 @@ public:
         openAction->setShortcut(QKeySequence::Open);
         connect(openAction, &QAction::triggered, this, &MainWindow::chooseFolder);
         menuBar()->addMenu(tr("&File"))->addAction(openAction);
+
+        auto *escape = new QShortcut(QKeySequence(Qt::Key_Escape), this);
+        connect(escape, &QShortcut::activated, this, [this] { setTool(Tool::None, false); });
     }
 
     ~MainWindow() override {
@@ -184,6 +184,7 @@ public:
 
     void selectFile(const QString &path) {
         flushSidecar();  // pending edits belong to the frame being left
+        setTool(Tool::None, false);
         currentPath_ = path;
         statusBar()->showMessage(tr("Opening %1…").arg(QFileInfo(path).fileName()));
         openGeneration_ += 1;
@@ -203,7 +204,7 @@ public:
             if (session_) si_close(session_);
             session_ = handle;
             loadSidecar(path);
-            updateInfoRow();
+            initHistory(path);
             statusBar()->showMessage(QFileInfo(path).fileName());
             requestRender();
         });
@@ -222,9 +223,7 @@ public:
         }
         renderInFlight_ = true;
         const int64_t session = session_;
-        const QByteArray json =
-            QJsonDocument(showingBaseline_ ? QJsonObject() : settings_)
-                .toJson(QJsonDocument::Compact);
+        const QByteArray json = QJsonDocument(renderSettings()).toJson(QJsonDocument::Compact);
         auto *watcher = new QFutureWatcher<RenderOutcome>(this);
         connect(watcher, &QFutureWatcher<RenderOutcome>::finished, this, [this, watcher] {
             watcher->deleteLater();
@@ -233,6 +232,7 @@ public:
             if (!outcome.image.isNull()) {
                 canvas_->setImage(outcome.image);
                 histogram_->setBins(outcome.histogram);
+                updateInfoRow();
                 statusBar()->showMessage(
                     tr("render %1 ms — %2").arg(outcome.milliseconds).arg(deviceName()));
             } else {
@@ -273,6 +273,19 @@ private:
 
     double settingValue(const QString &key) const { return settings_.value(key).toDouble(); }
     bool settingBool(const QString &key) const { return settings_.value(key).toBool(); }
+
+    // The JSON a render should use right now: tools substitute geometry so
+    // the canvas shows the space they operate in.
+    QJsonObject renderSettings() const {
+        QJsonObject s = showingBaseline_ ? QJsonObject() : settings_;
+        if (tool_ == Tool::Crop) {
+            s.remove("cropRect");
+        } else if (tool_ == Tool::Analysis) {
+            s.remove("cropRect");
+            s.remove("fineRotation");
+        }
+        return s;
+    }
 
     void editSetting(const QString &key, const QJsonValue &value) {
         settings_.insert(key, value);
@@ -328,6 +341,7 @@ private:
         settings_ = defaults_;
         refreshAllControls();
         markDirtyAndRender();
+        commitHistory(tr("Reset all"));
     }
 
     void refreshAllControls() {
@@ -336,16 +350,215 @@ private:
     }
 
     void refreshDependentStates() {
-        // Mac: Separation Damping is inert (disabled) while Print Saturation
-        // is exactly 1.
         if (separationDampingRow_)
             separationDampingRow_->setEnabled(settingValue("printSaturation") != 1.0);
     }
 
-    // ── Control builders (spec mirrors ControlsSidebar) ───────────────────
+    // ── History (per file, session-scoped; entries hold full settings) ────
+
+    struct HistoryEntry {
+        QString label;
+        QJsonObject settings;
+    };
+    struct FileHistory {
+        QVector<HistoryEntry> entries;
+        int index = -1;
+    };
+
+    FileHistory &history() { return histories_[currentPath_]; }
+
+    void initHistory(const QString &path) {
+        if (!histories_.contains(path)) {
+            histories_[path].entries = {{tr("Open"), settings_}};
+            histories_[path].index = 0;
+        }
+        updateHistoryList();
+    }
+
+    void commitHistory(const QString &label) {
+        if (currentPath_.isEmpty() || restoring_) return;
+        FileHistory &h = history();
+        if (h.index >= 0 && h.entries[h.index].settings == settings_) return;
+        h.entries.resize(h.index + 1);  // new edits truncate the redo tail
+        h.entries.append({label, settings_});
+        if (h.entries.size() > 100) h.entries.removeFirst();
+        h.index = h.entries.size() - 1;
+        updateHistoryList();
+    }
+
+    void jumpHistory(int index) {
+        FileHistory &h = history();
+        if (index < 0 || index >= h.entries.size() || index == h.index) return;
+        h.index = index;
+        restoring_ = true;
+        settings_ = h.entries[index].settings;
+        refreshAllControls();
+        restoring_ = false;
+        sidecarDirty_ = true;
+        saveTimer_->start();
+        requestRender();
+        updateHistoryList();
+    }
+
+    void updateHistoryList() {
+        if (!historyList_) return;
+        const FileHistory &h = histories_.value(currentPath_);
+        historyList_->blockSignals(true);
+        historyList_->clear();
+        for (const HistoryEntry &e : h.entries) historyList_->addItem(e.label);
+        if (h.index >= 0) historyList_->setCurrentRow(h.index);
+        historyList_->blockSignals(false);
+        historyList_->scrollToBottom();
+    }
+
+    // ── Tools ─────────────────────────────────────────────────────────────
+
+    void setTool(Tool tool, bool commitOnExit) {
+        if (tool_ == tool) return;
+        // Leaving crop without Apply cancels: restore entry-time geometry.
+        if (tool_ == Tool::Crop && !commitOnExit) {
+            restoring_ = true;
+            if (toolSnapshot_.contains("cropRect"))
+                settings_.insert("cropRect", toolSnapshot_.value("cropRect"));
+            else
+                settings_.remove("cropRect");
+            settings_.insert("fineRotation", toolSnapshot_.value("fineRotation"));
+            restoring_ = false;
+        }
+        tool_ = tool;
+        cropBar_->setVisible(tool == Tool::Crop);
+        cropAction_->setChecked(tool == Tool::Crop);
+        analysisAction_->setChecked(tool == Tool::Analysis);
+        canvas_->setMode(tool == Tool::Crop ? ImageView::Mode::Crop
+                         : tool == Tool::Analysis ? ImageView::Mode::AnalysisDraw
+                                                  : ImageView::Mode::None);
+        if (tool == Tool::Crop) {
+            toolSnapshot_ = settings_;
+            canvas_->setBox(rectFromJson(settings_.value("cropRect")));
+            refreshStraighten();
+        } else if (tool == Tool::Analysis) {
+            canvas_->setBox(rectFromJson(settings_.value("analysisRect")));
+        }
+        requestRender();
+    }
+
+    void boxCommitted() {
+        if (tool_ == Tool::Analysis) {
+            const QRectF box = canvas_->box();
+            if (box.isEmpty()) {
+                settings_.remove("analysisRect");
+            } else {
+                settings_.insert("analysisRect", rectToJson(box));
+                settings_.insert("analysisRectFineRotation", 0.0);
+            }
+            markDirtyAndRender();  // metering scope changed: show it live
+            commitHistory(tr("Analysis region"));
+        }
+        // Crop mode: the box lives in the canvas until Apply.
+    }
+
+    void applyCrop() {
+        const QRectF box = canvas_->box();
+        const bool nearFull = box.isEmpty() ||
+            (box.left() < 0.01 && box.top() < 0.01 && box.right() > 0.99 && box.bottom() > 0.99);
+        if (nearFull)
+            settings_.remove("cropRect");
+        else
+            settings_.insert("cropRect", rectToJson(box));
+        tool_ = Tool::None;  // skip setTool's cancel path
+        cropBar_->setVisible(false);
+        cropAction_->setChecked(false);
+        canvas_->setMode(ImageView::Mode::None);
+        markDirtyAndRender();
+        commitHistory(tr("Crop & straighten"));
+    }
+
+    void refreshStraighten() {
+        QSignalBlocker block(straightenSlider_);
+        const double v = settingValue("fineRotation");
+        straightenSlider_->setValue(int(std::round(v * 10)));
+        straightenValue_->setText(QString::number(v, 'f', 1) + "°");
+    }
+
+    // ── UI builders ───────────────────────────────────────────────────────
+
+    void makeToolBar() {
+        auto *bar = addToolBar(tr("Tools"));
+        bar->setMovable(false);
+
+        auto act = [&](const QString &text, const QKeySequence &shortcut, auto slot) {
+            auto *a = bar->addAction(text);
+            a->setShortcut(shortcut);
+            connect(a, &QAction::triggered, this, slot);
+            return a;
+        };
+        act(tr("⟲ Rotate"), QKeySequence("Ctrl+["), [this] { rotate(-90); });
+        act(tr("⟳ Rotate"), QKeySequence("Ctrl+]"), [this] { rotate(90); });
+        act(tr("Flip"), QKeySequence("Ctrl+Shift+H"), [this] {
+            editSetting("flipHorizontal", !settingBool("flipHorizontal"));
+            commitHistory(tr("Flip"));
+        });
+        bar->addSeparator();
+        cropAction_ = act(tr("Crop"), QKeySequence("Ctrl+K"), [this] {
+            setTool(tool_ == Tool::Crop ? Tool::None : Tool::Crop, false);
+        });
+        cropAction_->setCheckable(true);
+        analysisAction_ = act(tr("Analysis Region"), QKeySequence("Ctrl+Shift+K"), [this] {
+            setTool(tool_ == Tool::Analysis ? Tool::None : Tool::Analysis, false);
+        });
+        analysisAction_->setCheckable(true);
+        bar->addSeparator();
+        act(tr("Undo"), QKeySequence::Undo, [this] { jumpHistory(history().index - 1); });
+        act(tr("Redo"), QKeySequence::Redo, [this] { jumpHistory(history().index + 1); });
+    }
+
+    void rotate(int delta) {
+        const int rotation = (int(settingValue("rotation")) + delta + 360) % 360;
+        editSetting("rotation", rotation);
+        commitHistory(delta > 0 ? tr("Rotate right") : tr("Rotate left"));
+    }
+
+    QWidget *makeCropBar() {
+        cropBar_ = new QWidget;
+        auto *layout = new QHBoxLayout(cropBar_);
+        layout->setContentsMargins(8, 4, 8, 4);
+        layout->addWidget(new QLabel(tr("Straighten")));
+        straightenSlider_ = new QSlider(Qt::Horizontal);
+        straightenSlider_->setRange(-450, 450);  // ±45° in 0.1° steps
+        straightenSlider_->setMaximumWidth(320);
+        straightenValue_ = new QLabel("0.0°");
+        straightenValue_->setMinimumWidth(46);
+        connect(straightenSlider_, &QSlider::valueChanged, this, [this](int t) {
+            const double v = t / 10.0;
+            straightenValue_->setText(QString::number(v, 'f', 1) + "°");
+            if (!refreshing_) {
+                settings_.insert("fineRotation", v);
+                requestRender();  // committed with Apply, not per tick
+            }
+        });
+        layout->addWidget(straightenSlider_);
+        layout->addWidget(straightenValue_);
+        layout->addSpacing(12);
+        auto *apply = new QPushButton(tr("Apply"));
+        connect(apply, &QPushButton::clicked, this, &MainWindow::applyCrop);
+        auto *clear = new QPushButton(tr("Clear"));
+        connect(clear, &QPushButton::clicked, this, [this] {
+            canvas_->setBox(QRectF());
+            straightenSlider_->setValue(0);
+        });
+        auto *cancel = new QPushButton(tr("Cancel"));
+        connect(cancel, &QPushButton::clicked, this, [this] { setTool(Tool::None, false); });
+        layout->addWidget(apply);
+        layout->addWidget(clear);
+        layout->addWidget(cancel);
+        layout->addStretch();
+        cropBar_->setVisible(false);
+        return cropBar_;
+    }
 
     // One slider row: caption + reset-⨯ (visible when off-default) + value
-    // label; double-click resets. `get`/`set` bridge UI value ↔ settings.
+    // label; double-click resets; history commits on release (drags) or
+    // immediately (programmatic sets like the reset buttons).
     QWidget *sliderRow(const QString &label, double minimum, double maximum, double step,
                       double defaultValue, int decimals, const QString &suffix,
                       std::function<double()> get, std::function<void(double)> set) {
@@ -378,11 +591,15 @@ private:
                                          : "font-size: 11px; color: gray;");
         };
 
-        connect(slider, &QSlider::valueChanged, this, [this, set, fromTicks, updateLabels](int t) {
-            const double v = fromTicks(t);
-            updateLabels(v);
-            if (!refreshing_) set(v);
-        });
+        connect(slider, &QSlider::valueChanged, this,
+                [this, set, fromTicks, updateLabels, label, slider](int t) {
+                    const double v = fromTicks(t);
+                    updateLabels(v);
+                    if (refreshing_) return;
+                    set(v);
+                    if (!slider->isSliderDown()) commitHistory(label);
+                });
+        connect(slider, &QSlider::sliderReleased, this, [this, label] { commitHistory(label); });
         connect(reset, &QToolButton::clicked, this,
                 [slider, toTicks, defaultValue] { slider->setValue(toTicks(defaultValue)); });
         slider->installEventFilter(this);
@@ -422,8 +639,10 @@ private:
     QCheckBox *settingToggle(const QString &label, const QString &key) {
         auto *box = new QCheckBox(label);
         box->setChecked(settingBool(key));
-        connect(box, &QCheckBox::toggled, this, [this, key](bool on) {
-            if (!refreshing_) editSetting(key, on);
+        connect(box, &QCheckBox::toggled, this, [this, key, label](bool on) {
+            if (refreshing_) return;
+            editSetting(key, on);
+            commitHistory(label);
         });
         refreshers_.push_back([this, box, key] {
             refreshing_ = true;
@@ -434,7 +653,7 @@ private:
         return box;
     }
 
-    QWidget *bandPicker(const QStringList &names, std::function<void(int)> onChange) {
+    QWidget *bandPicker(const QStringList &names, int initial, std::function<void(int)> onChange) {
         auto *row = new QWidget;
         auto *layout = new QHBoxLayout(row);
         layout->setContentsMargins(0, 0, 0, 0);
@@ -444,7 +663,7 @@ private:
         for (int i = 0; i < names.size(); ++i) {
             auto *b = new QPushButton(names[i]);
             b->setCheckable(true);
-            b->setChecked(i == 0);
+            b->setChecked(i == initial);
             b->setStyleSheet("font-size: 11px; padding: 2px;");
             group->addButton(b, i);
             layout->addWidget(b);
@@ -466,7 +685,6 @@ private:
         auto *layout = new QVBoxLayout(panel);
         layout->setSpacing(12);
 
-        // Header: title + Reset All (matches the sidebar header).
         {
             auto *header = new QWidget;
             auto *h = new QHBoxLayout(header);
@@ -483,7 +701,6 @@ private:
         histogram_ = new HistogramWidget;
         layout->addWidget(histogram_);
 
-        // Pre-process: hold-to-compare against the stock conversion.
         auto *viewOriginal = new QPushButton(tr("View Original (hold)"));
         connect(viewOriginal, &QPushButton::pressed, this, [this] {
             showingBaseline_ = true;
@@ -493,9 +710,16 @@ private:
             showingBaseline_ = false;
             requestRender();
         });
-        layout->addWidget(section(tr("Pre-process"), {viewOriginal}));
+        auto *clearAnalysis = new QPushButton(tr("Clear Analysis Region"));
+        connect(clearAnalysis, &QPushButton::clicked, this, [this] {
+            if (!settings_.contains("analysisRect")) return;
+            settings_.remove("analysisRect");
+            if (tool_ == Tool::Analysis) canvas_->setBox(QRectF());
+            markDirtyAndRender();
+            commitHistory(tr("Clear analysis region"));
+        });
+        layout->addWidget(section(tr("Pre-process"), {viewOriginal, clearAnalysis}));
 
-        // Print. Brightness: right = brighter; internally density = 2 − b.
         infoRow_ = new QLabel;
         infoRow_->setStyleSheet("font-size: 10px; color: gray;");
         layout->addWidget(section(
@@ -538,12 +762,11 @@ private:
                 settingSlider(tr("Skin Protection"), "skinProtection", 0, 1, 0.01, 0.5),
             }));
 
-        // Color Mixer: R/Y/G/B band picker + Hue/Saturation for the band.
         {
             static const char *hueKeys[4] = {"redHue", "yellowHue", "greenHue", "blueHue"};
             static const char *satKeys[4] = {"redSaturation", "yellowSaturation",
                                              "greenSaturation", "blueSaturation"};
-            auto *picker = bandPicker({tr("R"), tr("Y"), tr("G"), tr("B")}, [this](int band) {
+            auto *picker = bandPicker({tr("R"), tr("Y"), tr("G"), tr("B")}, 0, [this](int band) {
                 mixerBand_ = band;
                 refreshAllControls();
             });
@@ -562,11 +785,10 @@ private:
                 }));
         }
 
-        // Color Grading: Temp/Tint + per-band R↔C / G↔M / B↔Y.
         {
             static const char *bandKeys[3] = {"colorShadows", "colorMids", "colorHighs"};
             auto *picker =
-                bandPicker({tr("Shadows"), tr("Mids"), tr("Highs")}, [this](int band) {
+                bandPicker({tr("Shadows"), tr("Mids"), tr("Highs")}, 1, [this](int band) {
                     gradingBand_ = band;
                     refreshAllControls();
                 });
@@ -587,8 +809,6 @@ private:
                     channelSlider(tr("B ↔ Y"), 2),
                 }));
         }
-        // Grading band starts on Mids, matching the Mac.
-        gradingBand_ = 1;
 
         layout->addWidget(section(
             tr("Tone"),
@@ -599,6 +819,15 @@ private:
                 settingSlider(tr("White point"), "whitePointOffset", -0.3, 0.3, 0.001, 0, 3),
                 settingSlider(tr("Black point"), "blackPointOffset", -0.3, 0.3, 0.001, 0, 3),
             }));
+
+        // History: per-file entries, click to jump (undo/redo walk the same
+        // list). Kept at the bottom like the Mac's HistoryPanel.
+        historyList_ = new QListWidget;
+        historyList_->setFixedHeight(110);
+        historyList_->setStyleSheet("font-size: 11px;");
+        connect(historyList_, &QListWidget::itemClicked, this,
+                [this](QListWidgetItem *item) { jumpHistory(historyList_->row(item)); });
+        layout->addWidget(section(tr("History"), {historyList_}));
 
         layout->addStretch();
         refreshDependentStates();
@@ -663,8 +892,7 @@ private:
     }
 
     void updateInfoRow() {
-        // Negative character (the row under Grade on the Mac): measured
-        // density range vs the grade default, plus cast confidence.
+        if (!session_) return;
         const QString json = takeString(si_session_info(session_));
         const QJsonObject info = QJsonDocument::fromJson(json.toUtf8()).object();
         if (info.isEmpty()) {
@@ -681,7 +909,6 @@ private:
     }
 
     bool eventFilter(QObject *object, QEvent *event) override {
-        // Double-click any slider = reset to default (LabeledSlider parity).
         if (event->type() == QEvent::MouseButtonDblClick) {
             if (auto *slider = qobject_cast<QSlider *>(object)) {
                 const auto it = sliderDefaults_.constFind(slider);
@@ -701,14 +928,23 @@ private:
     HistogramWidget *histogram_ = nullptr;
     QLabel *infoRow_ = nullptr;
     QWidget *separationDampingRow_ = nullptr;
+    QWidget *cropBar_ = nullptr;
+    QSlider *straightenSlider_ = nullptr;
+    QLabel *straightenValue_ = nullptr;
+    QAction *cropAction_ = nullptr;
+    QAction *analysisAction_ = nullptr;
+    QListWidget *historyList_ = nullptr;
     QJsonObject defaults_;
     QJsonObject settings_;
+    QJsonObject toolSnapshot_;
     std::vector<std::function<void()>> refreshers_;
     QHash<QSlider *, int> sliderDefaults_;
+    QHash<QString, FileHistory> histories_;
     QTimer *saveTimer_ = nullptr;
     QString currentPath_;
     QString cachedDevice_;
     int64_t session_ = 0;
+    Tool tool_ = Tool::None;
     int mixerBand_ = 0;
     int gradingBand_ = 1;
     quint64 openGeneration_ = 0;
@@ -724,7 +960,8 @@ public:
 };
 
 // Headless proof: open a file (or a folder's first RAW), render synchronously
-// through the same code paths, screenshot the whole window. Run with
+// through the same code paths, screenshot the whole window — then again in
+// crop mode with a box and a straighten angle (<base>_crop.png). Run with
 // QT_QPA_PLATFORM=offscreen for CI-style checks.
 bool MainWindow::selfTest(const QString &target, const QString &screenshotPath) {
     QFileInfo info(target);
@@ -745,21 +982,26 @@ bool MainWindow::selfTest(const QString &target, const QString &screenshotPath) 
     session_ = handle;
     currentPath_ = file;
     loadSidecar(file);
-    updateInfoRow();
-    int32_t w = 0, h = 0;
-    QVector<quint32> bins(1024);
-    const QByteArray json = QJsonDocument(settings_).toJson(QJsonDocument::Compact);
-    uint8_t *rgba = si_render(session_, json.constData(), 1, &w, &h, bins.data());
-    if (!rgba) {
-        fprintf(stderr, "selftest: %s\n", qPrintable(takeString(si_last_error())));
-        return false;
-    }
-    canvas_->setImage(QImage(rgba, w, h, w * 4, QImage::Format_RGBA8888).copy());
-    si_free(rgba);
-    histogram_->setBins(bins);
-    statusBar()->showMessage(tr("selftest — %1x%2 via %3").arg(w).arg(h).arg(deviceName()));
+    initHistory(file);
+
+    auto renderSync = [this]() -> bool {
+        int32_t w = 0, h = 0;
+        QVector<quint32> bins(1024);
+        const QByteArray json = QJsonDocument(renderSettings()).toJson(QJsonDocument::Compact);
+        uint8_t *rgba = si_render(session_, json.constData(), 1, &w, &h, bins.data());
+        if (!rgba) {
+            fprintf(stderr, "selftest: %s\n", qPrintable(takeString(si_last_error())));
+            return false;
+        }
+        canvas_->setImage(QImage(rgba, w, h, w * 4, QImage::Format_RGBA8888).copy());
+        si_free(rgba);
+        histogram_->setBins(bins);
+        updateInfoRow();
+        statusBar()->showMessage(tr("selftest — %1x%2 via %3").arg(w).arg(h).arg(deviceName()));
+        return true;
+    };
+    if (!renderSync()) return false;
     show();
-    // Let thumbnails land so the screenshot shows the library too.
     QDeadlineTimer deadline(4000);
     while (!deadline.hasExpired()) {
         QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
@@ -770,7 +1012,18 @@ bool MainWindow::selfTest(const QString &target, const QString &screenshotPath) 
         if (allIconsSet) break;
     }
     QCoreApplication::processEvents();
-    return grab().save(screenshotPath);
+    if (!grab().save(screenshotPath)) return false;
+
+    // Second shot: crop mode with a straighten angle and a box.
+    setTool(Tool::Crop, false);
+    settings_.insert("fineRotation", 3.0);
+    refreshStraighten();
+    canvas_->setBox(QRectF(0.12, 0.10, 0.72, 0.75));
+    if (!renderSync()) return false;
+    QCoreApplication::processEvents();
+    QString cropShot = screenshotPath;
+    cropShot.replace(QStringLiteral(".png"), QStringLiteral("_crop.png"));
+    return grab().save(cropShot);
 }
 
 int main(int argc, char **argv) {
