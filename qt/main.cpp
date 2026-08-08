@@ -522,6 +522,7 @@ private:
         tool_ = tool;
         cropBar_->setVisible(tool == Tool::Crop);
         cropAction_->setChecked(tool == Tool::Crop);
+        if (cropSidebarButton_) cropSidebarButton_->setChecked(tool == Tool::Crop);
         analysisAction_->setChecked(tool == Tool::Analysis);
         canvas_->setMode(tool == Tool::Crop ? ImageView::Mode::Crop
                          : tool == Tool::Analysis ? ImageView::Mode::AnalysisDraw
@@ -562,6 +563,7 @@ private:
         tool_ = Tool::None;  // skip setTool's cancel path
         cropBar_->setVisible(false);
         cropAction_->setChecked(false);
+        if (cropSidebarButton_) cropSidebarButton_->setChecked(false);
         canvas_->setMode(ImageView::Mode::None);
         markDirtyAndRender();
         commitHistory(tr("Crop & straighten"));
@@ -915,6 +917,12 @@ private:
             showingBaseline_ = false;
             requestRender();
         });
+        cropSidebarButton_ = new QPushButton(tr("Crop && Straighten"));
+        cropSidebarButton_->setCheckable(true);
+        cropSidebarButton_->setToolTip(tr("Crop and straighten the frame (Ctrl+K); Escape cancels"));
+        connect(cropSidebarButton_, &QPushButton::clicked, this, [this] {
+            setTool(tool_ == Tool::Crop ? Tool::None : Tool::Crop, false);
+        });
         auto *clearAnalysis = new QPushButton(tr("Clear Analysis Region"));
         connect(clearAnalysis, &QPushButton::clicked, this, [this] {
             if (!settings_.contains("analysisRect")) return;
@@ -923,7 +931,8 @@ private:
             markDirtyAndRender();
             commitHistory(tr("Clear analysis region"));
         });
-        layout->addWidget(section(tr("Pre-process"), {viewOriginal, clearAnalysis}));
+        layout->addWidget(section(
+            tr("Pre-process"), {viewOriginal, cropSidebarButton_, clearAnalysis}));
 
         infoRow_ = new QLabel;
         infoRow_->setStyleSheet("font-size: 10px; color: gray;");
@@ -1324,6 +1333,7 @@ private:
     QSlider *straightenSlider_ = nullptr;
     QLabel *straightenValue_ = nullptr;
     QAction *cropAction_ = nullptr;
+    QPushButton *cropSidebarButton_ = nullptr;
     QAction *analysisAction_ = nullptr;
     QAction *exportAction_ = nullptr;
     QToolButton *hqBadge_ = nullptr;
