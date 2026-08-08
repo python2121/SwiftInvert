@@ -333,6 +333,7 @@ public:
                 backBuffer_ = 1 - back;  // `back` is now on screen; write the other next
                 canvas_->setImage(outcome.image);
                 histogram_->setBins(outcome.histogram);
+                lastBins_ = outcome.histogram;  // seeds the levels window on open
                 if (levelsWindow_ && levelsWindow_->isVisible()) {
                     levelsWindow_->setBins(outcome.histogram);
                     levelsWindow_->refreshFromSettings();
@@ -1549,20 +1550,20 @@ bool MainWindow::selfTest(const QString &target, const QString &screenshotPath) 
     // dirtying the real sidecar), open the window, render for live bins.
     setTool(Tool::None, false);
     restoring_ = true;
-    setLevelsAnchors(1, {QPointF(0.35, 0.25), QPointF(0.75, 0.85)});
+    setLevelsAnchors(1, {QPointF(0.35, 0.25), QPointF(0.75, 0.85)});  // triggers a REAL async render
     restoring_ = false;
+    // Wait for that render so lastBins_ is populated through the production
+    // path — the window must show a live plot ON OPEN with no manual feeding
+    // (the regression this guards: it opened blank until a click).
+    QDeadlineTimer renderDeadline(8000);
+    while ((renderInFlight_ || renderQueued_) && !renderDeadline.hasExpired())
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    if (lastBins_.isEmpty()) {
+        fprintf(stderr, "selftest: lastBins_ empty after render — levels window would open blank\n");
+        return false;
+    }
     openLevelsWindow();
     levelsWindow_->selectChannel(1);
-    {
-        int32_t w = 0, h = 0;
-        QVector<quint32> bins(1024);
-        const QByteArray json = QJsonDocument(renderSettings()).toJson(QJsonDocument::Compact);
-        uint8_t *rgba = si_render(session_, json.constData(), 1, 0, &w, &h, bins.data());
-        if (!rgba) return false;
-        si_free(rgba);
-        levelsWindow_->setBins(bins);
-        levelsWindow_->refreshFromSettings();
-    }
     QCoreApplication::processEvents();
     QString levelsShot = screenshotPath;
     levelsShot.replace(QStringLiteral(".png"), QStringLiteral("_levels.png"));
