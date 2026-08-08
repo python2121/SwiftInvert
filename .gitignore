@@ -5,3 +5,4 @@ dist/
 DerivedData/
 .DS_Store
 __pycache__/
+qt/build/

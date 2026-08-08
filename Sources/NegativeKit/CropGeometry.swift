@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(simd)
 import simd
+#endif
 
 /// Geometry for the unified Crop & Straighten mode (the Lightroom/Photos
 /// model: the image rotates behind an axis-aligned crop box).

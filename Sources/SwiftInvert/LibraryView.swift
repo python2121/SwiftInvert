@@ -233,5 +233,12 @@ struct LibraryCell: View {
             model.pasteAdjustments(to: urls)
         }
         .disabled(model.copiedAdjustments == nil)
+
+        Divider()
+        // Reveals the CLICKED frame (the Qt shell's filmstrip menu mirrors
+        // this with Dolphin/the FileManager1 portal).
+        Button("Show in Finder") {
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        }
     }
 }

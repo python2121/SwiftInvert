@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(simd)
 import simd
+#endif
 
 /// CIELAB in the working space (linear Adobe RGB (1998), D65) and the
 /// saturation/vibrance chroma ops — ports of negpy/kernel/image/logic.py

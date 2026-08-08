@@ -27,7 +27,202 @@ make install                # copy the bundle to /Applications
 
 # Regenerate parity fixtures (after deliberate NegPy kernel/constant changes):
 cd ~/Documents/code/NegPy && uv run python ~/Documents/code/SwiftInvert/scripts/dump_fixtures.py
+
+# Linux (SteamOS, Qt-frontend port in progress) — inside the `swiftdev`
+# distrobox (Ubuntu 24.04; Swift via swiftly; apt libraw-dev/liblcms2-dev/
+# libvulkan-dev/glslang-tools/mesa-vulkan-drivers):
+distrobox enter swiftdev -- bash -lc 'cd ~/Documents/code/SwiftInvert && swift build && swift test'
+# Bare `swift test` DOES work on Linux (Swift Testing ships in the toolchain).
+# negcli builds there too (decode/thumb/render/bench/meter, Vulkan render).
+
+# Regenerate the checked-in SPIR-V after editing NegPipeline.comp:
+./scripts/compile_vulkan_shaders.sh   # (in the box; needs glslangValidator)
+
+# Qt shell (in the box; apt qt6-base-dev qt6-base-dev-tools cmake ninja-build):
+swift build -c release --product SwiftInvertCore
+cmake -S qt -B qt/build -G Ninja && cmake --build qt/build
+qt/build/swiftinvert-qt [folder]         # GUI (distrobox passes the display)
+QT_QPA_PLATFORM=offscreen qt/build/swiftinvert-qt --selftest out.png <folder>
 ```
+
+**Linux port status:** `Package.swift` computes its target list — the
+portable core (CLibRaw, NegativeKit, RawDecodeKit, NegativeKitTests),
+negcli, and the Linux GPU stack (CVulkan, VulkanRenderKit + its tests)
+build on Linux; MetalRenderKit, SwiftInvert and their test targets are
+gated behind `#if os(macOS)` (the manifest runs on the build host, which
+is exactly the right question for Metal/SwiftUI; per-branch declarations
+because SwiftPM validates conditional dependency names even when false).
+Apple-only APIs in the core sit behind `#if canImport(Accelerate)` with
+scalar fallbacks (`Prefilter.logImage`, `RawDecoder`'s u16→float) and
+`#if canImport(simd)` with stdlib-backed shims
+(`NegativeKit/SimdShims.swift` — the full parity suite passes on Linux
+against the same fixtures, so the fallbacks are pinned).
+
+**VulkanRenderKit** is the Linux mirror of MetalRenderKit's chain:
+- `Shaders/NegPipeline.comp` — GLSL port of NegPipeline.metal, all six
+  kernels (`normalize`/`print_curve`/`color_pop`/`histogram`/`encode_f`/
+  `encode_u8`) in one file selected by `-DKERNEL_*`; the checked-in `.spv`
+  binaries are the build inputs (`scripts/compile_vulkan_shaders.sh`
+  regenerates — rerun + commit them with ANY `.comp` edit).
+- SSBOs of interleaved RGB floats (RGBImage's own layout — upload/readback
+  are memcpys), 1-D dispatch, std140 uniform blocks that are byte-identical
+  to the shared `ShaderTypes.swift` (a SYMLINK into MetalRenderKit — one
+  source of truth for uniform packing; `VulkanLayoutTests` pins offsets).
+- **Memory discipline (learned at 3.9 s/frame):** readback targets
+  (encoded float, display u8, histogram) MUST be `hostReadback: true` —
+  HOST_CACHED system RAM. Everything else sits in DEVICE_LOCAL|HOST_VISIBLE
+  (BAR), which the CPU must never read: BAR is write-combined and uncached
+  reads are ~1000× slower. `DeviceBuffer` holds the context strongly so
+  the VkDevice outlives every buffer (teardown order crashed otherwise).
+- `VulkanParityTests` verify GPU vs the CPU `ReferenceCurve` chain at the
+  Mac suite's gates (mean<0.01, max<0.04) across every control group —
+  chaining the Vulkan renderer to the NegPy fixtures through the CPU
+  reference. `NEGCLI_VK_CPU=1` forces llvmpipe where no GPU is visible.
+- Measured on the Steam Machine (RADV NAVI33) at 1536px: **1.7 ms/frame
+  (~590 fps) renderDisplay incl. readback**; 24 MP export render 0.39 s.
+  The CPU `ReferenceCurve` chain (~509 ms/frame) remains the no-GPU
+  fallback in negcli.
+
+negcli's Linux TIFF output is ImageIO-free (`negcli/TIFF16.swift`,
+untagged baseline TIFF — bytes are Adobe RGB-encoded); littleCMS-based
+display/export color management is still to come, converging with NegPy's
+own stack.
+
+**The Qt shell** (`qt/`, Linux only) is deliberately thin: all pipeline
+semantics live in Swift behind **CoreBridge**
+(`Sources/CoreBridge/CoreBridge.swift` → `libSwiftInvertCore.so`, C ABI
+mirrored in `qt/swiftinvert_core.h` — keep the two in sync). Bridge
+contract: sessions are int64 handles (`si_open` = preview decode + analyze
++ GPU upload; ~1 s, off the UI thread), settings travel as SIDECAR-FORMAT
+JSON (missing keys = defaults, so the frontend never re-implements
+fields — `si_default_settings` seeds the sliders), every returned buffer
+is malloc'd/`si_free`'d, `si_render` returns rgba8 via Vulkan
+renderDisplay (~2–5 ms), `si_thumbnail` returns the embedded camera JPEG
+(Qt decodes it). `qt/main.cpp` (Widgets + CMake) is folder browsing, a
+fit-to-window canvas, controls editing the settings JSON with latest-wins
+async renders, and a `--selftest <png>` mode that renders + screenshots
+offscreen (`QT_QPA_PLATFORM=offscreen`) — the headless way to verify UI
+changes.
+
+Shell feature state (Phase A, 2026-08-08):
+- **Controls mirror `ControlsSidebar` exactly** — same sections, ranges,
+  defaults and direction conventions (Brightness = 2 − density, right =
+  brighter), per-control reset-⨯ + double-click reset, Separation Damping
+  disabled at printSaturation 1, mixer/grading band pickers, and the
+  GradientSlider color tracks (grading Temp/Tint/R↔C/G↔M/B↔Y static;
+  mixer Hue/Saturation restyled per band — the Mac sections' exact color
+  literals, stylesheet gradients on the groove). When the Mac sidebar
+  gains a control, add it to `makeControlsPanel` with the same spec.
+- **Histogram** from the render's 4×256 bins (`si_render`'s out-param),
+  drawn with HistogramView's shape-only rule (peak-normalize, fixed
+  log1p compression 100000).
+- **Sidecars** round-trip with the Mac: `si_sidecar_load/save` implement
+  SidecarStore's exact naming + `{version, settings}` payload (bridge
+  decode→encode canonicalizes); Qt debounces saves 1 s, flushes on
+  file-switch/close, and merges loaded keys over defaults.
+- **sRGB display transform**: `si_render(srgb_display=1)` →
+  `renderDisplay(srgbDisplay:)` → flags bit of the (now 8-byte) push
+  constants; `encode_u8` decodes the Adobe TRC, gamut-matrixes to sRGB
+  and applies the piecewise OETF after the levels remap. Float/export
+  paths and the Mac semantics untouched; `srgbDisplayFlagMatchesCPUTransform`
+  pins the transform. Proper ICC (lcms2) lands with export.
+- **View Original** hold renders stock settings ("{}").
+- `si_session_info` feeds the negative-character row (density range,
+  label, cast confidence).
+
+Phase B (2026-08-08) — geometry + canvas interactions:
+- The bridge `Session` is a miniature ImageSession cache tower with the
+  SAME semantics: orientation baked into pixels; analysis on the
+  ORIENTATION-ONLY image (straighten never re-meters) scoped by
+  crop/analysis rects; render source = oriented(+fineRotation, inscribed)
+  THEN cropped — so cropRect is normalized on the fine-rotated frame.
+  All tiers keyed; slider drags rebuild nothing.
+- Qt tools exploit that JSON contract with zero new bridge surface: the
+  CROP tool renders with cropRect stripped (the drawn box IS the stored
+  rect, straighten slider ±45° edits fineRotation live; Apply commits,
+  Cancel/Escape restores the entry snapshot); the ANALYSIS tool renders
+  orientation-only (cropRect+fineRotation stripped) so its rect maps 1:1
+  to the metering space (analysisRectFineRotation written as 0).
+- Zoom/pan on the canvas (wheel to cursor, drag pan, double-click
+  fit↔100%); rotate L/R (Ctrl+[/]) and flip (Ctrl+Shift+H) via toolbar.
+- Per-file session history (undo Ctrl+Z / redo / click-to-jump list at
+  the sidebar bottom): slider drags commit one entry on release,
+  programmatic sets and toggles commit immediately, entries hold full
+  settings JSON, redo tail truncates, capped at 100.
+- `--selftest` now also captures `<base>_crop.png` in crop mode.
+
+Phase C (2026-08-08) — export:
+- Bridge `si_export_render` (RGBA8 for the frontend's JPEG encode) and
+  `si_export_tiff` (untagged 16-bit baseline TIFF written by the core):
+  full-resolution best-demosaic decode + the same orientation → fine
+  rotation → crop chain, but analysis from the PREVIEW-SIZED proxy — the
+  what-you-see invariant, matching the Mac's exportRender-shares-prepare.
+  Options JSON `{"colorspace":"srgb"|"adobe","maxLongEdge":N}`; the sRGB
+  leg runs in-kernel (`encode_f` honors the same flags bit as the display
+  kernel; `render(srgbEncode:)`), resize on the encoded output via
+  `downsampled` (Mac order). `negcli/TIFF16.swift` is symlinked into
+  CoreBridge (one writer, two targets).
+- Qt: Export… (Ctrl+E) dialog mirroring ExportSheet — JPEG (quality,
+  default 92) / TIFF-16, sRGB (default) / Adobe, resize long edge
+  (default on, 3000), next-to-source or chosen folder, sticky via
+  QSettings; batch over the library multi-selection, each frame using its
+  own sidecar (current frame flushed first); Mac naming (same basename,
+  .jpg/.tiff, overwrite).
+HQ display tiers (2026-08-08): `si_render` takes `tier` 0/1/2 —
+proxy ≤1536 / medium / full. The bridge Session mirrors the Mac's scheme:
+the preview decode is kept at NATIVE size and downsampled to the proxy in
+the Session (the medium tier is that free buffer, dropped over the 20 MP
+budget, i.e. X-Trans full-size previews); full decodes lazily on first
+request and stays for the session. Analysis ALWAYS runs on the proxy —
+tier switches can never move the conversion. Per-tier oriented + source
+caches make threshold crossings instant. Qt: HQ Off/Auto/On toolbar
+cycle (Ctrl+Shift+P, Auto default = medium at ≥2× canvas zoom, the Mac's
+hqAutoZoomThreshold); tools pin the proxy; status bar names the tier.
+Also: wheel events on sliders are swallowed and forwarded to the
+controls scroll area — the wheel never changes a slider value.
+The watched folder is sticky (QSettings `libraryFolder`, the Mac's
+UserDefault equivalent): reopened on argument-less launch, saved on
+every interactive open, never written by `--selftest`.
+**Frame handoff is zero-allocation** (the big-buffer discipline applied
+to the C ABI): `si_render_into` writes straight from the GPU-mapped
+readback into caller-owned memory (returns -1 + dims when the buffer is
+too small — resize and retry, the measured source stays cached); Qt
+double-buffers two persistent QByteArrays and hands the canvas a QImage
+WRAPPING the front one, so only the front is ever painted and only the
+back is ever written. Adjustment costs on the NAVI33 (histogram + sRGB
+included): proxy 2.1 ms (~470 fps), medium 14 ms (~71 fps), full 55 ms
+(~18 fps) — vs 34/131 ms through the malloc-per-frame `si_render`, which
+remains for simple consumers.
+
+Canvas control bar + library recursion (2026-08-08): the Mac's
+under-canvas control bar is ported — rotate ⟲/⟳, flip, the HQ badge
+(off = faint chip / auto = accent tint / on = filled accent, cycling on
+click or Ctrl+Shift+P) and the three canvas-color swatches
+(gray/very-dark/black, sticky via QSettings); rotate/flip/HQ left the
+top toolbar for it (their shortcuts stayed window-level). Zones + the
+densitometer read-out join the bar when those features are ported. The
+filmstrip is a COLLAPSIBLE FOLDER TREE (QTreeWidget — the Mac
+LibraryView's VSCode-style sidebar): scan follows AppModel.buildTree's
+rules (depth ≤ 8, hidden skipped, natural sort, a folder's own files
+before its subfolders, RAW-less branches pruned), folder rows show
+"name — N" and toggle on single click, collapse state persists per root
+(QSettings), and ←/→ navigation walks the depth-first file order (the
+Mac's flatten) skipping folder rows. Thumbnails build
+QImage on the worker but QPixmap/QIcon ONLY on the GUI thread (QPixmap
+off-thread aborts at teardown), guarded by an alive flag.
+
+Interactive histogram (2026-08-08): double-click the sidebar histogram →
+`qt/levelswindow.cpp`, the Mac InteractiveHistogram ported whole: R/G/B
+picker, per-channel/all resets, linear peak-normalized plot with inactive
+channels dimmed, drag = grab-near-anchor-or-plant (inverse remap so you
+grab what you SEE; gap 0.01, tolerance 0.015, clamp 0.02, max 8 — the Mac
+constants), outputs clamped between neighbours, ✕ strip below the plot,
+live re-binning from every render, history labels per channel. The
+inverse remap is re-expressed in C++ (the kernel stays the rendering
+source of truth).
+
+- Still missing (Phase D+): test strip, densitometer/zones, ICC-tagged
+  output (lcms2).
 
 **Toolchain constraints (this machine has Command Line Tools, no Xcode):**
 - No XCTest and Testing.framework lives outside default search paths → tests
