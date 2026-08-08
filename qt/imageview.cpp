@@ -44,9 +44,10 @@ void ImageView::setImage(const QImage &image) {
 
 void ImageView::setMode(Mode mode) {
     mode_ = mode;
-    if (mode_ != Mode::None) {  // tools operate on the fitted frame
+    if (mode_ != Mode::None && zoom_ != 1.0) {  // tools operate on the fitted frame
         zoom_ = 1.0;
         pan_ = QPointF();
+        if (onZoomChanged) onZoomChanged(zoom_);
     }
     drag_ = Drag::None;
     update();
@@ -243,6 +244,7 @@ void ImageView::mouseDoubleClickEvent(QMouseEvent *event) {
     if (zoom_ > 1.0) {
         zoom_ = 1.0;
         pan_ = QPointF();
+        if (onZoomChanged) onZoomChanged(zoom_);
     } else {
         const double fit = std::min(double(width()) / image_.width(),
                                     double(height()) / image_.height());
@@ -253,6 +255,7 @@ void ImageView::mouseDoubleClickEvent(QMouseEvent *event) {
         pan_ = QPointF(width() / 2.0, height() / 2.0) - target -
                (QPointF((width() - r.width()) / 2.0, (height() - r.height()) / 2.0));
         clampPan();
+        if (onZoomChanged) onZoomChanged(zoom_);
     }
     update();
 }
@@ -274,5 +277,6 @@ void ImageView::wheelEvent(QWheelEvent *event) {
         pan_ += event->position() - anchorWidget;
         clampPan();
     }
+    if (onZoomChanged) onZoomChanged(zoom_);
     update();
 }

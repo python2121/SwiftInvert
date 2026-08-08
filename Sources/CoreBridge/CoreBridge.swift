@@ -21,7 +21,21 @@ import VulkanRenderKit
 /// Every tier is keyed and rebuilt only when its inputs change — slider
 /// drags hit only derive+render.
 private final class Session {
-    let decoded: RGBImage  // preview decode, EXIF orientation baked
+    /// Display tiers, mirroring the Mac's RenderTier scheme. Analysis ALWAYS
+    /// runs on the proxy, so switching tiers can never move the conversion.
+    enum Tier: Int32 {
+        case proxy = 0   // ≤1536px — the interactive default
+        case medium = 1  // the native preview decode the proxy was cut from
+        case full = 2    // full-resolution best demosaic, decoded on demand
+    }
+
+    let url: URL
+    let proxy: RGBImage  // ≤1536, EXIF orientation baked; the analysis input
+    /// The buffer the preview decode already produced and used to discard —
+    /// 4× the proxy's pixels for free. Not retained when the preview decode
+    /// was already full-size (X-Trans) or huge (the Mac's 20 MP budget).
+    let medium: RGBImage?
+    var full: RGBImage?  // lazy; retained for the session's lifetime
 
     struct OrientKey: Equatable {
         var rotation: Int
@@ -42,20 +56,33 @@ private final class Session {
     var meterPreview: RGBImage?
     var analysisKey: AnalysisKey?
     var cachedAnalysis: ExposureAnalysis?
-    var sourceKey: SourceKey?
-    var cachedSource: VulkanRenderPipeline.SourceBuffer?
+    /// Per-tier caches: the oriented bake (expensive at full res) and the
+    /// uploaded GPU source, each keyed by the geometry that produced them.
+    var orientedCache: [Int32: (key: SourceKey, image: RGBImage)] = [:]
+    var sourceCache: [Int32: (key: SourceKey, buffer: VulkanRenderPipeline.SourceBuffer)] = [:]
 
-    init(decoded: RGBImage) {
-        self.decoded = decoded
+    static let mediumTierPixelBudget = 20_000_000
+
+    init(url: URL, previewDecode: RGBImage) {
+        self.url = url
+        let long = max(previewDecode.width, previewDecode.height)
+        if long > 1536 {
+            proxy = previewDecode.downsampled(maxLongEdge: 1536)
+            medium = previewDecode.width * previewDecode.height <= Self.mediumTierPixelBudget
+                ? previewDecode : nil
+        } else {
+            proxy = previewDecode
+            medium = nil
+        }
     }
 
-    /// Orientation-only preview (the analysis input).
+    /// Orientation-only proxy (the analysis input).
     func meter(settings: ExposureSettings) -> RGBImage {
         let key = OrientKey(rotation: settings.rotation, flip: settings.flipHorizontal)
         if let meterPreview, meterKey == key { return meterPreview }
         let img = (key.rotation == 0 && !key.flip)
-            ? decoded
-            : decoded.oriented(rotationCW: key.rotation, flipHorizontal: key.flip)
+            ? proxy
+            : proxy.oriented(rotationCW: key.rotation, flipHorizontal: key.flip)
         meterPreview = img
         meterKey = key
         return img
@@ -74,30 +101,54 @@ private final class Session {
         return result
     }
 
-    /// GPU source: oriented (+fine rotation, inscribed) then cropped.
-    /// `uncropped` serves the crop tool: full frame at the requested angle.
+    /// The tier's base pixels; requesting an unavailable tier falls back
+    /// (medium → full-decode would defeat "instant", so medium falls back to
+    /// PROXY when not retained; full decodes lazily — the ~3–5 s export
+    /// decode, paid once per session).
+    private func tierImage(_ tier: Tier) throws -> RGBImage {
+        switch tier {
+        case .proxy:
+            return proxy
+        case .medium:
+            return medium ?? proxy
+        case .full:
+            if let full { return full }
+            let img = try RawDecoder().decode(url: url, quality: .full, maxLongEdge: nil)
+            full = img
+            return img
+        }
+    }
+
+    /// GPU source for a tier: oriented (+fine rotation, inscribed) then
+    /// cropped, both cached per tier so threshold crossings re-upload only
+    /// when geometry actually changed.
     func source(
-        settings: ExposureSettings, uncropped: Bool, pipeline: VulkanRenderPipeline
+        settings: ExposureSettings, tier: Tier, pipeline: VulkanRenderPipeline
     ) throws -> VulkanRenderPipeline.SourceBuffer {
         let key = SourceKey(
             orient: OrientKey(rotation: settings.rotation, flip: settings.flipHorizontal),
             fineRotation: settings.fineRotation,
-            cropRect: uncropped ? nil : settings.cropRect)
-        if let cachedSource, sourceKey == key { return cachedSource }
+            cropRect: settings.cropRect)
+        if let cached = sourceCache[tier.rawValue], cached.key == key { return cached.buffer }
+
+        let orientKey = SourceKey(orient: key.orient, fineRotation: key.fineRotation, cropRect: nil)
         var image: RGBImage
-        if settings.fineRotation == 0 {
-            image = meter(settings: settings)
+        if let cached = orientedCache[tier.rawValue], cached.key == orientKey {
+            image = cached.image
         } else {
-            image = decoded.oriented(
-                rotationCW: settings.rotation, flipHorizontal: settings.flipHorizontal,
-                fineRotation: settings.fineRotation)
+            let base = try tierImage(tier)
+            image = (key.orient.rotation == 0 && !key.orient.flip && key.fineRotation == 0)
+                ? base
+                : base.oriented(
+                    rotationCW: key.orient.rotation, flipHorizontal: key.orient.flip,
+                    fineRotation: key.fineRotation)
+            orientedCache[tier.rawValue] = (orientKey, image)
         }
         if let crop = key.cropRect {
             image = image.cropped(to: crop)
         }
         let buffer = try pipeline.upload(image)
-        cachedSource = buffer
-        sourceKey = key
+        sourceCache[tier.rawValue] = (key, buffer)
         return buffer
     }
 }
@@ -157,8 +208,10 @@ public func si_open(_ path: UnsafePointer<CChar>?) -> Int64 {
     guard let path else { return 0 }
     let url = URL(fileURLWithPath: String(cString: path))
     do {
-        let img = try RawDecoder().decode(url: url, quality: .preview, maxLongEdge: 1536)
-        let session = Session(decoded: img)
+        // Native preview size: the downsample to the 1536 proxy happens in
+        // the Session, which keeps the intermediate as the medium tier.
+        let img = try RawDecoder().decode(url: url, quality: .preview, maxLongEdge: nil)
+        let session = Session(url: url, previewDecode: img)
         Bridge.shared.lock.lock()
         defer { Bridge.shared.lock.unlock() }
         let handle = Bridge.shared.nextHandle
@@ -187,8 +240,8 @@ public func si_size(
     let session = Bridge.shared.sessions[handle]
     Bridge.shared.lock.unlock()
     guard let session else { return 0 }
-    outWidth?.pointee = Int32(session.decoded.width)
-    outHeight?.pointee = Int32(session.decoded.height)
+    outWidth?.pointee = Int32(session.proxy.width)
+    outHeight?.pointee = Int32(session.proxy.height)
     return 1
 }
 
@@ -198,9 +251,15 @@ public func si_size(
 /// `histogram`, when non-NULL, receives the 4×256 bins (R,G,B,luma — raw
 /// counts in the Adobe-encoded display domain, levels included, matching
 /// the Mac histogram's semantics).
+/// `tier`: 0 = proxy (≤1536, the interactive default), 1 = medium (the
+/// half-size decode, instant — falls back to proxy when not retained),
+/// 2 = full resolution (first call pays the ~3–5 s decode, then cached).
+/// Analysis always runs on the proxy regardless, so the conversion is
+/// tier-invariant.
 @_cdecl("si_render")
 public func si_render(
     _ handle: Int64, _ settingsJSON: UnsafePointer<CChar>?, _ srgbDisplay: Int32,
+    _ tier: Int32,
     _ outWidth: UnsafeMutablePointer<Int32>?, _ outHeight: UnsafeMutablePointer<Int32>?,
     _ histogram: UnsafeMutablePointer<UInt32>?
 ) -> UnsafeMutablePointer<UInt8>? {
@@ -227,7 +286,9 @@ public func si_render(
         let pipeline = try Bridge.shared.getPipeline()
         let analysis = session.analysis(settings: settings)
         let params = ExposureKernel.deriveRenderParams(settings, analysis)
-        let source = try session.source(settings: settings, uncropped: false, pipeline: pipeline)
+        let source = try session.source(
+            settings: settings, tier: Session.Tier(rawValue: tier) ?? .proxy,
+            pipeline: pipeline)
         let display = try pipeline.renderDisplay(
             source: source, params: params, computeHistogram: histogram != nil,
             srgbDisplay: srgbDisplay != 0)
@@ -258,8 +319,8 @@ public func si_session_info(_ handle: Int64) -> UnsafeMutablePointer<CChar>? {
     let analysis = session.cachedAnalysis ?? session.analysis(settings: ExposureSettings())
     let range = analysis.baseBounds.luminanceDensityRange
     var info: [String: Any] = [
-        "width": session.decoded.width,
-        "height": session.decoded.height,
+        "width": session.proxy.width,
+        "height": session.proxy.height,
         "densityRange": range,
         "defaultGradeRange": CurveLogic.defaultGradeRange,
         "anchor": analysis.anchor,

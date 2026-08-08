@@ -22,10 +22,15 @@ int32_t si_size(int64_t session, int32_t *width, int32_t *height);
 
 /* Settings JSON → derive → GPU render. RGBA8, width*height*4, alpha 255.
  * ~2 ms at preview size on a discrete GPU. srgb_display != 0 converts the
- * output for an unmanaged sRGB canvas. histogram (nullable) receives the
- * 4×256 bins: R,G,B,Rec.709-luma raw counts in the display domain. */
+ * output for an unmanaged sRGB canvas. tier: 0 = proxy (≤1536px), 1 =
+ * medium (the half-size decode, instant; falls back to proxy when not
+ * retained), 2 = full resolution (first call pays the ~3–5 s decode, then
+ * cached for the session). Analysis always runs on the proxy, so the
+ * conversion is tier-invariant. histogram (nullable) receives the 4×256
+ * bins: R,G,B,Rec.709-luma raw counts in the display domain. */
 uint8_t *si_render(int64_t session, const char *settings_json,
-                   int32_t srgb_display, int32_t *width, int32_t *height,
+                   int32_t srgb_display, int32_t tier,
+                   int32_t *width, int32_t *height,
                    uint32_t *histogram /* uint32[1024] or NULL */);
 
 /* Frame facts as JSON: width, height, densityRange, defaultGradeRange,

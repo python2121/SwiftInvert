@@ -165,8 +165,21 @@ Phase C (2026-08-08) — export:
   QSettings; batch over the library multi-selection, each frame using its
   own sidecar (current frame flushed first); Mac naming (same basename,
   .jpg/.tiff, overwrite).
+HQ display tiers (2026-08-08): `si_render` takes `tier` 0/1/2 —
+proxy ≤1536 / medium / full. The bridge Session mirrors the Mac's scheme:
+the preview decode is kept at NATIVE size and downsampled to the proxy in
+the Session (the medium tier is that free buffer, dropped over the 20 MP
+budget, i.e. X-Trans full-size previews); full decodes lazily on first
+request and stays for the session. Analysis ALWAYS runs on the proxy —
+tier switches can never move the conversion. Per-tier oriented + source
+caches make threshold crossings instant. Qt: HQ Off/Auto/On toolbar
+cycle (Ctrl+Shift+P, Auto default = medium at ≥2× canvas zoom, the Mac's
+hqAutoZoomThreshold); tools pin the proxy; status bar names the tier.
+Also: wheel events on sliders are swallowed and forwarded to the
+controls scroll area — the wheel never changes a slider value.
+
 - Still missing (Phase D+): test strip, levels drag on the histogram,
-  densitometer/zones, HQ display tier, ICC-tagged output (lcms2).
+  densitometer/zones, ICC-tagged output (lcms2).
 
 **Toolchain constraints (this machine has Command Line Tools, no Xcode):**
 - No XCTest and Testing.framework lives outside default search paths → tests

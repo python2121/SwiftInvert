@@ -140,6 +140,10 @@ public:
         canvasLayout->addWidget(makeCropBar());
         canvas_ = new ImageView;
         canvas_->onBoxCommitted = [this] { boxCommitted(); };
+        canvas_->onZoomChanged = [this](double z) {
+            canvasZoom_ = z;
+            if (desiredTier() != lastTier_) requestRender();  // threshold crossing
+        };
         canvasLayout->addWidget(canvas_, 1);
 
         auto *splitter = new QSplitter(this);
@@ -213,6 +217,17 @@ public:
         }));
     }
 
+    // The Mac HQMode.resolve, reduced: tools always render the proxy (their
+    // overlays are proxy-space), Off pins proxy, On pins full, Auto serves
+    // the medium tier once the canvas is magnified past 2× (a property of
+    // the gesture, matching hqAutoZoomThreshold).
+    int desiredTier() const {
+        if (tool_ != Tool::None) return 0;
+        if (hqMode_ == 0) return 0;
+        if (hqMode_ == 2) return 2;
+        return canvasZoom_ >= 2.0 ? 1 : 0;
+    }
+
     // Latest-wins render queue: at most one in flight, newest request replaces
     // any queued one (the same coalescing discipline as the Mac app).
     void requestRender() {
@@ -223,6 +238,8 @@ public:
         }
         renderInFlight_ = true;
         const int64_t session = session_;
+        const int tier = desiredTier();
+        lastTier_ = tier;
         const QByteArray json = QJsonDocument(renderSettings()).toJson(QJsonDocument::Compact);
         auto *watcher = new QFutureWatcher<RenderOutcome>(this);
         connect(watcher, &QFutureWatcher<RenderOutcome>::finished, this, [this, watcher] {
@@ -233,8 +250,12 @@ public:
                 canvas_->setImage(outcome.image);
                 histogram_->setBins(outcome.histogram);
                 updateInfoRow();
+                const char *tierName[] = {"proxy", "HQ", "full"};
                 statusBar()->showMessage(
-                    tr("render %1 ms — %2").arg(outcome.milliseconds).arg(deviceName()));
+                    tr("render %1 ms · %2 %3×%4 — %5")
+                        .arg(outcome.milliseconds).arg(tierName[lastTier_])
+                        .arg(outcome.image.width()).arg(outcome.image.height())
+                        .arg(deviceName()));
             } else {
                 statusBar()->showMessage(tr("Render failed: %1").arg(takeString(si_last_error())));
             }
@@ -243,13 +264,13 @@ public:
                 requestRender();
             }
         });
-        watcher->setFuture(QtConcurrent::run([session, json] {
+        watcher->setFuture(QtConcurrent::run([session, json, tier] {
             QElapsedTimer timer;
             timer.start();
             RenderOutcome outcome;
             outcome.histogram.resize(1024);
             int32_t w = 0, h = 0;
-            uint8_t *rgba = si_render(session, json.constData(), /*srgb_display=*/1, &w, &h,
+            uint8_t *rgba = si_render(session, json.constData(), /*srgb_display=*/1, tier, &w, &h,
                                       outcome.histogram.data());
             outcome.milliseconds = timer.elapsed();
             if (rgba) {
@@ -511,6 +532,13 @@ private:
         act(tr("Undo"), QKeySequence::Undo, [this] { jumpHistory(history().index - 1); });
         act(tr("Redo"), QKeySequence::Redo, [this] { jumpHistory(history().index + 1); });
         bar->addSeparator();
+        hqAction_ = act(tr("HQ: Auto"), QKeySequence("Ctrl+Shift+P"), [this] {
+            hqMode_ = (hqMode_ + 1) % 3;
+            const char *names[] = {"HQ: Off", "HQ: Auto", "HQ: On"};
+            hqAction_->setText(tr(names[hqMode_]));
+            if (desiredTier() != lastTier_) requestRender();
+        });
+        bar->addSeparator();
         exportAction_ = act(tr("Export…"), QKeySequence("Ctrl+E"),
                             [this] { showExportDialog(); });
     }
@@ -531,6 +559,7 @@ private:
         straightenSlider_->setMaximumWidth(320);
         straightenValue_ = new QLabel("0.0°");
         straightenValue_->setMinimumWidth(46);
+        straightenSlider_->installEventFilter(this);
         connect(straightenSlider_, &QSlider::valueChanged, this, [this](int t) {
             const double v = t / 10.0;
             straightenValue_->setText(QString::number(v, 'f', 1) + "°");
@@ -841,6 +870,7 @@ private:
         scroll->setMinimumWidth(340);
         scroll->setMaximumWidth(400);
         scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        controlsScroll_ = scroll;
         return scroll;
     }
 
@@ -1057,6 +1087,22 @@ private:
     }
 
     bool eventFilter(QObject *object, QEvent *event) override {
+        // The wheel must never change a slider (mouse drag only) — over a
+        // slider it scrolls the controls panel instead, like any other spot.
+        if (event->type() == QEvent::Wheel) {
+            if (auto *slider = qobject_cast<QSlider *>(object)) {
+                auto *wheel = static_cast<QWheelEvent *>(event);
+                if (controlsScroll_ && controlsScroll_->isAncestorOf(slider)) {
+                    QWheelEvent forwarded(
+                        controlsScroll_->viewport()->mapFromGlobal(wheel->globalPosition()),
+                        wheel->globalPosition(), wheel->pixelDelta(), wheel->angleDelta(),
+                        wheel->buttons(), wheel->modifiers(), wheel->phase(),
+                        wheel->inverted());
+                    QApplication::sendEvent(controlsScroll_->viewport(), &forwarded);
+                }
+                return true;
+            }
+        }
         if (event->type() == QEvent::MouseButtonDblClick) {
             if (auto *slider = qobject_cast<QSlider *>(object)) {
                 const auto it = sliderDefaults_.constFind(slider);
@@ -1082,6 +1128,8 @@ private:
     QAction *cropAction_ = nullptr;
     QAction *analysisAction_ = nullptr;
     QAction *exportAction_ = nullptr;
+    QAction *hqAction_ = nullptr;
+    QScrollArea *controlsScroll_ = nullptr;
     QListWidget *historyList_ = nullptr;
     QJsonObject defaults_;
     QJsonObject settings_;
@@ -1094,6 +1142,9 @@ private:
     QString cachedDevice_;
     int64_t session_ = 0;
     Tool tool_ = Tool::None;
+    int hqMode_ = 1;  // 0 = Off, 1 = Auto (medium at ≥2× zoom), 2 = On (full)
+    double canvasZoom_ = 1.0;
+    int lastTier_ = 0;
     int mixerBand_ = 0;
     int gradingBand_ = 1;
     quint64 openGeneration_ = 0;
@@ -1137,7 +1188,7 @@ bool MainWindow::selfTest(const QString &target, const QString &screenshotPath) 
         int32_t w = 0, h = 0;
         QVector<quint32> bins(1024);
         const QByteArray json = QJsonDocument(renderSettings()).toJson(QJsonDocument::Compact);
-        uint8_t *rgba = si_render(session_, json.constData(), 1, &w, &h, bins.data());
+        uint8_t *rgba = si_render(session_, json.constData(), 1, 0, &w, &h, bins.data());
         if (!rgba) {
             fprintf(stderr, "selftest: %s\n", qPrintable(takeString(si_last_error())));
             return false;

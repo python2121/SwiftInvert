@@ -28,6 +28,10 @@ public:
     // mouse release.
     std::function<void()> onBoxCommitted;
 
+    // Fired whenever the zoom factor changes (1.0 = fit).
+    std::function<void(double)> onZoomChanged;
+    double zoomFactor() const { return zoom_; }
+
 protected:
     void paintEvent(QPaintEvent *) override;
     void mousePressEvent(QMouseEvent *) override;
