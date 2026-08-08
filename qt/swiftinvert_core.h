@@ -21,9 +21,23 @@ void si_close(int64_t session);
 int32_t si_size(int64_t session, int32_t *width, int32_t *height);
 
 /* Settings JSON → derive → GPU render. RGBA8, width*height*4, alpha 255.
- * ~2 ms at preview size on a discrete GPU. */
+ * ~2 ms at preview size on a discrete GPU. srgb_display != 0 converts the
+ * output for an unmanaged sRGB canvas. histogram (nullable) receives the
+ * 4×256 bins: R,G,B,Rec.709-luma raw counts in the display domain. */
 uint8_t *si_render(int64_t session, const char *settings_json,
-                   int32_t *width, int32_t *height);
+                   int32_t srgb_display, int32_t *width, int32_t *height,
+                   uint32_t *histogram /* uint32[1024] or NULL */);
+
+/* Frame facts as JSON: width, height, densityRange, defaultGradeRange,
+ * character (optional), anchor, castConfidence (optional). NULL on bad
+ * handle. Caller frees. */
+char *si_session_info(int64_t session);
+
+/* Sidecar IO (same file naming + payload as the Mac app, so edits
+ * round-trip): load returns the settings JSON or NULL if no sidecar;
+ * save returns 1 on success. */
+char *si_sidecar_load(const char *path);
+int32_t si_sidecar_save(const char *path, const char *settings_json);
 
 /* Embedded camera JPEG (QImage::fromData decodes it). NULL if absent. */
 uint8_t *si_thumbnail(const char *path, int32_t *length);

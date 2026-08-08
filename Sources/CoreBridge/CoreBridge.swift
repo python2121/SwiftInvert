@@ -116,10 +116,15 @@ public func si_size(
 
 /// The interactive path: settings JSON → derive → Vulkan renderDisplay.
 /// Returns a malloc'd RGBA8 buffer (width×height×4, alpha 255); caller frees.
+/// `srgbDisplay` != 0 converts the output for an unmanaged sRGB canvas;
+/// `histogram`, when non-NULL, receives the 4×256 bins (R,G,B,luma — raw
+/// counts in the Adobe-encoded display domain, levels included, matching
+/// the Mac histogram's semantics).
 @_cdecl("si_render")
 public func si_render(
-    _ handle: Int64, _ settingsJSON: UnsafePointer<CChar>?,
-    _ outWidth: UnsafeMutablePointer<Int32>?, _ outHeight: UnsafeMutablePointer<Int32>?
+    _ handle: Int64, _ settingsJSON: UnsafePointer<CChar>?, _ srgbDisplay: Int32,
+    _ outWidth: UnsafeMutablePointer<Int32>?, _ outHeight: UnsafeMutablePointer<Int32>?,
+    _ histogram: UnsafeMutablePointer<UInt32>?
 ) -> UnsafeMutablePointer<UInt8>? {
     Bridge.shared.lock.lock()
     let session = Bridge.shared.sessions[handle]
@@ -144,13 +149,103 @@ public func si_render(
         let pipeline = try Bridge.shared.getPipeline()
         let params = ExposureKernel.deriveRenderParams(settings, session.analysis)
         let display = try pipeline.renderDisplay(
-            source: session.source, params: params, computeHistogram: false)
+            source: session.source, params: params, computeHistogram: histogram != nil,
+            srgbDisplay: srgbDisplay != 0)
         outWidth?.pointee = Int32(display.width)
         outHeight?.pointee = Int32(display.height)
+        if let histogram {
+            display.histogram.withUnsafeBufferPointer {
+                histogram.update(from: $0.baseAddress!, count: 1024)
+            }
+        }
         return mallocCopy(display.rgba)
     } catch {
         Bridge.shared.setError("render: \(error)")
         return nil
+    }
+}
+
+/// Frame facts for the UI, as JSON: dimensions, the darkroom "negative
+/// character" row's inputs (measured density range vs the grade default and
+/// its label), the metered anchor, and cast confidence (null when no
+/// neutral axis was found).
+@_cdecl("si_session_info")
+public func si_session_info(_ handle: Int64) -> UnsafeMutablePointer<CChar>? {
+    Bridge.shared.lock.lock()
+    let session = Bridge.shared.sessions[handle]
+    Bridge.shared.lock.unlock()
+    guard let session else { return nil }
+    let range = session.analysis.baseBounds.luminanceDensityRange
+    var info: [String: Any] = [
+        "width": session.source.width,
+        "height": session.source.height,
+        "densityRange": range,
+        "defaultGradeRange": CurveLogic.defaultGradeRange,
+        "anchor": session.analysis.anchor,
+    ]
+    if let label = Densitometry.character(densityRange: range)?.label {
+        info["character"] = label
+    }
+    if let confidence = session.analysis.neutralConfidence {
+        info["castConfidence"] = confidence
+    }
+    let data = (try? JSONSerialization.data(withJSONObject: info, options: [.sortedKeys])) ?? Data("{}".utf8)
+    return mallocCString(String(decoding: data, as: UTF8.self))
+}
+
+// Sidecar IO — same naming and payload shape as the Mac's SidecarStore
+// (`<basename>.swiftinvert.json`, `{version: 1, settings: {...}}`, legacy
+// `.negswift.json` read as fallback), so edits round-trip between the two
+// frontends. The bridge owns the format; the JSON crossing the ABI is the
+// bare settings object.
+private struct SidecarPayload: Codable {
+    var version = 1
+    var settings: ExposureSettings
+}
+
+private func sidecarURL(source: URL, legacy: Bool = false) -> URL {
+    source.deletingPathExtension()
+        .appendingPathExtension(legacy ? "negswift.json" : "swiftinvert.json")
+}
+
+/// Settings JSON from the sidecar next to `path`, or NULL if none exists.
+@_cdecl("si_sidecar_load")
+public func si_sidecar_load(_ path: UnsafePointer<CChar>?) -> UnsafeMutablePointer<CChar>? {
+    guard let path else { return nil }
+    let source = URL(fileURLWithPath: String(cString: path))
+    for url in [sidecarURL(source: source), sidecarURL(source: source, legacy: true)] {
+        guard let data = try? Data(contentsOf: url),
+            let payload = try? JSONDecoder().decode(SidecarPayload.self, from: data)
+        else { continue }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let json = try? encoder.encode(payload.settings) else { continue }
+        return mallocCString(String(decoding: json, as: UTF8.self))
+    }
+    return nil
+}
+
+/// Write the sidecar next to `path`. Returns 1 on success. The settings pass
+/// through ExposureSettings decode→encode, so the file is always canonical
+/// regardless of what subset the frontend tracked.
+@_cdecl("si_sidecar_save")
+public func si_sidecar_save(
+    _ path: UnsafePointer<CChar>?, _ settingsJSON: UnsafePointer<CChar>?
+) -> Int32 {
+    guard let path, let settingsJSON else { return 0 }
+    let source = URL(fileURLWithPath: String(cString: path))
+    do {
+        let settings = try JSONDecoder().decode(
+            ExposureSettings.self, from: Data(String(cString: settingsJSON).utf8))
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(SidecarPayload(settings: settings))
+        try data.write(to: sidecarURL(source: source), options: .atomic)
+        try? FileManager.default.removeItem(at: sidecarURL(source: source, legacy: true))
+        return 1
+    } catch {
+        Bridge.shared.setError("sidecar save \(source.lastPathComponent): \(error)")
+        return 0
     }
 }
 

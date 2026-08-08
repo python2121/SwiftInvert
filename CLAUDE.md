@@ -99,10 +99,35 @@ fields — `si_default_settings` seeds the sliders), every returned buffer
 is malloc'd/`si_free`'d, `si_render` returns rgba8 via Vulkan
 renderDisplay (~2–5 ms), `si_thumbnail` returns the embedded camera JPEG
 (Qt decodes it). `qt/main.cpp` (Widgets + CMake) is folder browsing, a
-fit-to-window canvas, sliders editing the settings JSON with latest-wins
+fit-to-window canvas, controls editing the settings JSON with latest-wins
 async renders, and a `--selftest <png>` mode that renders + screenshots
 offscreen (`QT_QPA_PLATFORM=offscreen`) — the headless way to verify UI
-changes. No sidecar IO/history/crop in the shell yet.
+changes.
+
+Shell feature state (Phase A, 2026-08-08):
+- **Controls mirror `ControlsSidebar` exactly** — same sections, ranges,
+  defaults and direction conventions (Brightness = 2 − density, right =
+  brighter), per-control reset-⨯ + double-click reset, Separation Damping
+  disabled at printSaturation 1, mixer/grading band pickers. When the Mac
+  sidebar gains a control, add it to `makeControlsPanel` with the same spec.
+- **Histogram** from the render's 4×256 bins (`si_render`'s out-param),
+  drawn with HistogramView's shape-only rule (peak-normalize, fixed
+  log1p compression 100000).
+- **Sidecars** round-trip with the Mac: `si_sidecar_load/save` implement
+  SidecarStore's exact naming + `{version, settings}` payload (bridge
+  decode→encode canonicalizes); Qt debounces saves 1 s, flushes on
+  file-switch/close, and merges loaded keys over defaults.
+- **sRGB display transform**: `si_render(srgb_display=1)` →
+  `renderDisplay(srgbDisplay:)` → flags bit of the (now 8-byte) push
+  constants; `encode_u8` decodes the Adobe TRC, gamut-matrixes to sRGB
+  and applies the piecewise OETF after the levels remap. Float/export
+  paths and the Mac semantics untouched; `srgbDisplayFlagMatchesCPUTransform`
+  pins the transform. Proper ICC (lcms2) lands with export.
+- **View Original** hold renders stock settings ("{}").
+- `si_session_info` feeds the negative-character row (density range,
+  label, cast confidence).
+- Still missing (Phase B+): crop/straighten, analysis region, zoom/pan,
+  history/undo, test strip, export, levels drag on the histogram.
 
 **Toolchain constraints (this machine has Command Line Tools, no Xcode):**
 - No XCTest and Testing.framework lives outside default search paths → tests

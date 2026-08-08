@@ -296,7 +296,7 @@ public final class VulkanRenderPipeline: @unchecked Sendable {
             var push = VkPushConstantRange()
             push.stageFlags = VkShaderStageFlags(VK_SHADER_STAGE_COMPUTE_BIT.rawValue)
             push.offset = 0
-            push.size = 4  // uint n
+            push.size = 8  // uint n, uint flags
             var info = VkPipelineLayoutCreateInfo()
             info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO
             info.setLayoutCount = 1
@@ -513,7 +513,8 @@ public final class VulkanRenderPipeline: @unchecked Sendable {
     }
 
     private func bindAndDispatch(
-        _ cmd: VkCommandBuffer?, kernel: String, usesUBO: Bool, set: VkDescriptorSet?, n: UInt32
+        _ cmd: VkCommandBuffer?, kernel: String, usesUBO: Bool, set: VkDescriptorSet?, n: UInt32,
+        flags: UInt32 = 0
     ) {
         let pipeLayout = usesUBO ? pipeLayoutUBO : pipeLayoutSSBO
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelines[kernel])
@@ -523,9 +524,9 @@ public final class VulkanRenderPipeline: @unchecked Sendable {
                 cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeLayout, 0, 1, sPtr, 0, nil)
         }
         _ = setVar
-        var count = n
+        var push: (UInt32, UInt32) = (n, flags)
         vkCmdPushConstants(
-            cmd, pipeLayout, VkShaderStageFlags(VK_SHADER_STAGE_COMPUTE_BIT.rawValue), 0, 4, &count)
+            cmd, pipeLayout, VkShaderStageFlags(VK_SHADER_STAGE_COMPUTE_BIT.rawValue), 0, 8, &push)
         vkCmdDispatch(cmd, (n + 255) / 256, 1, 1)
     }
 
@@ -566,7 +567,7 @@ public final class VulkanRenderPipeline: @unchecked Sendable {
     private func encodeAndRun(
         source: SourceBuffer, params: RenderParams, computeHistogram: Bool,
         encodeKernel: String, encodeTarget: DeviceBuffer,
-        normalized: DeviceBuffer, linear: DeviceBuffer
+        normalized: DeviceBuffer, linear: DeviceBuffer, encodeFlags: UInt32 = 0
     ) throws -> DeviceBuffer {
         let n = UInt32(source.width * source.height)
 
@@ -635,7 +636,7 @@ public final class VulkanRenderPipeline: @unchecked Sendable {
 
         let encodeSet = try writeDescriptorSet(
             layout: layoutSSBO, buffers: [(content, ssbo), (encodeTarget, ssbo), (levelsSSBO, ssbo)])
-        bindAndDispatch(cmd, kernel: encodeKernel, usesUBO: false, set: encodeSet, n: n)
+        bindAndDispatch(cmd, kernel: encodeKernel, usesUBO: false, set: encodeSet, n: n, flags: encodeFlags)
 
         try vkCheck(vkEndCommandBuffer(cmd), "vkEndCommandBuffer")
 
@@ -690,8 +691,12 @@ public final class VulkanRenderPipeline: @unchecked Sendable {
         return (result.encoded, result.histogram)
     }
 
+    /// `srgbDisplay`: re-express the output as sRGB in-kernel (flags bit 0) —
+    /// for presenting on an unmanaged canvas. Off for parity with the Mac's
+    /// tagged-Adobe readback.
     public func renderDisplay(
-        source: SourceBuffer, params: RenderParams, computeHistogram: Bool = true
+        source: SourceBuffer, params: RenderParams, computeHistogram: Bool = true,
+        srgbDisplay: Bool = false
     ) throws -> DisplayResult {
         renderLock.lock()
         defer { renderLock.unlock() }
@@ -713,7 +718,7 @@ public final class VulkanRenderPipeline: @unchecked Sendable {
         _ = try encodeAndRun(
             source: source, params: params, computeHistogram: computeHistogram,
             encodeKernel: "encode_u8", encodeTarget: encoded8,
-            normalized: normalized, linear: linear)
+            normalized: normalized, linear: linear, encodeFlags: srgbDisplay ? 1 : 0)
 
         let rgba = [UInt8](unsafeUninitializedCapacity: w * h * 4) { buf, count in
             buf.baseAddress!.update(

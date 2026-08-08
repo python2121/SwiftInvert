@@ -20,7 +20,10 @@
 
 layout(local_size_x = 256) in;
 
-layout(push_constant) uniform Push { uint n; } push;
+// flags bit 0 (encode_u8 only): convert the Adobe-RGB-encoded display value
+// to sRGB for direct presentation on an unmanaged canvas — the Linux stand-in
+// for the Mac's ColorSync-tagged CGImage. Float/export paths never set it.
+layout(push_constant) uniform Push { uint n; uint flags; } push;
 
 const float PI = 3.14159265358979323846;
 
@@ -478,8 +481,23 @@ void main() {
 layout(std430, binding = 0) readonly buffer Src { float src[]; };
 layout(std430, binding = 1) writeonly buffer Dst { uint dst[]; };
 
+// sRGB from XYZ (D65, linear) — the display leg of Adobe→sRGB; the Adobe
+// leg reuses WORKING_TO_XYZ above.
+const mat3 SRGB_FROM_XYZ = mat3(
+    vec3(3.2404542, -0.9692660, 0.0556434),  // columns
+    vec3(-1.5371385, 1.8760108, -0.2040259),
+    vec3(-0.4985314, 0.0415560, 1.0572252));
+
+float srgb_encode(float v) {
+    return v <= 0.0031308 ? 12.92 * v : 1.055 * pow(v, 1.0 / 2.4) - 0.055;
+}
+
 // Display fast path: same encode, packed rgba8 (alpha 255) — the GPU
 // quantizes and readback is 4× smaller (mirrors the rgba8unorm target).
+// With flags bit 0, the Adobe-encoded result (levels included — the remap
+// is a display-domain op) is re-expressed as sRGB: decode the pure-power
+// TRC, gamut matrix, clamp (per-channel clip is fine for a canvas), sRGB
+// piecewise OETF.
 void main() {
     uint gid = gl_GlobalInvocationID.x;
     if (gid >= push.n) { return; }
@@ -488,6 +506,11 @@ void main() {
         levels_remap(oetf_encode(src[i]), 0),
         levels_remap(oetf_encode(src[i + 1u]), 1),
         levels_remap(oetf_encode(src[i + 2u]), 2));
+    if ((push.flags & 1u) != 0u) {
+        vec3 lin = pow(max(e, vec3(0.0)), vec3(2.19921875));
+        vec3 srgbLin = clamp(SRGB_FROM_XYZ * (WORKING_TO_XYZ * lin), vec3(0.0), vec3(1.0));
+        e = vec3(srgb_encode(srgbLin.x), srgb_encode(srgbLin.y), srgb_encode(srgbLin.z));
+    }
     dst[gid] = packUnorm4x8(vec4(e, 1.0));
 }
 #endif

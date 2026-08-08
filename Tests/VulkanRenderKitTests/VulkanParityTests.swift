@@ -160,6 +160,50 @@ struct VulkanParityTests {
         #expect(worst <= 1.5, "display path deviates \(worst)/255 from float path")
     }
 
+    @Test func srgbDisplayFlagMatchesCPUTransform() throws {
+        // The canvas transform: Adobe TRC decode → gamut matrix → clamp →
+        // sRGB OETF, computed here scalar-CPU from the float path's output.
+        let pipeline = try requirePipeline()
+        let params = ExposureKernel.deriveRenderParams(ExposureSettings(), Self.analysis)
+        let source = try pipeline.upload(Self.image)
+        let float = try pipeline.render(source: source, params: params, computeHistogram: false)
+        let display = try pipeline.renderDisplay(
+            source: source, params: params, computeHistogram: false, srgbDisplay: true)
+        let adobeToXYZ = (
+            SIMD3(0.5767309, 0.1855540, 0.1881852),
+            SIMD3(0.2973769, 0.6273491, 0.0752741),
+            SIMD3(0.0270343, 0.0706872, 0.9911085))
+        let xyzToSRGB = (
+            SIMD3(3.2404542, -1.5371385, -0.4985314),
+            SIMD3(-0.9692660, 1.8760108, 0.0415560),
+            SIMD3(0.0556434, -0.2040259, 1.0572252))
+        func srgbEncode(_ v: Double) -> Double {
+            v <= 0.0031308 ? 12.92 * v : 1.055 * pow(v, 1.0 / 2.4) - 0.055
+        }
+        var worst = 0.0
+        for i in 0..<(Self.image.width * Self.image.height) {
+            let e = SIMD3(
+                Double(float.encoded.pixels[i * 3]), Double(float.encoded.pixels[i * 3 + 1]),
+                Double(float.encoded.pixels[i * 3 + 2]))
+            let lin = SIMD3(
+                pow(max(e.x, 0), 2.19921875), pow(max(e.y, 0), 2.19921875),
+                pow(max(e.z, 0), 2.19921875))
+            let xyz = SIMD3(
+                simd_dot(adobeToXYZ.0, lin), simd_dot(adobeToXYZ.1, lin),
+                simd_dot(adobeToXYZ.2, lin))
+            let srgbLin = simd_clamp(
+                SIMD3(
+                    simd_dot(xyzToSRGB.0, xyz), simd_dot(xyzToSRGB.1, xyz),
+                    simd_dot(xyzToSRGB.2, xyz)),
+                SIMD3<Double>(), SIMD3(repeating: 1))
+            let expected = SIMD3(srgbEncode(srgbLin.x), srgbEncode(srgbLin.y), srgbEncode(srgbLin.z))
+            for ch in 0..<3 {
+                worst = max(worst, abs(expected[ch] * 255 - Double(display.rgba[i * 4 + ch])))
+            }
+        }
+        #expect(worst <= 1.5, "sRGB display path deviates \(worst)/255 from CPU transform")
+    }
+
     @Test func histogramBinsSumToPixelCount() throws {
         let pipeline = try requirePipeline()
         let params = ExposureKernel.deriveRenderParams(ExposureSettings(), Self.analysis)
