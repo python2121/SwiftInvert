@@ -37,6 +37,12 @@ distrobox enter swiftdev -- bash -lc 'cd ~/Documents/code/SwiftInvert && swift b
 
 # Regenerate the checked-in SPIR-V after editing NegPipeline.comp:
 ./scripts/compile_vulkan_shaders.sh   # (in the box; needs glslangValidator)
+
+# Qt shell (in the box; apt qt6-base-dev qt6-base-dev-tools cmake ninja-build):
+swift build -c release --product SwiftInvertCore
+cmake -S qt -B qt/build -G Ninja && cmake --build qt/build
+qt/build/swiftinvert-qt [folder]         # GUI (distrobox passes the display)
+QT_QPA_PLATFORM=offscreen qt/build/swiftinvert-qt --selftest out.png <folder>
 ```
 
 **Linux port status:** `Package.swift` computes its target list — the
@@ -81,6 +87,22 @@ negcli's Linux TIFF output is ImageIO-free (`negcli/TIFF16.swift`,
 untagged baseline TIFF — bytes are Adobe RGB-encoded); littleCMS-based
 display/export color management is still to come, converging with NegPy's
 own stack.
+
+**The Qt shell** (`qt/`, Linux only) is deliberately thin: all pipeline
+semantics live in Swift behind **CoreBridge**
+(`Sources/CoreBridge/CoreBridge.swift` → `libSwiftInvertCore.so`, C ABI
+mirrored in `qt/swiftinvert_core.h` — keep the two in sync). Bridge
+contract: sessions are int64 handles (`si_open` = preview decode + analyze
++ GPU upload; ~1 s, off the UI thread), settings travel as SIDECAR-FORMAT
+JSON (missing keys = defaults, so the frontend never re-implements
+fields — `si_default_settings` seeds the sliders), every returned buffer
+is malloc'd/`si_free`'d, `si_render` returns rgba8 via Vulkan
+renderDisplay (~2–5 ms), `si_thumbnail` returns the embedded camera JPEG
+(Qt decodes it). `qt/main.cpp` (Widgets + CMake) is folder browsing, a
+fit-to-window canvas, sliders editing the settings JSON with latest-wins
+async renders, and a `--selftest <png>` mode that renders + screenshots
+offscreen (`QT_QPA_PLATFORM=offscreen`) — the headless way to verify UI
+changes. No sidecar IO/history/crop in the shell yet.
 
 **Toolchain constraints (this machine has Command Line Tools, no Xcode):**
 - No XCTest and Testing.framework lives outside default search paths → tests

@@ -25,12 +25,34 @@ var targets: [Target] = [
 // chain; ReferenceCurve remains the no-GPU fallback). Declared per-branch
 // because SwiftPM validates conditional dependency names even when the
 // condition is false.
+// The Qt frontend consumes the core through this C-ABI dylib (CoreBridge's
+// @_cdecl surface; qt/swiftinvert_core.h is the matching header).
+// Products are explicit because of the dylib; executables must then be
+// listed per-platform too (an explicit list suppresses the implicit ones,
+// and `swift run` / `--product` only see listed products).
+var products: [Product] = []
+#if os(macOS)
+products += [
+    .executable(name: "SwiftInvert", targets: ["SwiftInvert"]),
+    .executable(name: "negcli", targets: ["negcli"]),
+]
+#else
+products += [
+    .library(name: "SwiftInvertCore", type: .dynamic, targets: ["CoreBridge"]),
+    .executable(name: "negcli", targets: ["negcli"]),
+]
+#endif
 #if !os(macOS)
 targets += [
     .systemLibrary(
         name: "CVulkan",
         pkgConfig: "vulkan",
         providers: [.apt(["libvulkan-dev"])]
+    ),
+    .target(
+        name: "CoreBridge",
+        dependencies: ["NegativeKit", "RawDecodeKit", "VulkanRenderKit"],
+        swiftSettings: v5
     ),
     .target(
         name: "VulkanRenderKit",
@@ -90,5 +112,6 @@ targets += [
 let package = Package(
     name: "SwiftInvert",
     platforms: [.macOS(.v14)],
+    products: products,
     targets: targets
 )
