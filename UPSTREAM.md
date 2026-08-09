@@ -9,8 +9,8 @@ and appending a history entry.
 ## Last reviewed
 
 ```
-commit:   7eb6837  ("Update CHANGELOG.md for version 0.48.0")
-reviewed: 2026-08-06
+commit:   958d24c  ("Oval and card-edge dodge/burn masks, plus per-mask invert (#776)")
+reviewed: 2026-08-08
 fixtures: Tests/Fixtures/ dumped from 0369b10 except lab_color (partially
           re-dumped from a09cc46, 2026-07-31, with the pure gamut boost —
           the b8c596c dump had carried the interim in-boost skin damping).
@@ -39,6 +39,85 @@ updates this file. The manual procedure, for reference:
 6. Update the **Last reviewed** marker and append to the history below.
 
 ## Review history
+
+### 2026-08-08 — through `958d24c` (0.48.0 → 0.48.1, 8 commits)
+
+**One pipeline-relevant commit, and it lands entirely inside the dodge/burn
+stack we don't ship.** `2e018f4` **Local Grade** is the only commit the
+path filter over `features/exposure/`, `features/process/`, `kernel/image/`
+and both characterization goldens returns. Goldens unmoved,
+`EXPOSURE_CONSTANTS` untouched (empty diff), no renames,
+`features/process/` and `kernel/image/` untouched. 0.48.1 was tagged in the
+range.
+
+**Ported:** nothing (nothing applicable).
+
+**Not applicable — the local-adjustments stack** (`negpy.features.local`;
+we ship no masks at all, which `NegPipeline.metal`'s header states as a
+scope boundary: "no dodge/burn EV map"). Read anyway, because `2e018f4`
+edits the print-curve kernel and its WGSL mirror — the two files we do
+mirror:
+- `2e018f4` **Local Grade per mask** (ISO-R points off the frame's Grade).
+  Two fragments worth recording even though the feature isn't ours:
+  1. **The mechanism is our recorded per-layer-grade-trims skip, applied
+     per pixel.** `local_grade_factor_map` is literally `_grade_trim_mult`'s
+     ratio `R/(R+ΔR)` clamped to the ISO-R ladder, and in the kernel it
+     multiplies the STRAIGHT-LINE SLOPE ONLY —
+     `v = k·g·(x−x₀) + c·x²` — so the rotation is about the channel pivot
+     and a grade-only change doesn't move its own midtone, while the
+     cast-removal curvature `c` stays global. If we ever revisit per-channel
+     grade trims, that pivot-rotation form (and leaving curvature alone) is
+     the reference.
+  2. **The stops sign convention flipped, and it cancels.**
+     `local_ev_scale` went `−log10(2)/range` → `+log10(2)/range` at the same
+     time the mask slider went brightness-signed (positive = dodge) to
+     exposure-signed (positive = burn), matching `vignette_stops`; old saves
+     migrate on the nested key. Net operator unchanged. **We are unaffected
+     numerically**: `deriveRenderParams` folds `exposureStops` in as
+     `stops × (−K.log10Two/range)` with positive = brighter, which is
+     upstream's new operator with the slider negated — the same algebra, and
+     the direction our whole UI convention already requires ("right =
+     brighter", the recorded test-strip divergence). Only the code comment
+     citing "the local_ev_scale domain" is now sign-stale against upstream;
+     a comment refresh is optional and was NOT made during this review.
+  Also noted: their GPU consumes the CPU-rasterised map (EV in `.r`, grade
+  factor in `.g` of one texture — no extra bind slot), so shapes and local
+  grade have no shader parity surface at all; and one `rasterise` serves
+  render, canvas tint and printing notes so "none of the three can describe
+  a different shape" — the same don't-fork-the-ruler discipline our
+  `Densitometry` ruler already follows across probe/zone strip/zone overlay.
+- `958d24c` **Oval + card-edge (gradient) masks, per-mask invert** — the
+  vertices stay the universal store and `shape` says how to read them, so
+  geometry mapping is shape-blind. Their oval is the unit circle under a
+  possibly non-orthogonal affine frame from 3 points, which handles tilt,
+  shear and raw aspect ratio for free; the gradient's handle spacing IS the
+  softness (feather doesn't apply).
+- `dbffc90` **Printing Notes** — a marked-up work print previewed on canvas
+  (⇧N) and exported as `<stem>_notes.jpg`: burns hatched, dodges open, masks
+  badged in stops, print recipe below. Their canvas/export layer, and it
+  annotates the masks we don't have.
+
+**Not applicable (rest of the range):** `239b5b6` JPEG XL input loader +
+lossless output for Linear and Flat exports (Linear Output is a recorded
+N/A since `6410002`; our export is JPEG/TIFF — their own PIPELINE.md now
+documents at length that JXL has no legal untagged state and that
+`imagecodecs` can't supply real primaries or an ICC profile, which is an
+argument against JXL for a linear dump, not for it), `8dc5e22` Immersive
+Canvas toggle and `c04b183` Sticky Zoom across image switches (their Qt
+canvas chrome — Sticky Zoom is a mildly interesting UX idea for our
+DetailView zoom `@State`, but it would interact with the HQ tier threshold
+and nobody has asked), `ee9e402` slider tooltips firing on the label as
+well as the groove, `e5ed758` 0.48.1 release chore.
+
+**dump_fixtures.py:** compatible. It imports neither `local_ev_scale` nor
+anything under `features/local/`; the only signature it touches that moved
+is `apply_characteristic_curve`, whose new `grade_map` parameter defaults to
+`None` (and gates `use_grade`), so every existing call is semantics-stable.
+
+**Still open (carried over, unchanged):** colour ring-around (±4cc/2cc
+spec), `91a1b78` tunable Auto Density/Grade targets (user-initiated only),
+the on-scan Color Mixer band re-tune pass (ours — and per the last entry,
+best done after living with Hue Trim).
 
 ### 2026-08-06 (second) — PORTED Hue Trim (`7a07f5c`)
 
