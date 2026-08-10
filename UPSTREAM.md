@@ -160,9 +160,7 @@ goldens".
    drag at high zoom. Reopening condition: someone actually complains that
    dragging a slider zoomed-in feels laggy.
 
-**To port (proposed, not yet implemented):**
-
-1. **Raise the session LRU above 2** (from `f758b9a`, "keep eight rendered
+2. **Raise the session LRU above 2** (from `f758b9a`, "keep eight rendered
    frames, not two"). Upstream's memo shared a limit with the full-res
    decode cache and so held exactly two — "the current one and the one
    navigated from" — and they concluded that stepping three frames along a
@@ -177,8 +175,20 @@ goldens".
    every tier is keyed, so a returning session re-validates and cannot
    serve stale pixels, and `releaseHQ()` already keeps the HQ tier on the
    visible frame only, which is exactly upstream's "HQ frames stay on the
-   full-res budget". Payoff here is larger than theirs per miss, since our
-   rebuild pays the ~700 ms decode. Small effort, measure first.
+   full-res budget".
+
+   **DECLINED 2026-08-09**: current behaviour is fine as it stands. The
+   measured trade is a ~200 ms preview decode + ~24 ms analysis per
+   navigate-back miss (timed on IMG_0348: 0.19–0.26 s decode over three
+   runs) against roughly 100–150 MB of RAM per extra retained session —
+   ~73 MB preview buffer + ~19 MB proxy + ~25 MB source texture, before
+   oriented copies. Upstream's 2 → 8 was cheap because their retained
+   object is a ~27 MB rendered frame; ours is an order of magnitude
+   bigger, so the same number would cost ~1 GB. Not worth a quarter-second
+   on a gesture that already feels fine. Reopening condition: someone
+   comparing frames back and forth along a roll finds the repaint
+   intrusive — and then the number to try is 4, not 8, after measuring
+   real RSS rather than trusting the arithmetic above.
 
 **Checked, no counterpart (shared-bug-class audits):**
 - `c20951a`'s second half — **export downscales now use INTER_AREA**,
