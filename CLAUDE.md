@@ -893,11 +893,23 @@ values where needed):
 2. `deriveRenderParams`: map settings → params (fold into existing params
    where the algebra allows — see overall contrast/exposure — before adding
    uniforms).
-3. Kernels, BOTH sides in the same change: `ReferenceCurve.swift` (CPU) and
-   `NegPipeline.metal` (MSL), in identical order/parallel form. New uniforms:
-   extend `CurveUniforms` in both files (16-byte alignment) + update
-   `LayoutTests` strides/offsets. Guard non-default-off work behind uniform
-   branches or a separate pass (occupancy!).
+3. Kernels — **THREE mirrors, all in the same change**, in identical
+   order/parallel form: `ReferenceCurve.swift` (CPU, the source of truth),
+   `NegPipeline.metal` (MSL, macOS) and `VulkanRenderKit/Shaders/
+   NegPipeline.comp` (GLSL, Linux — since the Qt/Vulkan port merged).
+   New uniforms: extend `CurveUniforms` (16-byte alignment) + update
+   `LayoutTests` strides/offsets; `ShaderTypes.swift` is SHARED by symlink,
+   so a new field silently changes the std140 layout the GLSL declares by
+   hand — miss it there and every field after it is read as garbage
+   (`VulkanLayoutTests` pins the offsets). Guard non-default-off work behind
+   uniform branches or a separate pass (occupancy!).
+   **A kernel change isn't finished on the Mac.** The `.spv` binaries are
+   the build inputs, not the `.comp`, so an edit needs
+   `./scripts/compile_vulkan_shaders.sh` re-run and the binaries committed —
+   that needs `glslangValidator`, i.e. the `swiftdev` distrobox. Each GPU is
+   pinned to the CPU reference independently (`GPUParityTests` on macOS,
+   `VulkanParityTests` on Linux), so a Metal-only port fails loudly — but
+   only on the machine the Mac suite can't reach.
 4. UI: `LabeledSlider`/`GradientSlider` (sets the reset-⨯ default), section
    in `ControlsSidebar`; `negcli render` flag if useful.
 5. Tests: default-is-identity (fixtures must still pass), direction/region
