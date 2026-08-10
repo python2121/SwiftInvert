@@ -9,8 +9,8 @@ and appending a history entry.
 ## Last reviewed
 
 ```
-commit:   958d24c  ("Oval and card-edge dodge/burn masks, plus per-mask invert (#776)")
-reviewed: 2026-08-08
+commit:   1956dd0  ("fix: import 3-channel LinearRaw DNGs libraw can't unpack (#786)")
+reviewed: 2026-08-09
 fixtures: Tests/Fixtures/ dumped from 0369b10 except lab_color (partially
           re-dumped from a09cc46, 2026-07-31, with the pure gamut boost —
           the b8c596c dump had carried the interim in-boost skin damping).
@@ -39,6 +39,195 @@ updates this file. The manual procedure, for reference:
 6. Update the **Last reviewed** marker and append to the history below.
 
 ## Review history
+
+### 2026-08-09 (second) — through `1956dd0` (1 commit)
+
+**No pipeline changes — but a shared LibRaw limitation worth having on
+record, because a user WILL hit it and ask.** `1956dd0` is loader-only
+(`infrastructure/loaders/`); the three pipeline dirs and both goldens have
+an empty diff.
+
+DxO PhotoLab/PureRAW and Lightroom Enhance write DNG 1.7 linear RGB files
+whose LinearRaw SubIFD is JPEG-XL compressed. LibRaw's decoder for that
+landed in 0.22 but is gated behind the Adobe DNG SDK, and rawpy's published
+wheels don't link it, so upstream's loader crashed on an unhandled
+`LibRawFileUnsupportedError`. Their fix probes with `unpack()` and, on
+failure, decodes the SubIFD directly through tifffile/imagecodecs, replaying
+the LinearizationTable, BlackLevel/WhiteLevel and DefaultCrop\* tags that
+`postprocess()` would have applied — and deliberately applies NO
+camera-to-XYZ matrix, because they keep every RAW source sensor-native.
+That last part is our decode contract too.
+
+**We share the gap, and it is not an inference.** We link Homebrew LibRaw
+**0.22.1** — the version that has the feature in principle — but the dylib
+exports `LibRaw::jxl_dng_load_raw_placeholder`, which is LibRaw's stub for a
+build without the decoder, and it links no libjxl and no DNG SDK (its only
+deps are jpeg-turbo, lcms2, libomp, libz, libc++). So a JPEG-XL LinearRaw
+DNG cannot be unpacked here either.
+
+**Our failure mode is already graceful**, which is the half of their bug we
+don't have: `RawDecoder.decode` guards `libraw_unpack` and throws
+`RawDecodeError.libraw("unpack", code:)` (RawDecoder.swift:58-59). An
+unsupported DNG surfaces as an error, never a crash.
+
+**Deliberately skipped (for now), with the reasoning recorded so it isn't
+re-litigated silently:** porting the fallback means a DNG/TIFF SubIFD
+parser plus a JXL decoder plus the tag replay, with no tifffile/imagecodecs
+equivalent to lean on — disproportionate for a file class whose fit with
+this pipeline is questionable anyway (a PureRAW linear DNG is already
+demosaiced and partly balanced, where our chain assumes unity-WB
+sensor-native data). Two cheaper mitigations if it ever comes up: a
+DNG-specific error message telling the user to export a linear TIFF from
+DxO instead of surfacing a bare LibRaw code, or a LibRaw build that links
+the decoder. Reopening condition: a user actually wanting to invert
+PureRAW-denoised camera scans, which is a plausible high-ISO workflow.
+
+**dump_fixtures.py:** unaffected — nothing it imports was touched.
+
+### 2026-08-09 — through `0030f57` (0.48.1 → 0.49.0, 7 commits)
+
+**A golden MOVED, and it is the rare case where that doesn't reach us: it is
+entirely the lab sharpen stage, which we don't ship.** All three pipeline
+dirs (`features/exposure/`, `features/process/`, `kernel/image/`) have an
+EMPTY diff across the range — `c20951a` only appeared in the path-filtered
+log because that filter includes the golden files themselves. No constants
+drift, no renames.
+
+`c20951a` fixed an unsharp radius that was multiplied by the pipeline scale
+factor, so a 1 px radius became a ~6 px blur on a 24 MP export and read as
+contrast rather than sharpness; the radius is now in OUTPUT pixels on both
+paths, and the L\* noise gate was rescaled by the same factor it had been
+calibrated against. `test_scene_linear_relocation.py` moved at 4 of 6 sample
+points because its render carries the default sharpen. **Our fixtures are
+structurally immune**: `dump_fixtures.py` deliberately excludes the lab
+stage, and says so in a comment — "LabConfig.sharpen would contaminate
+goldens".
+
+**Ported:** nothing yet (both items below are proposals).
+
+**Deliberately skipped — DECLINED 2026-08-09 (user call), don't re-propose:**
+
+1. **Render a preview-size proxy while a gesture is live** (from `8fc35b6`,
+   the 0.49.0 perf range). Upstream's HQ drag frame went 381.5 ms → 7.6 ms
+   of GPU work by rendering interactive frames against a preview-resolution
+   proxy and re-rendering the full frame on release: "Releasing the slider
+   re-renders the full frame exactly as before, so what you inspect at HQ is
+   unchanged; only what you drag against is cheaper."
+
+   **We have the same gap, verified in source.** `scheduleRender`
+   (AppModel.swift:871) resolves the tier as
+   `Self.renderTier(mode: hqMode, active: hqActive)` with no knowledge of
+   whether a control is being dragged, and `HQMode.resolve` takes no drag
+   parameter. So with HQ engaged every coalesced slider tick renders at the
+   full/medium tier — order 0.5–1 s at 24 MP against 4.4 ms on the proxy.
+   It is reachable by DEFAULT, because `.auto` engages past 2× zoom, which
+   is exactly where you sit judging a crop.
+
+   **Our severity is lower than theirs and the fix is smaller.** We do not
+   have their two aggravating faults: `renderTask`/`renderPending` is a real
+   one-in-flight latest-wins queue that awaits the actor (their coalescing
+   had silently broken because submit returned before the frame drew), and
+   `ImageSession` is an actor, so a long render never blocks the UI thread
+   the way Qt's single-threaded widget path did. The symptom here is a
+   picture that updates about once a second during an HQ drag, not a frozen
+   handle.
+
+   Maps onto machinery we already have, which is the argument for doing it:
+   - `controlEditCount` already tracks live drags exactly (it holds the
+     history commit until release) — the signal needs no new plumbing.
+   - `scheduleRender` ALREADY special-cases a live gesture two lines above,
+     substituting `fineRotation = 0` mid-straighten-drag. A tier downgrade
+     is the same idiom in the same function.
+   - The proxy is already warm in the tower, and the tier-swap stability
+     work (`displayAspect` / `contentWindow` / the INTER_AREA
+     `downsampled`) already guarantees the two tiers land on the same
+     pixel — `DisplayAspectTests` pins it. The visual swap this needs is
+     the one we already built and tested.
+   - Release must trigger a re-render at the true tier (`setControlEditing`
+     false → `scheduleRender`), or HQ silently stops being export-truth.
+
+   No parity surface, no fixture re-dump, no settings field. Small effort;
+   the care goes into making sure the release re-render can't be lost.
+
+   **DECLINED 2026-08-09**: the app is fast enough in practice and this
+   buys nothing on the path that is actually used. The gap is real but
+   narrow — it needs HQ ENGAGED (an explicit `.on`, or `.auto` past 2×
+   zoom) *and* a slider drag at the same time; every other interaction is
+   already on the 4.4 ms proxy path, which is what day-to-day use feels
+   like. Unlike upstream we never freeze: the actor keeps renders off the
+   UI thread and the latest-wins queue gives real back-pressure, so the
+   worst case is a picture that refreshes about once a second while you
+   drag at high zoom. Reopening condition: someone actually complains that
+   dragging a slider zoomed-in feels laggy.
+
+**To port (proposed, not yet implemented):**
+
+1. **Raise the session LRU above 2** (from `f758b9a`, "keep eight rendered
+   frames, not two"). Upstream's memo shared a limit with the full-res
+   decode cache and so held exactly two — "the current one and the one
+   navigated from" — and they concluded that stepping three frames along a
+   roll and back re-rendered. **`AppModel.sessionLRULimit = 2`
+   (AppModel.swift:343) is the same number reached by the same reasoning**,
+   and CLAUDE.md describes it in almost their words.
+
+   Not a blind 2 → 8: their retained object is a ~27 MB rendered frame,
+   ours is a whole cache tower (decode + oriented + `Prepared` + textures),
+   so the memory math is entirely different and should be measured before
+   picking a number. The discipline that makes it safe is already ours —
+   every tier is keyed, so a returning session re-validates and cannot
+   serve stale pixels, and `releaseHQ()` already keeps the HQ tier on the
+   visible frame only, which is exactly upstream's "HQ frames stay on the
+   full-res budget". Payoff here is larger than theirs per miss, since our
+   rebuild pays the ~700 ms decode. Small effort, measure first.
+
+**Checked, no counterpart (shared-bug-class audits):**
+- `c20951a`'s second half — **export downscales now use INTER_AREA**,
+  because OpenCV gives INTER_LANCZOS4 no prefilter on a shrink so their CPU
+  path was silently plain bilinear. `Exporter.swift:119` calls
+  `image.downsampled(maxLongEdge:)`, which has been a real separable
+  area filter since the 2026-08-04 convergence entry. **We are ahead of
+  upstream here**, and their fix confirms that convergence was right.
+  The general lesson is one we already recorded for halation radii
+  (2026-08-02): any constant in PIXELS must scale with render scale, or
+  preview and export silently disagree.
+- `0030f57` **batch export using a stale per-frame block** rather than the
+  live panel (their per-frame export settings were "an accident of timing,
+  never a user choice"). Ours cannot have this: `performExport(urls:options:)`
+  takes ONE `ExportOptions` from the sheet and applies it to every URL;
+  only the per-frame ADJUSTMENTS come from sidecars
+  (`SidecarStore.load(for:) ?? DefaultProfile.settings`). Same shape they
+  converged to. Consistent with the `c6dfb35`/`404c62a` audit (2026-08-02).
+
+**Noted — a testing-discipline lesson worth keeping:** their `source_hash`
+was never threaded into `process_to_texture`, so the stage-skipping resume
+"existed, was maintained, and had never once run" through roughly eight perf
+passes. Wall-clock budgets did not catch it because the frame still landed
+inside any sane budget at preview size; what catches it is asserting
+ENGAGEMENT directly — a toning-only change must not re-dispatch geometry.
+Our nearest equivalent, `ImagePipelineSeamTests`, pins that a reused
+`Prepared` EQUALS fresh analysis — correctness, not engagement. Nothing
+asserts that `prepare` was actually skipped. Lower risk here (the caches are
+keyed and a missed one lights the "Analyzing…" pill), but if we ever chase
+render latency, assert the skip, not just the answer.
+
+**Not applicable:** the rest of `8fc35b6`/`f758b9a` is Qt-specific
+(soft proof moved into a cached 65³ display LUT — ours is ColorSync's job,
+we hand off a tagged CGImage; GPU-texture vs host-array publishing;
+thumbnail readback threading; a retouch dispatch we don't have),
+`dfe0ac7` canvas overlay punching an alpha hole that erased the
+GPU-painted frame (their rendercanvas/Qt compositing; note it presented as
+white on macOS), `fe38f81` two-pass IR scanner detection/alignment
+(capture + retouch), `6e09803` 0.49.0 changelog + VERSION.
+
+**dump_fixtures.py:** compatible, and unusually well insulated this time —
+`features/exposure/logic.py`, `normalization.py` and `analysis.py` have zero
+lines in the range, so every imported signature is stable, and the script's
+deliberate exclusion of the lab stage means the golden move cannot reach a
+re-dump either. The `fixtures:` line does not move.
+
+**Still open (carried over, unchanged):** colour ring-around (±4cc/2cc
+spec), `91a1b78` tunable Auto Density/Grade targets (user-initiated only),
+the on-scan Color Mixer band re-tune pass (ours).
 
 ### 2026-08-08 — through `958d24c` (0.48.0 → 0.48.1, 8 commits)
 
