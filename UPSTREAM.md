@@ -9,8 +9,8 @@ and appending a history entry.
 ## Last reviewed
 
 ```
-commit:   1956dd0  ("fix: import 3-channel LinearRaw DNGs libraw can't unpack (#786)")
-reviewed: 2026-08-09
+commit:   cb876d4  ("Cyanotype printing (#802)")
+reviewed: 2026-08-11
 fixtures: Tests/Fixtures/ dumped from 0369b10 except lab_color (partially
           re-dumped from a09cc46, 2026-07-31, with the pure gamut boost —
           the b8c596c dump had carried the interim in-boost skin damping).
@@ -39,6 +39,219 @@ updates this file. The manual procedure, for reference:
 6. Update the **Last reviewed** marker and append to the history below.
 
 ## Review history
+
+### 2026-08-11 — through `cb876d4` (0.49.0 unreleased, 6 commits)
+
+**Two pipeline-relevant commits, both outside our scope — but one of them is
+the second matrix-orientation bug upstream has shipped, and it comes with a
+testing rule worth adopting by name.** Goldens unmoved (empty diff),
+`EXPOSURE_CONSTANTS` untouched, no renames, VERSION still 0.49.0. The whole
+diff over the three pipeline dirs is **two files**: `papers.py` (additive) and
+`capture_color.py` (E-6 only). `normalization.py`, `logic.py`, `processor.py`,
+`models.py` and every `exposure/shaders/*.wgsl` have an **empty diff**.
+
+**Ported:** nothing (nothing applicable).
+
+**Deliberately skipped:**
+1. **`3f803fe` Lith printing** — infectious development as a render stage
+   (`features/lith/` + `lith.wgsl`), plus a `lith_path` colour path per paper
+   profile: four (a\*, b\*) anchors at density fractions 0.10/0.35/0.65/1.00,
+   peach → ochre → **olive** → neutral, where the olive knot is the point ("the
+   green transition between warm highlights and cold blacks is the signature of
+   a lith print on warmtone paper"). Papers and toning are recorded scope
+   boundaries. Its only reach into a directory we track is the additive
+   `PaperProfile.lith_path` field — **no tonal constant moved**.
+2. **`cb876d4` Cyanotype printing** — an alt-process stage
+   (`features/cyanotype/` + its own WGSL, `features/altprocess/`). Same
+   boundary; we ship one C-41 print path and no alt processes.
+
+**Checked, no counterpart — but the discipline transfers, and this is the
+substance of the review.** `ae7169f` fixes `camera_to_working_matrix`:
+it inverted the camera's XYZ→cam matrix and *then* row-normalized, where
+dcraw's `cam_xyz_coeff` normalizes the **forward** working→cam rows and inverts
+after. The module docstring had claimed the dcraw construction while doing the
+opposite. Measured against libraw's own cam→sRGB: 5–7% off in R/G on unclipped
+frames (now within 0.1%), and **+119% on a saturated sunset**, doubling B/G
+too — a warm sky rendering as neon magenta that reads as runaway saturation.
+
+- **No counterpart here, structurally.** We never *build* a matrix by
+  inversion. Our working-space matrices are published Adobe RGB (1998) D65
+  literals carried as an explicit pair (`LabColor.toXYZ` / `toRGB`,
+  duplicated in MSL and GLSL), and the Vulkan canvas transform composes two
+  literals in the correct direction (`SRGB_FROM_XYZ * (WORKING_TO_XYZ * lin)`,
+  NegPipeline.comp). Our exposure to this bug class is transcription drift
+  between the three mirrors, not construction order — and per CLAUDE.md that
+  is what the GPU-vs-CPU parity suites exist to catch.
+- **The rule to keep is about witnesses, not matrices.** Their commit message
+  states it exactly: *"No structural invariant separates the two orders:
+  normalizing either direction gives M @ (1,1,1) = (1,1,1), and a matrix that
+  maps neutral to neutral has an inverse that does too, so the coefficients are
+  the only witness."* A grey chart cannot catch it; the error only appears far
+  from neutral. **Our colour chain already has the right witness, verified
+  rather than assumed**: `ColorIOTests.cases` pins the export transform against
+  NegPy's littleCMS oracle on saturated red `[200,60,50]`, green `[70,190,60]`
+  and blue `[60,80,200]` alongside the neutral `[128,128,128]` — a wrong-but-
+  neutral-preserving matrix breaks the three chromatic cases while the grey one
+  passes. `HueTrimTests` follows the same principle from the other direction
+  (it asserts the effect GROWS with chroma, which is what distinguishes a
+  rotation from a cast). Keep new colour-transform tests on that side of the
+  line: **a neutral is never a sufficient witness for a colour transform.**
+- Worth noting this is upstream's **second** matrix-orientation bug: 2026-07-30
+  records a transposed RGB↔XYZ matrix inside their gamut bisection that
+  "masqueraded as float precision noise". Both were caught by a chromatic
+  measurement against an independent reference, neither by an invariant.
+- One incidental confirmation: the fix is scoped to the E-6 as-captured render
+  on both engines, and their own 96-case sweep over frame × mode × normalize ×
+  paper × intent × engine "moves exactly the 16 E-6 Normalize-off cases and
+  leaves C-41, B&W and E-6 Normalize-on byte-identical" — independent
+  verification of yesterday's conclusion that the whole transparency path is
+  unreachable from a C-41 render.
+
+**Not applicable:** `169405c` a finished render's thumbnail filed under
+whichever frame was selected when the pixels arrived rather than the frame the
+render was started for (their filmstrip cache; ours keys thumbnails off the
+URL, and the render memo they cite as already correct is the pattern we use
+throughout), `85cee44` macOS drawing a Fusion-style mnemonic underline for a
+key macOS never binds, `4998c24` an overflow toolbar measuring items by
+`sizeHint()` — which `setFixedWidth` doesn't change and a bare `QFrame` reports
+as -1 — so 1 px dividers took 3 px slots and the bar reserved room for a **»**
+button before knowing it needed one, conjuring the chevron it reserved for
+(both Qt-shell only; note their CI runs Linux and the failure was macOS-only,
+which is the mirror image of our own Metal/Vulkan split).
+
+**dump_fixtures.py:** compatible. It imports `effective_paper_profile`, whose
+signature is unchanged, and `PaperProfile` gained only a defaulted `lith_path`
+field — no `_TONAL_KEYS` entry and no numeric change to the default profile the
+C-41 fixtures resolve to. Nothing else it imports was touched. The `fixtures:`
+line does not move.
+
+**Still open (carried over, unchanged):** colour ring-around (±4cc/2cc spec),
+`91a1b78` tunable Auto Density/Grade targets (user-initiated only), the on-scan
+Color Mixer band re-tune pass (ours).
+
+### 2026-08-10 — through `5a6cc97` (0.49.0 → unreleased, 5 commits)
+
+**The biggest exposure-pipeline commit in months, and essentially none of it
+reaches us: it is the E-6 slide path, which CLAUDE.md scopes out by name.**
+`658e16e` is the only commit the path filter returns, and it is large — a new
+`features/exposure/transfer.py` (280 lines) with its own `transfer.wgsl`, a new
+`features/process/capture_color.py`, and edits to the two files we do mirror
+(`normalization.py`, `normalization.wgsl`). **Both goldens are untouched**
+(empty diff), `EXPOSURE_CONSTANTS` is untouched, no renames, VERSION still
+0.49.0 (the range is unreleased post-0.49.0 work).
+
+**Ported:** nothing (nothing applicable).
+
+**Our parity surface is provably untouched, which was the thing worth
+checking.** The new path is gated by one predicate, `is_transparency_transfer`
+= `process_mode == E6 and not e6_normalize` (never true for C-41, and
+explicitly false for the FLAT intent), and it is the single source of truth on
+CPU, GPU and UI by design. Line by line, for the two mirrored files:
+- `normalization.wgsl` gains a camera-matrix multiply in LINEAR before the log,
+  behind `is_transfer = is_e6 && normalize_flag == 0`. The C-41 log path is
+  character-identical. The NormUniforms block grows three `vec4` rows (112 →
+  160 bytes) — irrelevant to us, our uniform layout is our own.
+- `normalization.py`'s only C-41-visible change is `resolve_crosstalk_matrix` →
+  `effective_crosstalk_matrix`, a mode gate on a feature we don't ship.
+- `_sample_log_bounds`'s `e6_normalize` argument sits behind
+  `if process_mode != ProcessMode.E6 or e6_normalize`, so the **default flip
+  (`e6_normalize` True → False) cannot move a C-41 bound.**
+- `PhotometricProcessor` gained an optional `process_config` that defaults to
+  `ProcessConfig()`; the print branch below it is unchanged.
+
+**Our decode contract is REAFFIRMED, not changed — worth recording explicitly,
+because the headline reads like we're missing something.** `capture_color.py`
+builds a working-space-from-camera 3×3 from libraw's `rgb_xyz_matrix` (dcraw's
+`cam_xyz_coeff`: invert XYZ→cam against XYZ→working, row-normalize so WB keeps
+the grey point) and applies it in linear before the log. That is exactly the
+camera matrix we deliberately DON'T apply (`output_color=RAW`), and upstream's
+own docstring gives our reason back to us: "The print path never needed the
+distinction — it derives colour from measured film density and a paper model —
+but a transparency transfer does." Their PIPELINE.md diff confirms every rawpy
+parameter we pin is unchanged (`adjust_maximum_thr=0` and `no_auto_bright` are
+now cited in the *transfer* rationale, as the reason an as-captured slide
+arrives dark). Grepping the whole 5-commit diff for every parameter in our
+decode contract returns nothing but prose.
+
+**Deliberately skipped:**
+1. **The E-6 as-captured transfer path** (`658e16e`) — B&W/E6 is a recorded
+   scope boundary ("Scope: … no B&W/E6"), and this is the whole feature: a
+   fixed 3.0-decade log window anchored to the decoder's white level instead of
+   a metered one (so a bracket stays a bracket), the camera matrix above, and a
+   plain transfer curve where Density/Grade/Toe/Shoulder are exactly identity at
+   their defaults because the paper H&D curve is not neutralizable (their
+   argument: `d_max` floors the blacks whatever the toe says, and the midtone
+   snap and paper-white reference stay live at neutral settings — a positive
+   needs its own curve). Nothing here is reachable from a C-41 render.
+2. **`crosstalk_process`** — crosstalk is a recorded skip. Their point stands
+   on its own terms (a matrix describes one dye set; every bundled profile is a
+   colour negative, so a slide was silently getting a negative's correction),
+   and it strengthens the 2026-08-05 reframing that a matrix belongs to a whole
+   scanning setup rather than to a film stock.
+3. **Hiding Cast Removal outside C-41** — we are C-41 only, so the slider is
+   always live and always meaningful here.
+
+**Checked, no counterpart (shared-bug-class audits):**
+- **`658e16e`'s "Crosstalk was silently skipped on the GPU"** — their shader
+  applied the unmix on the print branch only, so the strength slider did
+  nothing on the engine the app actually renders with. The fix is a discipline
+  note we should keep, because we now carry THREE kernel mirrors: they moved
+  the unmix out from behind the branch and made the CPU **pack identity rows**
+  when it doesn't apply, with the comment "branching here is exactly how this
+  silently stopped working on the GPU once before." **We already work this
+  way** and it is worth naming as a rule rather than a habit: our kernels have
+  no mode branches at all — offsets fold into `finalBounds`, temp/tint/exposure
+  fold into `cmyOffsets`, and every SwiftInvert-only control is identity at its
+  default value rather than skipped by a flag. That is why the NegPy fixtures
+  still pass through controls upstream has never heard of. Keep new work on the
+  fold-to-identity side of that line; a `if (mode == …)` in one of three
+  kernels is the exact bug they just paid for twice.
+- **`5a6cc97` DNG BlackLevel/WhiteLevel/LinearizationTable ignored** — their
+  hand-rolled 3-channel LinearRaw SubIFD read normalized by the container's
+  bit-depth max instead of the file's own calibration tags, so a DNG whose real
+  white point sits well below container max exported **~20× too dark**. This is
+  the follow-up to `1956dd0`, the subject of the previous review. **We cannot
+  have it**: we have no hand-rolled tag path to get wrong — `RawDecoder` goes
+  through `libraw_unpack`/`dcraw_process`, which apply those tags themselves,
+  and grepping `RawDecodeKit`/`negcli` for `BlackLevel`/`WhiteLevel`/
+  `Linearization`/`SubIFD`/`tifffile`/`jxl` returns nothing. It is a cost of
+  the bypass we declined to build, which is a second, unprompted argument for
+  that decline (the reopening condition from 2026-08-09 is unchanged).
+- **The Zone Density taper** (changelog, transfer path): shadow/highlight
+  density offsets on a curve with no paper are "tapered to nothing at the
+  bottom of the window so a shadow lift cannot walk the black point away — a
+  print gets that bound from paper black; this curve has no paper." **Our tone
+  controls are on the print path and already have that bound**: the toe
+  softplus toward `d_max_eff` is the paper black they're substituting for. No
+  change indicated; recorded so the mechanism isn't mistaken for a gap.
+
+**Not applicable:** `8a7c256` retouch consolidation onto one fill (deletes
+`retouch.wgsl` and the whole GPU retouch pass, moving every repair to a
+CPU bake into the linear source ahead of the meters — retouch, which we don't
+ship; note in passing that this also deleted their `test_gpu_stage_skip.py`),
+`4391ad7` Transport Line scratch tracing from one click (retouch; their
+measurement is nice — a 10% scratch reads 1.3σ per pixel but 15.8σ once
+integrated along a fitted line, which is why no per-pixel gate can find one —
+and they deliberately do NOT offer auto-detection because the strongest
+full-length ridge on their sample frame was a horizon), `be5f5a4` in-app
+updater + update dialog (`kernel/system/updater.py`, installer.nsi — their
+Windows/Qt distribution; we ship `make app`), `5a6cc97`'s Linear Output half
+(a recorded N/A since `6410002`).
+
+**dump_fixtures.py:** compatible, verified symbol by symbol rather than
+assumed, since this range touched two files it imports from. Every imported
+name still exists (`resolve_crosstalk_matrix` was added-alongside, not
+replaced, and the script doesn't import it anyway); `PipelineContext`'s two new
+fields (`cam_xyz`, `camera_wb`) both default to `None`;
+`PhotometricProcessor.__init__`'s new `process_config` is optional; and the
+script constructs `PipelineContext(..., process_mode=ProcessMode.C41)`
+explicitly, so `is_transparency_transfer` is False on every dumped case and the
+`e6_normalize` default flip is unreachable. The `fixtures:` line does not move.
+
+**Still open (carried over, unchanged):** colour ring-around (±4cc/2cc spec),
+`91a1b78` tunable Auto Density/Grade targets (user-initiated only), the on-scan
+Color Mixer band re-tune pass (ours). The two 2026-08-09 items (gesture-time
+proxy tier, session-LRU bump) stay DECLINED, not open.
 
 ### 2026-08-09 (second) — through `1956dd0` (1 commit)
 
