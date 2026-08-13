@@ -9,8 +9,8 @@ and appending a history entry.
 ## Last reviewed
 
 ```
-commit:   cb876d4  ("Cyanotype printing (#802)")
-reviewed: 2026-08-11
+commit:   2c46460  ("Badge composite frames on the film strip (#817)")
+reviewed: 2026-08-12
 fixtures: Tests/Fixtures/ dumped from 0369b10 except lab_color (partially
           re-dumped from a09cc46, 2026-07-31, with the pure gamut boost —
           the b8c596c dump had carried the interim in-boost skin damping).
@@ -39,6 +39,214 @@ updates this file. The manual procedure, for reference:
 6. Update the **Last reviewed** marker and append to the history below.
 
 ## Review history
+
+### 2026-08-12 — through `2c46460` (0.49.0 unreleased, 12 commits)
+
+**Nothing to port — but the review's own bug-class audit found a REAL,
+reachable bug of ours, and it is exactly the shape of the one upstream spent
+this range fixing.** Goldens unmoved (empty diff), `EXPOSURE_CONSTANTS`
+untouched, no renames, VERSION still 0.49.0. The whole diff over the three
+pipeline dirs is **41 lines in two files** — `exposure/processor.py` (one
+line) and `process/logic.py` (38) — both from `a1f1a9c`, and both on the E-6
+transfer path. `normalization.py`, `logic.py`, `models.py`, `analysis.py`,
+`stats.py`, `densitometer.py` and every `exposure/shaders/*.wgsl` have an
+**empty diff**.
+
+**Ported:** nothing (nothing applicable).
+
+**Deliberately skipped:**
+
+1. **`a1f1a9c` `effective_linear_raw`** — the E-6 as-captured decode was
+   obeying the Linear RAW toggle their Process panel documents as inert
+   there, so a hidden sticky flag decided whether `use_camera_wb` applied. On
+   a bracket that is expensive: `use_camera_wb` reads each *file's* as-shot
+   multipliers, and a camera on auto white balance records different ones per
+   frame (their 8-frame slide bracket: darkest frame B/G 1.41 against
+   ~1.8–2.1), so `pair_ratio` cannot tell an exposure difference from a
+   white-balance one and the shortest link solved to 0.75 EV instead of 1.00
+   — printing as contour rings around a blown sun. **Unreachable from C-41
+   twice over.** `effective_linear_raw` is `process.linear_raw or
+   is_transparency_transfer(...)`, and the second term is false for C-41 by
+   construction, so on our process mode the helper is *identically* the
+   stored flag — no C-41 number moves. And we ship no Linear RAW toggle at
+   all: `RawDecoder` **always** decodes unity WB (`use_camera_wb=0`,
+   `user_mul=(1,1,1,1)`), which IS their linear_raw leg, and applies no
+   camera matrix (`output_color=RAW`). Their invariant — "the decode and the
+   matrix must make the same choice" — is satisfied here by having neither.
+   Grepping the whole 12-commit diff for every parameter in our decode
+   contract returns only prose and their transfer-path lines.
+2. **`85afd44` HDR merge of bracketed captures** — a 424-line
+   `features/hdr/`: exposure ratios solved from the images rather than
+   shutter tags (`pair_ratio`), frames registered, samples combined by
+   inverse variance (weight ∝ r², which is what makes the merge no worse than
+   the best single frame), merged straight to float32, and a seeded Shadows
+   Density lift because merging unclipped frames buys **precision, not
+   range**. Skipped on upstream's own argument, which lands on our scope
+   boundary by name: they now **hide the merge action on C-41** because "a
+   colour negative holds about 5-6 stops between base and Dmax … both inside
+   a single capture; a transparency runs to 10-12." We are C-41 only. It is
+   also assembly rather than a stage — "no shader and no GPU parity surface"
+   — so there is nothing in it for our kernels either.
+3. **`5a885db` multi-core CPU rendering as a setting** — their Numba CPU
+   kernels compiled serial and parallel and dispatched per call. No
+   counterpart: our render path is Metal/Vulkan, and `ReferenceCurve` is a
+   correctness reference (and the negcli no-GPU fallback), not a path anyone
+   waits on. **Their macOS finding is worth one line anyway**, since it is
+   the platform we ship: Numba's workqueue layer *terminates the process* on
+   concurrent entry with no exception and no log line, so they default macOS
+   off and record a clean-exit flag to notice afterwards. The transferable
+   part is the shape of the mitigation — an abort that leaves no trace is
+   un-diagnosable unless the *next* launch can see the last one didn't
+   finish.
+
+**Checked, and this is the substance of the review: their cache-key
+discipline, audited against ours — WE HAVE ONE OF THESE BUGS.**
+
+`a1f1a9c` also fixed `linear_raw_token`, which keyed the render source hash
+on the **stored** flag while the decode had begun using the **effective**
+value, so "the buffer decoded the other way" could be served under a matching
+key; and the range adds `services/rendering/source_identity.py`, whose
+docstring states the rule generally: *"Source assembly happens in more than
+one place … and each used to build its own cache key by hand. A key that
+forgot a field served the previous buffer for a setting the user had just
+changed."*
+
+We built our tower the same way, so it was worth checking rather than
+assuming. Three of the four keys are clean, and one is not:
+
+- **`MeterKey.meterAngle` is already the effective-value pattern done
+  right** — `settings.analysisRect != nil ? settings.analysisRectFineRotation
+  : 0` (ImageSession.swift:31), i.e. the key is computed by the same
+  expression the work uses, not read off a stored field.
+- **`OrientKey.fineRotation`** carries the raw `Double` while `oriented`
+  only rotates past 0.005, and **`PreparedKey`** carries the raw rects while
+  `prepare` ignores degenerate ones (<2 px). Both key *finer* than the
+  computation, which can only over-invalidate — the safe direction, and the
+  one upstream's rule permits.
+- **The bug: `prepare()`'s COW alias ignores the very angle `MeterKey` was
+  careful to derive** (ImageSession.swift:251-263). At |fineRotation| ≤ 0.005
+  the render input is aliased to the meter image — `preview = meterPreview`,
+  "COW: at 0° the render input IS the meter image, no copy" — but
+  `meterPreview` was built at `mKey.meterAngle`, which is **not** the
+  straighten angle when an analysis region exists. So the alias is only valid
+  if the meter angle is also ~0, and nothing checks that.
+
+  Reachable in three clicks, with a one-click path straight into it:
+  1. Straighten to a nonzero angle.
+  2. Crop for Analysis (⇧⌘K), draw a region → `commitSelection` sets
+     `analysisRectFineRotation = settings.fineRotation` (AppModel.swift:296).
+  3. Return straighten to 0 — the slider, an undo, or **the ⨯ /
+     Image ▸ Clear Crop & Straighten**, which zeroes `fineRotation` and
+     leaves `analysisRect`/`analysisRectFineRotation` untouched
+     (`clearCropAndStraighten`, AppModel.swift:233-245).
+
+  `mKey` is unchanged across step 3 (it holds the draw angle, not the
+  straighten angle), so `meterPreview` is not rebuilt; `oKey` changes, the
+  branch re-evaluates, `abs(0) > 0.005` is false, and the render input
+  becomes the image rotated by the *stale draw angle* and auto-cropped to its
+  inscribed rectangle. **The metering is correct** — that is the
+  fine-rotation invariant working as designed — it is the render alias that
+  is wrong.
+
+  Both halves of the render are then wrong, and the second is the one the
+  file already warned about: `displayAspect` and `contentWindow` read
+  `settings.fineRotation` and compute `radians = 0`, against the comment four
+  lines up — *"the conditions here must mirror it and `sourceTexture`
+  exactly, or the layout would describe a rectangle the render didn't
+  produce."* On a 1536×1024 proxy at 10° the inscribed rect is 1420×789, so
+  the canvas lays out a 1.80-aspect bitmap as 1.50 **and** shows a picture
+  visibly tilted at an angle the straighten slider reads as zero.
+
+  **FIXED 2026-08-13 (same session, user approved).** The COW is now taken
+  only when `meterPreview` was itself built unrotated: the decision moved out
+  to a pure `ImageSession.aliasesMeterPreview(fineRotation:meterAngle:)`,
+  which requires BOTH angles flat at the same 0.005 threshold
+  `RGBImage.oriented` uses to decide whether a fine rotation is applied at
+  all. Otherwise `prepare` falls through to an explicit
+  `basePreview!.oriented(…, fineRotation: settings.fineRotation)`. The fast
+  path survives in the overwhelmingly common cases (no analysis region, or
+  one drawn at 0°) — the copy is paid only in the state that was broken.
+
+  Pure-decision-plus-test rather than a test of the actor, following
+  `HQMode.resolve`'s precedent (ImageSession needs Metal and a real RAW, and
+  CLAUDE.md keeps it UI-verified). `MeterPreviewAliasTests` pins the fast path
+  in both flat cases, refusal at each angle independently, the threshold
+  against `oriented`'s, and — so the suite can't go vacuous — that a pinned
+  angle really does change the render input's **shape** (1536×1024 inscribes
+  to a different aspect at 10°), which is what made the alias a visible bug
+  rather than a redundant copy. The bug case (`alias(0, 10)`) returned `true`
+  under the old condition, so the test fails against the code it replaced.
+  292 tests green; the app renders headlessly through the real `prepare`.
+
+  No settings field, no kernel change, no parity surface, no fixture re-dump,
+  no tripwire counts, no SPIR-V rebuild.
+
+  **Left open deliberately (two design calls, not defects):** whether
+  `clearCropAndStraighten` should also clear the analysis region's pinned
+  angle — the same question one level up, and arguably what a user clicking
+  one ⨯ expects; and the Qt/bridge divergence below.
+
+- **A separate, pre-existing cross-platform divergence, found while
+  confirming the Linux side was clean.** The bridge `Session` never
+  implements the pinned angle at all: `meter()` (CoreBridge.swift:80-89) keys
+  on rotation and flip only, and `source()` always builds its own oriented
+  buffer from the tier base rather than aliasing the meter image — so Linux
+  was immune twice over and needed no fix. But sidecars round-trip between
+  the two platforms by design, so a sidecar carrying a nonzero
+  `analysisRectFineRotation` meters a **different patch of film** in Qt than
+  on the Mac, and the same file converts differently on the two frontends.
+  Narrow to reach (it needs a region drawn while straightened) and not
+  introduced by anything in this range. Decide it deliberately: teach the
+  bridge the pinned angle, or record it as a divergence in CLAUDE.md.
+
+**Checked, no counterpart (rest of the shared-bug-class sweep):**
+- **`65893db` "Never file a render under a frame it did not come from"** —
+  the follow-up to `169405c` (reviewed 2026-08-11 as N/A), and it turned out
+  the first fix closed only half the hole: on a `source_hash` miss it still
+  fell back to the current selection, which fires whenever the list has moved
+  on, and the write is persisted so the wrong picture survived restarts.
+  Found on disk, not reasoned about — an audit of 68 files by structural
+  correlation caught one frame scoring 0.10 against its own file while
+  matching another frame's thumbnail at 1.00. **We remain structurally immune
+  and it is worth recording why precisely**: our thumbnails are not renders
+  at all. `ThumbnailStore` is `[URL: CGImage]` of the *embedded camera JPEG*
+  (`RawDecoder.embeddedThumbnail`), keyed by the URL it was decoded from and
+  never written from a render's output, so there is no attribution step to
+  get wrong and nothing persisted to outlive the mistake.
+
+**Not applicable:** `d78d8f4`/`9167a90`/`c6f07d4` Pieusb scanner backend +
+its CI (capture), `5fa7032` a Nikon HE/HE\* NEF (intoPIX TicoRAW under a
+licensed codec) parsing cleanly and reporting full dimensions but failing at
+unpack with a bare "Unsupported file format", now named with advice — same
+family as the `1956dd0` JPEG-XL DNG gap recorded 2026-08-09, and our
+`RawDecodeError.libraw("unpack", code:)` has the same terse-but-graceful
+failure they improved on (a nicer message is a cheap future courtesy, not a
+port), `895e650` current-file export dropping triplet/stitch config,
+`2c46460` composite badges on the film strip, `d8b5b42` Hot Folder polling
+quieting the import popup, `a51ddab` "1 file" not "1 file(s)" across fifteen
+messages, plus the composite-inheritance fixes riding `85afd44` (a stitch
+inheriting its primary part's edit by path, film process by majority vote,
+Reset Settings no longer un-stitching) — their asset/DB layer; we have one
+file per frame and one sidecar beside it.
+
+**dump_fixtures.py:** compatible, checked import by import since one file it
+imports did move. `exposure/processor.py`'s only change is inside
+`NormalizationProcessor._process_transparency` (an import plus one call
+swapped to `effective_linear_raw`); `PhotometricProcessor` is untouched, both
+constructors are unchanged, and the script constructs
+`PipelineContext(..., process_mode=ProcessMode.C41)` so that method is never
+entered. Everything else it imports — `exposure/logic.py`,
+`exposure/normalization.py`, `exposure/models.py`, `exposure/papers.py`,
+`process/models.py`, `kernel/image/logic.py`, `domain/interfaces` — has zero
+lines in the range. `process/logic.py` changed, but the script does not
+import from it. The `fixtures:` line does not move.
+
+**Still open (carried over, unchanged):** colour ring-around (±4cc/2cc spec),
+`91a1b78` tunable Auto Density/Grade targets (user-initiated only), the
+on-scan Color Mixer band re-tune pass (ours). **New and ours, both design
+calls left open by the fix above:** whether `clearCropAndStraighten` should
+clear the analysis region's pinned angle, and whether the Qt bridge should
+learn that angle or record the divergence.
 
 ### 2026-08-11 — through `cb876d4` (0.49.0 unreleased, 6 commits)
 

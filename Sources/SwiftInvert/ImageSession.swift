@@ -31,6 +31,29 @@ actor ImageSession {
         settings.analysisRect != nil ? settings.analysisRectFineRotation : 0
     }
 
+    /// Whether the render input may simply ALIAS `meterPreview` instead of
+    /// being oriented out of `basePreview` again — the COW that makes the
+    /// common case cost no copy at all.
+    ///
+    /// It is not enough to ask whether the straighten angle is zero.
+    /// `meterPreview` is built at `meterAngle`, which is the angle an analysis
+    /// region was DRAWN at, not the angle the image is currently straightened
+    /// to — the two are pinned apart on purpose so the meters keep reading the
+    /// content the user pointed at. Aliasing on `fineRotation` alone therefore
+    /// hands the renderer the region's angle whenever the two disagree:
+    /// straighten, draw a region, then return the slider to 0 (or clear crop &
+    /// straighten, which zeroes the angle and keeps the region) and the canvas
+    /// would show a picture tilted and inscribed at an angle every control
+    /// reads as zero — laid out, via `displayAspect`/`contentWindow`, for the
+    /// untilted frame it isn't.
+    ///
+    /// So BOTH angles have to be flat. The threshold mirrors
+    /// `RGBImage.oriented`, which is what actually decides whether a fine
+    /// rotation gets applied.
+    static func aliasesMeterPreview(fineRotation: Double, meterAngle: Double) -> Bool {
+        abs(fineRotation) <= 0.005 && abs(meterAngle) <= 0.005
+    }
+
     /// Where the produced bitmap actually sits inside the IDEAL display
     /// rectangle, in units of that rectangle — nominally (0, 0, 1, 1), and off
     /// it by well under a pixel.
@@ -249,12 +272,15 @@ actor ImageSession {
             rotation: settings.rotation, flipHorizontal: settings.flipHorizontal,
             fineRotation: settings.fineRotation)
         if preview == nil || oKey != orientKey {
-            // COW: at 0° the render input IS the meter image, no copy.
-            preview = abs(settings.fineRotation) > 0.005
-                ? basePreview!.oriented(
+            // COW where both angles are flat (see aliasesMeterPreview) — the
+            // meter image is only the render input when it was itself built
+            // unrotated, which a pinned analysis region breaks.
+            preview = Self.aliasesMeterPreview(
+                fineRotation: settings.fineRotation, meterAngle: mKey.meterAngle)
+                ? meterPreview
+                : basePreview!.oriented(
                     rotationCW: settings.rotation, flipHorizontal: settings.flipHorizontal,
                     fineRotation: settings.fineRotation)
-                : meterPreview
             orientKey = oKey
             // Textures are in (fine-)oriented space; analysis is not.
             fullTexture = nil
