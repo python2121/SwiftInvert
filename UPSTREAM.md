@@ -9,8 +9,8 @@ and appending a history entry.
 ## Last reviewed
 
 ```
-commit:   2c46460  ("Badge composite frames on the film strip (#817)")
-reviewed: 2026-08-12
+commit:   05cb59a  ("update screenshot")
+reviewed: 2026-08-14
 fixtures: Tests/Fixtures/ dumped from 0369b10 except lab_color (partially
           re-dumped from a09cc46, 2026-07-31, with the pure gamut boost —
           the b8c596c dump had carried the interim in-boost skin damping).
@@ -39,6 +39,146 @@ updates this file. The manual procedure, for reference:
 6. Update the **Last reviewed** marker and append to the history below.
 
 ## Review history
+
+### 2026-08-14 — through `05cb59a` (0.49.0 → **0.50.0**, 9 commits)
+
+**A release range with a genuinely null pipeline: the entire diff over the
+three directories we track is a spelling sweep.** 0.50.0 was tagged here, and
+its changelog is long — but every pipeline item in it (HDR merge, the E-6
+as-captured transfer, alt processes, Transport Line, the DNG/JXL and NEF
+loaders, multi-core CPU rendering) is work from ranges **already reviewed**
+2026-08-09 through 2026-08-12; the release note is where it surfaces, not
+where it landed. Goldens unmoved (empty diff), no renames of tracked files.
+
+The path filter returns three commits, and the 75-line pipeline diff across
+ten files is **entirely `colour` → `color`** — docstrings, comments and three
+identifiers — plus one enum-value rename. Verified rather than eyeballed:
+extracting every `"key": <number>` pair from `models.py` at both ends and
+diffing gives **51 constants, identical**. `EXPOSURE_CONSTANTS` did not move a
+digit. `PIPELINE.md`'s 39/39 symmetric diff is the same sweep plus the new
+mode names ("the C-41 percentiles" → "the negative percentiles", "Process
+page" → "Normalization page").
+
+**Ported:** nothing (nothing portable exists in the range).
+
+**Not applicable — the whole range:**
+
+1. **`38e6070` process modes renamed** — `ProcessMode`'s *values* went from
+   chemistry codes to plain names (`"C41"` → `"Color Negative"`, `"B&W"` →
+   `"B&W Negative"`, `"E-6"` → `"Transparency"`). The **member names are
+   unchanged**, so every `ProcessMode.C41` in their tree and in our dump
+   script still resolves. Back-compat is a `_missing_` hook against a
+   `_LEGACY_MODES` table, called from `ProcessConfig.__post_init__` on every
+   build rather than from their migration table — their note says why, and it
+   is the same reasoning we use for the sidecar decoder: the old strings
+   arrive from sticky settings and asset dicts too, not just a loaded config,
+   so the coercion belongs at construction. Their fallback for an
+   unrecognised value is C-41 rather than a raise, on the grounds that every
+   branch reads `if BW / elif E6 / else` and so has always treated a stale
+   mode as colour negative. **We ship one process mode and no enum**; there
+   is nothing here to mirror.
+2. **`ee4776f` / `a6debae`** — 0.50.0 changelog, VERSION bump, and the
+   "spell it color" sweep that produced the whole pipeline diff. Three
+   identifiers moved with it (`mix_luma_colour_bounds` →
+   `mix_luma_color_bounds`, `ProcessConfig.use_colour_average` →
+   `use_color_average`, plus locals); **none is imported by
+   `dump_fixtures.py`**. Note for future ranges: our own tree is
+   consistently American already, so no convergence is implied.
+3. **`221b560` Setup tab rearranged** — the film mode promoted to three
+   colour-coded buttons above the panels; Linear RAW, Narrowband and the
+   scanning-setup bulb move to **Calibration** (continuing the 0.48.0
+   regrouping we recorded), and Process is renamed **Normalization**. Its
+   only line inside our directories is a docstring in `process/logic.py`
+   naming the panel it moved to.
+4. **`e922352`** test-only (`RgbScanConfig` threaded into a loader test),
+   **`e0327f3`** asset discovery hashing/thumbnailing across cores with the
+   strip filling in progressively (their import worker; ours is one folder
+   scan and a per-URL thumbnail cache), **`05cb59a`** a README screenshot.
+5. **`3f10d50` five UI gaps "where a convention was applied unevenly"** —
+   status toasts wrapping, the modified-count sync reaching Calibration and
+   Flat Field, delete-confirmation and blank-rename guards, and a combo wheel
+   guard on the Scan panel. Their Qt panel plumbing. **One of the five is
+   ours already and worth recording as convergence:** the wheel guard is the
+   same fix the Qt shell took at Phase A ("wheel events on sliders are
+   swallowed and forwarded to the controls scroll area"), which upstream has
+   now had to apply panel by panel — an argument for our having done it once
+   at the container.
+
+**Checked, and this is the substance of the review: `61cfd26`'s bug class —
+a shortcut that never asks whether its control is live.** Their slider
+inc/dec keys are window-wide `QShortcut`s that fired from any tab and
+consulted nothing, so **Temperature still moved on a B&W frame and White
+Point still moved under Lock Bounds** — a keypress silently editing a control
+the panel had retired. The fix tests `isEnabled()` and a new
+`hidden_by_gating()` that walks up to the enclosing `CollapsibleSection` and
+stops at its content area, so *collapsed*, *off-screen tab* and *closed dock*
+still count as reachable while *mode-hidden* does not — and the HUD names the
+control instead of reporting a value.
+
+Their commit message states the general fault precisely, and it is the part
+that transfers: *"the gating the mouse gets for free on a disabled or
+mode-hidden control has to be applied here by hand."* The gate lived in the
+**widget's enabled state**, which a click consults automatically and a
+shortcut does not, so a second affordance for the same control was born
+ungated.
+
+**We are structurally immune to that, and it is worth naming why rather than
+counting it lucky: our gates live in the model action, not the widget.**
+⇧T is the exact case — `toggleTestStrip()` (AppModel.swift:1001) carries
+`guard let session, selection != nil, toolMode == .none, !showingBaseline`
+*inside the method*, so the sidebar button (ControlsSidebar.swift:167) and
+the key monitor (SwiftInvertApp.swift:268) hit one refusal by construction
+and cannot drift apart. Menu items are the same story from the other side:
+SwiftUI disables an item's key equivalent along with the item, so the
+twenty-odd `.disabled(...)` entries in `SwiftInvertApp.swift` gate mouse and
+keyboard together. Our only affordance that bypasses menu enablement is the
+window key monitor, which exists for the two cases a menu item cannot hold
+(a second shortcut per item, and bare-letter equivalents that would fire in
+text fields) — and it re-checks `exportRequest == nil`, `hostWindow`,
+`firstResponder is NSTextView` and `selection != nil` by hand, which is
+exactly the by-hand application upstream just had to add.
+
+**One cosmetic unevenness found, reported honestly as cosmetic:** View ▸
+**Zone Overlay** (SwiftInvertApp.swift:76) carries no `.disabled(...)` at
+all, while its ⇧Z partner in the monitor guards `model.selection != nil`
+(line 264). The two affordances for one control therefore disagree — the
+same shape upstream fixed, inverted (our *shortcut* is the stricter one).
+**No user-visible consequence**: with no selection there is no canvas to
+draw a zone grid over, so both paths only set an `@AppStorage` flag that
+takes effect when a frame is opened. Left alone deliberately; recorded so a
+future reading of the monitor doesn't mistake the asymmetry for an oversight
+with teeth. The related case — ⇧Z toggling while a tool mode hides the
+overlay — is *not* an instance: the menu item is ungated there too, so mouse
+and key agree, which is upstream's actual invariant.
+
+**Where we are behind them, mildly:** their retired-control refusal now
+*says so* ("Temperature not available" in the HUD). Ours are silent — ⇧T or
+the Test Strip button during a tool mode or a baseline hold simply does
+nothing. Not a defect, and not worth a status-line mechanism we don't
+otherwise have, but their instinct is right that a refused shortcut should
+not be indistinguishable from a dead key.
+
+**dump_fixtures.py:** compatible, and checked symbol by symbol precisely
+because a rename range is the one that breaks a dump script quietly. Every
+name it imports from `normalization.py` survives untouched
+(`analyze_log_exposure_bounds_from_log`, `measure_anchor_from_log`,
+`measure_neutral_axis_from_log`, `measure_shadow_refs_from_log`,
+`measure_textural_range_from_log`, `prefilter_log_grid`,
+`resolve_analysis_region`) — the renamed `mix_luma_color_bounds` is **not**
+among them. It uses the *member* `ProcessMode.C41` (lines 140, 148), not the
+string, so the value rename cannot reach it; and the new
+`__post_init__` coercion is a no-op on the three bare `ProcessConfig()`
+constructions, whose `process_mode` default is already the member. The
+manifests it writes carry `paper_dmin`, `true_black` and `analysis_buffer`
+and no mode string, so a re-dump would be byte-identical anyway. The
+`fixtures:` line does not move.
+
+**Still open (carried over, unchanged):** colour ring-around (±4cc/2cc
+spec), `91a1b78` tunable Auto Density/Grade targets (user-initiated only),
+the on-scan Color Mixer band re-tune pass (ours), and the two design calls
+left open by the 2026-08-13 COW fix — whether `clearCropAndStraighten`
+should also clear the analysis region's pinned angle, and whether the Qt
+bridge should learn that angle or record the divergence in CLAUDE.md.
 
 ### 2026-08-12 — through `2c46460` (0.49.0 unreleased, 12 commits)
 
