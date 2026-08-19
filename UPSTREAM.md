@@ -9,8 +9,8 @@ and appending a history entry.
 ## Last reviewed
 
 ```
-commit:   45860a6  ("fix(test): bound the short toast by a toast that cannot wrap")
-reviewed: 2026-08-17
+commit:   542b843  ("feat(macos): give NegPy a menu bar, with Window and Help")
+reviewed: 2026-08-18
 fixtures: Tests/Fixtures/ dumped from 0369b10 except lab_color (partially
           re-dumped from a09cc46, 2026-07-31, with the pure gamut boost —
           the b8c596c dump had carried the interim in-boost skin damping).
@@ -39,6 +39,205 @@ updates this file. The manual procedure, for reference:
 6. Update the **Last reviewed** marker and append to the history below.
 
 ## Review history
+
+### 2026-08-18 — through `542b843` (0.51.1 → **0.52.0**, 15 commits)
+
+**One genuinely new inversion-pipeline feature — Contrast Mask, the
+darkroom's unsharp contrast-reduction mask — and it is the first spatial
+operator upstream has ever put ahead of the print curve.** Goldens unmoved
+(empty diff), `EXPOSURE_CONSTANTS` verified identical (51 entries extracted
+at both ends), no renames, no WGSL changes outside the feature's own
+additive hunk. The whole pipeline diff is **193 added lines, zero removed**
+(`logic.py`, `models.py`, `normalization.py`, `processor.py`,
+`exposure.wgsl`), all gated off at the defaults — which is why the goldens
+did not move.
+
+**To port (proposed, not yet implemented — the user's call, and worth
+trialing on real scans before committing):**
+
+1. **Contrast Mask** (`515c1f5`, refined by `d3a39fb`/`1739522`; new
+   `ExposureConfig` fields `contrast_mask` [-0.5, 0.5] default 0 and
+   `mask_spacer` [2, 6]% default 4). The mechanism, which is classical
+   darkroom practice (their citations: Ctein *Post Exposure*, Bond
+   *Unsharp Masking*, Adams *The Print*): sandwich the negative with a
+   blurred low-gamma positive — densities add, so
+   `D' = D − g·blur(D) + const`; the global range compresses to fit the
+   paper while the blur keeps fine detail out of the compression.
+   Their argument for why no existing control covers it is exactly right
+   and applies to us verbatim: **everything upstream of the print curve is
+   pointwise, so no curve control can raise local contrast and shorten the
+   range at once — Grade only trades one for the other.** Our chain is
+   pointwise too; our tone controls and overall contrast are tonal, not
+   spatial. Measured upstream on a synthetic wide-range negative at R60:
+   RMS-Laplacian micro-contrast per density third 2.55/0.24/0.03 unmasked
+   → 5.85/0.27/0.08 at g 0.6.
+   The design details that matter for a port, all sane:
+   - The plane is **luma of the normalized negative on the analysis grid**
+     (their `analysis_grid`, our Prefilter's 1024 base), Gaussian-blurred
+     at `spacer`% of the grid's short side — sigma is a fraction of the
+     GRID, never the render, so preview and export mask alike (our
+     analysis-on-the-proxy invariant, same reasoning).
+   - **Zero-mean**, so the slider never moves print density ("a real
+     sandwich is denser and the printer opens up for it").
+   - Built **on the crop only**, edge-replicated outside — a bright rebate
+     blurred into the mask prints as a vignette the negative doesn't have
+     (they measured over a stop of edge-to-centre swing).
+   - Consumed as **print-exposure stops added to the dodge/burn EV map**
+     (equal stops = equal density change per channel, what a neutral
+     panchromatic masking film records — global, no per-layer trim), i.e.
+     per-channel `val += stops × ev_scale[ch]` pre-curve.
+   - `mask_spacer` is a frequency cut-off, not a strength: at the narrow
+     limit `blur(val) → val` and the operator collapses into a plain
+     (1−g) reduction, "which is Grade" — hence the 2% floor; the helper
+     clamps both ends so out-of-range saved values can't render wider than
+     the slider shows. Renamed Blur → Spacer because a thin spacer masks
+     MORE (`1739522`).
+   **Why this is a real architectural step for us, stated honestly:** it
+   would be our kernels' first per-pixel auxiliary input. We ship no EV
+   map at all (`NegPipeline.metal`'s header records "no dodge/burn EV map"
+   as a boundary — but that boundary was about user-drawn masks; this is a
+   global control that merely RIDES their EV plumbing because they have
+   it). A port means: a mask texture bound into all THREE kernels
+   (MSL + GLSL + a CPU-mirror plane in `ReferenceCurve`), the bilinear
+   grid→render mapping (their WGSL `contrast_mask_stops` mirrors OpenCV's
+   half-pixel-centre convention — ours would mirror our own `areaTaps`
+   conventions), the plane build + cache keyed beside `Prepared`, two
+   settings fields (tripwires 52 → 54), spacer UI, and interaction checks
+   (zone placement's 1-px achromatic forward model cannot see a spatial
+   operator — the mask is zero-mean so the solve stays approximately
+   right, but the divergence needs a recorded decision). Identity at
+   default throughout, so fixtures still pass; **no fixture re-dump**
+   unless we also dump a mask-active parity case, which we should if we
+   port (upstream's CPU/GPU parity on it is exact, 0.0 max abs diff —
+   ours should pin the same).
+   Medium-large effort. Recommended **after an on-scan trial**: render a
+   few of the user's own dense/contrasty frames through NegPy 0.52.0 with
+   the mask at ±0.3–0.6 and judge — the recorded bar for features in this
+   codebase is visible improvement on real scans, not correctness.
+
+   **Dig-in (same session, 2026-08-18) — control semantics verified in
+   their source, recorded here so the port doesn't re-derive them:**
+   - **Manual slider, off by default, NOTHING automatic ever sets it.**
+     Checked specifically: none of Auto Density / Auto Grade / Cast
+     Removal reads or writes `contrast_mask`; the only non-UI writers are
+     the model default and migrations (`mask_blur` → `mask_spacer` is a
+     `KEY_RENAMES` entry). It has the same status as Grade: a per-frame
+     creative control.
+   - **Two sliders in the Tone sidebar** (`tone.py:141-158`): Contrast
+     Mask −0.5…+0.5 (default 0), Mask Spacer 2–6% (default 4), the spacer
+     **greyed out while the mask is 0** (`tone.py:518` — our Separation
+     Damping-at-printSaturation-1 pattern).
+   - **Keep their inverted display convention**: the mask slider renders
+     inverted "like ISO-R Grade, so dragging right hardens on both
+     controls" — right = negative gamma = range stretch. Not a divergence
+     to negotiate; it is upstream's own choice and matches our
+     right-=-brighter philosophy.
+   - **Free at default, by gating**: `contrast_mask != 0.0` gates plane
+     build, texture upload and dispatch on both engines
+     (`gpu_engine.py:630`, `engine.py:169`). Engaged, the gamma slider
+     costs one uniform write; only spacer/geometry/crop changes rebuild
+     the plane (cache keyed on both engines).
+   - **Auto Grade does NOT compensate for the mask** — deliberate: a
+     positive mask compresses the range after metering and the operator
+     hardens the grade by hand, which is the darkroom workflow the
+     tooltip teaches ("squeezes the range, so a harder grade then fits
+     the paper"). A port must not "fix" this by folding the mask into
+     Auto Contrast.
+   - Their tooltips are the best operator-facing spec of the semantics
+     (mask polarity/direction; spacer as a frequency cut-off that "reads
+     backwards from a blur radius", thin = bites harder + mask-line
+     shadow lift) — crib them for our help text.
+   - Port mapping sketch: ordinary `LabeledSlider` pair in the Print
+     section of `ControlsSidebar` with the spacer's enabled-gating; two
+     `ExposureSettings` fields (+decoder, +HistoryLabels, tripwires
+     52→54); plane build cached beside `Prepared` keyed on
+     (spacer, crop/geometry state); mask texture + bilinear grid→render
+     lookup in all three kernels behind the same `!= 0` gate; a
+     mask-active GPU-parity case; and the recorded zone-placement
+     decision (1-px forward model can't see a spatial operator;
+     zero-mean keeps the solve approximately right — document, don't
+     model).
+
+   **⚑ NEXT REVIEW: actively remind the user about this item** — they
+   asked (2026-08-18) to be prompted at the next `/negpy-review` to
+   decide: run the on-scan trial through NegPy 0.52.0, then port or
+   decline. Don't let it sit silently in the carried-over list.
+
+**Deliberately skipped:**
+
+1. **Tilt/Swing perspective correction** (`515c1f5`'s second half) — a
+   plane-to-plane projectivity (the tilted easel, Scheimpflug), running
+   last in their geometry chain after radial k1. We ship no perspective
+   or distortion correction at all — our geometry is orientation + fine
+   rotation + crop, and nothing in Crop & Straighten models a
+   projectivity. A candidate future geometry feature, not an inversion
+   change; their unit argument (per-cent of frame, not degrees — degrees
+   would bake in a reference enlarger) and their single-definition rule
+   (`keystone_matrix_normalized` is the one quad; CPU pixel matrix and
+   GPU inverse both derive from it, because "built twice they disagree by
+   half a pixel", a bug they hit) are the notes to keep if we ever build
+   it.
+2. **`c325e7e` / diptych, `9c48515` mask-tint hides while adjusting** —
+   half-frame and local-mask UX on features we don't ship.
+
+**Checked, no counterpart (shared-bug-class audits, verified in source):**
+
+- **`f38f296` "apply Contrast Mask, Tilt/Swing and mask geometry in tiled
+  export"** — three features that reached the preview but not the tiled
+  export path (keystone skipped in the CPU replay; the mask gated off in
+  tiling outright; dodge/burn rasterised without convergences), plus a
+  CLAHE CDF reused from the last preview render *of possibly another
+  image*. The bug class is "a second render path that must re-implement
+  the first." **Structurally unreachable here**: `exportRender`
+  (ImageSession.swift:595-605) is the SAME `prepare` → the SAME
+  `deriveRenderParams` → the SAME kernels — one params payload, no tiling,
+  no export-only feature code to forget. Their new
+  `test_gpu_tiled_parity.py` (tiled vs untiled, per-field sweep) is the
+  test shape our GPU-vs-CPU parity suites already are.
+- **`dbe2472` "report content_rect from the CPU engine"** — only the GPU
+  engine published the key, and the controller MERGES metrics into
+  `last_metrics`, so a CPU render inherited the previous GPU render's
+  rect (describing an area twice the buffer) and the colour picker
+  sampled the wrong pixel. Two ingredients, we have neither:
+  `scheduleRender` assigns `frameSize`/`displayAspect`/`contentWindow`
+  wholesale from each render's own `RenderOutput` (replace, never merge),
+  and we run ONE engine per platform — there is no cross-engine metric
+  handoff to go stale. The rule worth keeping is theirs: **every render
+  publishes every key it owns; absent is not "unchanged."**
+
+**Not applicable:** `2dc2070` 0.52.0 release prep, `9e7b2c7` nix-flake
+fonts, `8f4f2fe` mask-rect test coverage, `30da57d` IR TIFF sidecar
+description hygiene, `1852c43`/`a445d6b` customizable toolbar with
+drag-reorder, `542b843` a macOS menu bar for their Qt app (we are a native
+Mac app; ours has been there from the start), `aebde22` **Peek Negative**
+— a toggle painting the un-inverted, un-metered linear source with
+geometry applied, because "judging whether a scan is thin, dense,
+colour-cast or clipped meant exporting a Linear Output TIFF". Recorded as
+a **candidate** (not proposed): our View Original shows the stock-settings
+CONVERSION, and nothing in the app shows the negative itself; the darkroom
+read-outs (density range row, spot densitometer) cover part of the same
+judging need numerically.
+
+**dump_fixtures.py:** compatible — the range is purely additive over the
+files it imports. Every imported signature is untouched (the new
+`contrast_mask_plane`/`contrast_mask_ev`/`expand_mask_plane` are
+added-alongside, not imported by the script); `ExposureConfig` gained two
+defaulted fields, and the script's bare constructions pick up
+`contrast_mask=0`, which gates the whole feature off. The new
+`MASK_SPACER_*` constants live in `normalization.py`, NOT in
+`EXPOSURE_CONSTANTS` (still 51 entries, identical). The `fixtures:` line
+does not move.
+
+**Still open (carried over):** the distrobox verification pass owed on the
+2026-08-17 ICC tagging port (compile CoreBridge + qt, inspect one real
+export), colour ring-around (±4cc/2cc spec), `91a1b78` tunable Auto
+Density/Grade targets (user-initiated only), the on-scan Color Mixer band
+re-tune pass (ours), the two 2026-08-13 design calls (clearCropAndStraighten
+vs the pinned analysis angle; the Qt bridge and that angle), and upstream's
+draggable Before/After split (candidate). **New this range:** the Contrast
+Mask port proposal above (pending an on-scan trial — **flagged ⚑ for an
+active reminder at the next review, user request**), and Peek Negative as a
+candidate.
 
 ### 2026-08-17 — through `45860a6` (0.50.0 → **0.51.0 → 0.51.1**, 42 commits)
 
