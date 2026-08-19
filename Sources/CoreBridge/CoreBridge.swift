@@ -493,7 +493,7 @@ private struct ExportOptions: Decodable {
 /// conversion in-kernel.
 private func exportRender(
     path: String, settingsJSON: String, optionsJSON: String
-) throws -> RGBImage {
+) throws -> (image: RGBImage, srgb: Bool) {
     let url = URL(fileURLWithPath: path)
     var settings = ExposureSettings()
     if !settingsJSON.isEmpty, settingsJSON != "{}" {
@@ -528,7 +528,7 @@ private func exportRender(
     if let maxEdge = options.maxLongEdge, maxEdge >= 16 {
         encoded = encoded.downsampled(maxLongEdge: maxEdge)
     }
-    return encoded
+    return (encoded, srgb)
 }
 
 /// Full-resolution export render as RGBA8 in the requested colorspace, for
@@ -545,7 +545,7 @@ public func si_export_render(
         let img = try exportRender(
             path: String(cString: path),
             settingsJSON: settingsJSON.map { String(cString: $0) } ?? "",
-            optionsJSON: optionsJSON.map { String(cString: $0) } ?? "")
+            optionsJSON: optionsJSON.map { String(cString: $0) } ?? "").image
         let n = img.width * img.height
         outWidth?.pointee = Int32(img.width)
         outHeight?.pointee = Int32(img.height)
@@ -565,9 +565,10 @@ public func si_export_render(
     }
 }
 
-/// Same pipeline written by the core as an untagged 16-bit baseline TIFF
-/// (bytes in the requested colorspace — sRGB by default, which is what
-/// untagged viewers assume). Returns 1 on success.
+/// Same pipeline written by the core as a 16-bit baseline TIFF tagged with
+/// the requested colorspace's ICC profile (sRGB by default, Adobe RGB on
+/// `"colorspace":"adobe"` — matching the in-kernel encode, so wide-gamut
+/// bytes are never read as sRGB). Returns 1 on success.
 @_cdecl("si_export_tiff")
 public func si_export_tiff(
     _ path: UnsafePointer<CChar>?, _ dest: UnsafePointer<CChar>?,
@@ -575,11 +576,13 @@ public func si_export_tiff(
 ) -> Int32 {
     guard let path, let dest else { return 0 }
     do {
-        let img = try exportRender(
+        let (img, srgb) = try exportRender(
             path: String(cString: path),
             settingsJSON: settingsJSON.map { String(cString: $0) } ?? "",
             optionsJSON: optionsJSON.map { String(cString: $0) } ?? "")
-        try TIFF16.write(img, to: URL(fileURLWithPath: String(cString: dest)))
+        try TIFF16.write(
+            img, to: URL(fileURLWithPath: String(cString: dest)),
+            icc: srgb ? ICCProfiles.sRGB : ICCProfiles.adobeRGB1998)
         return 1
     } catch {
         Bridge.shared.setError("export tiff \(String(cString: path)): \(error)")

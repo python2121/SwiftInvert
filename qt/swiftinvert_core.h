@@ -65,8 +65,10 @@ char *si_default_settings(void);
  * style settings, analysis from the preview-sized proxy (so exports match
  * the interactive preview exactly). options JSON:
  *   {"colorspace":"srgb"|"adobe", "maxLongEdge":N}   (absent/0 = full size)
- * si_export_render returns RGBA8 for the frontend to encode (JPEG);
- * si_export_tiff writes an untagged 16-bit baseline TIFF itself.
+ * si_export_render returns RGBA8 for the frontend to encode (JPEG —
+ * set the matching QColorSpace so the profile is embedded);
+ * si_export_tiff writes a 16-bit baseline TIFF itself, ICC-tagged with
+ * the requested colorspace's profile.
  * Both take ~3–6 s per frame — call off the UI thread. */
 uint8_t *si_export_render(const char *path, const char *settings_json,
                           const char *options_json, int32_t *width, int32_t *height);

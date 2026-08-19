@@ -1339,8 +1339,9 @@ private:
         flushSidecar();  // the current frame's live edits become its sidecar
         exportAction_->setEnabled(false);
         const QByteArray optionsJson = QJsonDocument(options).toJson(QJsonDocument::Compact);
+        const bool adobe = options.value("colorspace").toString() == "adobe";
         auto *self = this;
-        (void)QtConcurrent::run([self, paths, tiff, optionsJson, quality, folder] {
+        (void)QtConcurrent::run([self, paths, tiff, optionsJson, quality, folder, adobe] {
             int done = 0, failed = 0;
             for (const QString &path : paths) {
                 QMetaObject::invokeMethod(self, [self, done, total = paths.size(), path] {
@@ -1365,7 +1366,14 @@ private:
                     uint8_t *rgba = si_export_render(path.toUtf8().constData(), settings.constData(),
                                                      optionsJson.constData(), &w, &h);
                     if (rgba) {
-                        const QImage img(rgba, w, h, w * 4, QImage::Format_RGBA8888);
+                        QImage img(rgba, w, h, w * 4, QImage::Format_RGBA8888);
+                        // Name the space the kernel encoded (the TIFF leg's
+                        // ICC tag, via Qt): the JPEG handler embeds the color
+                        // space's profile, so Adobe-encoded bytes aren't read
+                        // as sRGB. Metadata-only on this un-shared wrap — the
+                        // bridge buffer is not copied.
+                        img.setColorSpace(QColorSpace(
+                            adobe ? QColorSpace::AdobeRgb : QColorSpace::SRgb));
                         ok = img.save(dest, "JPEG", quality);
                         si_free(rgba);
                     }

@@ -62,10 +62,14 @@ func parseFlags(_ args: [String]) -> (positional: [String], options: [String: St
 }
 
 #if !canImport(ImageIO)
-/// Linux: untagged baseline TIFF (see TIFF16.swift); `romm` is advisory only
-/// until the lcms2 export path lands.
+/// Linux: baseline TIFF (see TIFF16.swift). `romm: true` embeds the Adobe
+/// RGB (1998) profile — the pipeline's encoded output space (name kept for
+/// call-site stability, matching the Mac leg). `false` stays untagged: the
+/// Mac leg tags linear sRGB for those debug dumps of linear sensor data,
+/// but there is no compact linear profile at hand and sensor-native bytes
+/// have no real colorimetry to declare anyway.
 func writeTIFF16(_ img: RGBImage, to url: URL, romm: Bool = false) throws {
-    try TIFF16.write(img, to: url)
+    try TIFF16.write(img, to: url, icc: romm ? ICCProfiles.adobeRGB1998 : nil)
 }
 #else
 /// Write an RGBImage as a 16-bit TIFF. `romm: true` tags Adobe RGB (1998) —

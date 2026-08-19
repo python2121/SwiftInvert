@@ -9,8 +9,8 @@ and appending a history entry.
 ## Last reviewed
 
 ```
-commit:   05cb59a  ("update screenshot")
-reviewed: 2026-08-14
+commit:   45860a6  ("fix(test): bound the short toast by a toast that cannot wrap")
+reviewed: 2026-08-17
 fixtures: Tests/Fixtures/ dumped from 0369b10 except lab_color (partially
           re-dumped from a09cc46, 2026-07-31, with the pure gamut boost —
           the b8c596c dump had carried the interim in-boost skin damping).
@@ -39,6 +39,335 @@ updates this file. The manual procedure, for reference:
 6. Update the **Last reviewed** marker and append to the history below.
 
 ## Review history
+
+### 2026-08-17 — through `45860a6` (0.50.0 → **0.51.0 → 0.51.1**, 42 commits)
+
+**The largest range since the port began, and the inversion pipeline is
+provably untouched — but the review's own audit found a REAL, reachable
+colour-management defect of ours on the Linux/Qt export path, and upstream
+fixed exactly it this range.** Two releases were tagged. The headline
+upstream work is Auto Crop / Batch Autocrop (a substantial rewrite),
+a Plustek scanner backend, the Before/After split and a pile of
+Qt-shell fixes — none of which is a conversion change.
+
+**Goldens did NOT move, and the one line that looks like a move isn't one.**
+`test_scene_linear_relocation.py` has a 1-line diff, and it is a field
+rename inside `_base_settings` — `manual_crop_rect=` → `crop_rect=`, from
+`da3ba68`'s merge of the auto and manual crop onto one field. **No expected
+value changed**; `test_characteristic_curve.py` has an empty diff.
+
+**`EXPOSURE_CONSTANTS` did not move a digit** — verified the same way as the
+0.50.0 range rather than eyeballed: extracting every `"key": <number>` pair
+from `models.py` at both ends gives **51 constants, identical**.
+
+**The pipeline diff is 314+/363− across 13 files, and 11 of the 13 are
+comment rewrites.** This range contains `e75fc38` "Humanize the docs, the
+in-app tour and the code comments", which reflows nearly every comment in
+the tree and inflates the diffstat to look like a semantic change — 222
+lines in `models.py` alone. Rather than read 700 lines of reflow, every
+changed pipeline file was **parsed and AST-compared with docstrings
+stripped**:
+
+```
+SAME    exposure/{analysis,logic,models,normalization,papers,processor,stats,transfer}.py
+SAME    process/{capture_color,models}.py, kernel/image/logic.py
+DIFFER  process/logic.py, process/sensor.py     <- 11f341a only
+```
+
+So `logic.py`'s print-curve kernel, `normalization.py`'s bounds/neutral-axis
+estimator, `analysis.py`'s zone ruler and strip ladders, and the whole
+decode path in `kernel/image/logic.py` are **executably identical** to the
+baseline. **Every `exposure/shaders/*.wgsl` has an empty diff — no `.wgsl`
+anywhere in the repo changed in 42 commits.** No renames of tracked files.
+
+**Ported:** ICC tagging on the Linux/Qt exports (from `dd6430f` — the
+defect the audit below found; details in the Ported section further down).
+
+**Deliberately skipped:**
+
+1. **`11f341a` narrowband + sensor unmix refused on a transparency** — the
+   only executable pipeline change in the range, and it is two predicates:
+   `narrowband_profile_active()` = `narrowband_scan and mode != E6`, and
+   `sensor_unmix_available()` re-expressed through a new
+   `unmix_block_reason()` returning `"transparency"` / `"linear_raw"` / `""`
+   so the sidebar can *name* why a control is greyed. Their argument is
+   sound and worth recording because it is a dye-set argument, not a UI one:
+   RGBScan.icc characterizes narrowband capture of **negative** dyes, so on a
+   slide the profile is "an approximate correction for dyes that are not
+   there, which is worse than none", and narrowband's real payoffs (defeating
+   the orange mask, clean separation ahead of a high-gain inversion) belong
+   to negatives. **Unreachable here twice over**: we ship neither narrowband
+   scanning setup nor sensor unmix (crosstalk is a recorded scope boundary),
+   and we ship one process mode, so the E-6 leg of both predicates is false
+   by construction.
+2. **`da3ba68` + `3976230` Auto Crop and Batch Autocrop** — the largest work
+   in the range (~1100 lines across `features/geometry/`) and entirely a
+   feature we don't have: **we ship no automatic border detection at all**,
+   only the manual unified Crop & Straighten. Two fragments recorded anyway
+   because they will matter *if* we ever add auto crop:
+   - **`da3ba68`'s actual bug is one we have a standing invariant against.**
+     Detection re-ran inside every render, so the crop depended on which
+     buffer that render held — "a 1600 px preview and a full-resolution
+     export are not the same pixels", and one night scan exported 2.7% of
+     its width further right than the preview showed, cutting a letter off a
+     sign. That is precisely our **what-you-see invariant**, which we state
+     the other way round and enforce structurally: `exportRender` shares
+     `prepare()` and analysis always runs on the **preview proxy**, never on
+     the export buffer (CLAUDE.md §2 and the HQ-tier rule "analysis ALWAYS
+     runs on the 1536px proxy, so switching tiers can never move the
+     conversion"). Upstream's fix converges on ours — detection moved to
+     exactly one place ahead of the engine split, and the resolved rect is
+     *frozen into the edit* rather than recomputed. Any auto crop we ever add
+     must resolve once on the proxy and store the rect, not re-detect.
+   - Their re-arm mechanism is a **detection key** (ratio, mode, rebate trim,
+     orientation) stored beside the resolved rect: when the key stops
+     matching, the next render re-detects. That is our cache-key discipline
+     applied to a *derived setting* rather than a buffer, and it is the right
+     shape — note that Crop Offset is deliberately **absent** from the key
+     because it is re-applied to whatever crop is set on every render, which
+     is the same "key exactly what the computation consumes" rule the
+     2026-08-12 review audited our tower against.
+3. **`435eb63` Render Exposure, `533f2a9` Normalize off a merged bracket,
+   `a2aaffb` bracket ratios on one white balance, `0707d51` stale per-frame
+   bounds on triplet assembly** — the HDR-merge and RGB-triplet stack,
+   skipped 2026-08-12 on upstream's own C-41 argument ("a colour negative
+   holds about 5-6 stops … both inside a single capture"). `a2aaffb` is the
+   completion of `a1f1a9c` (reviewed then): the merge pinned every frame to
+   the primary's white balance but the *ratio solve* did not, so a camera on
+   auto WB skewed the result — the same as-shot-multipliers hazard, and
+   unreachable here for the same reason (`RawDecoder` always decodes unity
+   WB, `use_camera_wb=0`). `0707d51` is a stale-bounds inheritance bug that
+   needs per-frame stored normalization bounds and a composite content hash;
+   we have neither (one file per frame, one sidecar beside it, bounds
+   measured per render from the analysis cache).
+4. **`92be228` Before/After as a draggable split** — upstream replaced their
+   momentary baseline flash with a live split view, "both live while you
+   work, instead of a flash of the baseline that dropped back on the next
+   edit". **Ours is the flash they moved away from**: `showingBaseline` is a
+   hold-to-compare that renders stock settings over the whole canvas. Not
+   skipped on scope — it is a legitimate UX idea and the render machinery is
+   there (a baseline render is already a full render with `baselineSettings()`)
+   — but it is a canvas-compositing feature with no pipeline content, and the
+   hold gesture is deliberate: our baseline is explicitly NOT suppressed under
+   HQ so "a compare must show both states at the same resolution", which a
+   persistent split would have to preserve across a tier swap. Recorded as a
+   candidate, not proposed.
+
+**Checked, and this is the substance of the review: their two 16-bit export
+colour-management fixes, audited against ours — WE HAVE THIS ONE, on Linux.**
+
+`dd6430f` states the fault in one sentence: *"When the ICC transform failed
+… the 16-bit paths returned the untouched buffer with no profile. The pixels
+were still in the working space, but the file said nothing, so every viewer
+read them as sRGB and the export was wrong with nothing on screen to explain
+it."* Their fix embeds the **source** profile on that fallback — the file is
+at least self-describing even when the conversion didn't happen. `60e3251`
+is the companion: a blanket `except` around the CMS codec swallowed an
+`ImportError` and *silently shipped unmanaged 16-bit TIFF/JXL exports* on
+macOS arm64 (root cause, after a long hunt, a PyInstaller dylib collision —
+rawpy's bundled `liblcms2.2.dylib` won the canonical slot and is missing
+`_cmsChannelsOfColorSpace`, which imagecodecs' `_cms.abi3.so` needs).
+
+Audited both halves against our two export paths:
+
+- **macOS is clean, and tagged by construction.** `Exporter.write` builds a
+  CGImage in the chosen space and hands it to `CGImageDestination`
+  (Exporter.swift:123-156), which embeds the ICC profile itself; the sRGB leg
+  draws the working-space image into an sRGB `CGContext` (one quantization).
+  There is no fallback leg to leave untagged, and `CGImageDestinationFinalize`
+  failing throws `ExportError.encodeFailed` rather than writing a bare file.
+- **The Linux/Qt path writes an UNTAGGED 16-bit TIFF, and this is a real
+  defect, not a fallback.** `si_export_tiff` (CoreBridge.swift:571-588) calls
+  `TIFF16.write`, whose own header says it: *"No ICC tag — the bytes are
+  whatever space the caller encoded (the pipeline's Adobe RGB (1998)), so
+  colour-managed viewers will assume sRGB."* CLAUDE.md records the same thing
+  as a pending item ("littleCMS-based display/export color management is
+  still to come"). But the Qt Export dialog **already ships the Adobe RGB
+  choice** (Phase C: `{"colorspace":"srgb"|"adobe"}`), and the option is
+  honoured *in-kernel* by `encode_f`. So a user picking **TIFF-16 + Adobe
+  RGB** in the Qt shell gets Adobe-encoded pixels in a file that declares
+  nothing, and every viewer reads them as sRGB — visibly over-saturated,
+  hue-shifted, with nothing on screen to explain it. This is upstream's bug
+  exactly, in permanent rather than fallback form. The sRGB leg is untagged
+  too but lands right by convention, which is what has hidden it.
+
+  **The insight worth taking from upstream is that tagging and converting are
+  separable, and we conflated them.** We deferred the whole thing behind
+  lcms2 because *converting* needs a CMS. **Embedding does not**: it is TIFF
+  tag 34675 pointing at a profile blob, ~15 lines in `TIFF16.swift` (one
+  extra IFD entry plus the payload appended after the pixel strip) once the
+  two profile blobs are available as a resource. That closes the "the file
+  says nothing" half — the half that makes the export *wrong* rather than
+  merely un-managed — without any of the lcms2 work.
+
+  **Proposed, not implemented** (see To port below). Related, same class,
+  same fix: the Qt JPEG leg goes through `si_export_render` → Qt's own
+  encoder, which embeds no profile either unless one is set on the QImage.
+
+**Checked, no counterpart (the rest of the shared-bug-class sweep). Four
+audits, four clean results, each verified in source rather than assumed:**
+
+- **`4027ed4` "Drop a render that lands after the user has left its frame"**
+  — switching files didn't cancel an in-flight render, so a late one
+  repainted the canvas (CPU path) or blacked it out on a destroyed texture
+  (GPU path) and merged its measurements into `last_metrics`, leaving the
+  histogram, densitometer and grid describing a frame the user had left.
+  Their measurement is worth quoting: cycling frames every 250 ms, **three to
+  four of every five renders landed for a frame already left.**
+  **We are immune, by two mechanisms that meet.** `selection`'s `didSet` →
+  `openSelection()` calls `renderTask?.cancel()` as its *first statement*
+  (AppModel.swift:610-611) and then explicitly clears `displayImage`,
+  `histogram` and `densityRange`; the render task re-checks
+  `if Task.isCancelled { break }` **after** the await and before any
+  assignment to `displayImage`/`histogram`/`frameSize` (line 886). An actor
+  call can't be interrupted mid-flight, so the late render does complete —
+  and is then dropped exactly where upstream now drops theirs. Our guard is
+  cancellation-based where theirs is identity-based (`source_hash` vs
+  selection); cancellation is sufficient here **because `selection` has a
+  single `didSet` and it cancels first**, which is the invariant to preserve
+  if a second path ever sets `selection`.
+  One benign difference from upstream: `renderPending` is not cleared by
+  `openSelection`, so a coalesced request made for the old frame can fire one
+  extra render after the switch — but it re-reads `self.settings` and
+  `self.session` at that point, so it renders the **new** frame correctly.
+  Wasted work, never wrong pixels.
+- **`14b8b86` "Let a crop handle be grabbed wherever its cursor says it can
+  be"** — their hover cursor hit-tests handles **by distance** while the press
+  required image coords, so a handle on the frame edge "looked live and would
+  not move", and with a print border inset **no handle of a full-frame crop
+  could be grabbed at all**. **We cannot have the promise/delivery mismatch:
+  there is no second hit-test to disagree.** `handleView` is one view carrying
+  the dot, the 30×30 `contentShape` and the `DragGesture` together
+  (CropBoxOverlay.swift:113-135) — no `.onHover`, no `NSCursor` region, so the
+  visual, the grab area and the gesture are the same rectangle by construction.
+  The *geometric* half was worth checking numerically rather than dismissing,
+  since `CropBoxOverlay` sits inside a `.clipped()` (DetailView.swift:380):
+  an edge handle overhangs the fitted window by 15 pt, and `fittedRect` insets
+  the fit by **12 pt** on every side (DetailView.swift:201-209), so at most
+  3 pt of a 30 pt grab box is ever clipped and the 11 pt dot is always fully
+  inside. A 27/30 pt grab region on an edge handle is not a defect; recorded
+  with the numbers so a future reading doesn't re-derive it.
+- **`0567fba` thumbnail segfault + OOM** — libraw hardcodes `colors=3` for a
+  BITMAP thumbnail and reports the real payload length only in `data_size`,
+  which rawpy neither uses to shape the array nor exposes, so a grayscale
+  thumb (41,500 bytes) arrived as `(166, 250, 3)` and reading it ran **83,000
+  bytes past the end** — crashing only when the tail met an unmapped page,
+  which four concurrent workers made likely. **We are immune on both counts,
+  and by the exact discipline they had to add**: `RawDecoder.embeddedThumbnail`
+  reads `Data(bytes: … , count: Int(t.data_size))` — the field they say rawpy
+  ignores — and *rejects* a non-JPEG thumb outright
+  (`throw RawDecodeError.unsupportedOutput("thumbnail type=\(t.type)")`,
+  RawDecoder.swift:160-165) rather than shaping an array over it. Their OOM
+  half (a full-size decode feeding a 256 px square, ~1 GB of float temporaries
+  per worker × one worker per core → 13.9 GB RSS on 419 frames) has no
+  counterpart either: our `ThumbnailStore` serves the embedded camera JPEG and
+  never decodes or inverts.
+  **One honest gap, in our favour on safety and against us on coverage:** a
+  scanner DNG whose only embedded thumb is a BITMAP gets *no* thumbnail here
+  (graceful — the error is caught), where upstream now falls back to the
+  file's own reduced-resolution TIFF preview page. Not worth building until
+  someone loads a folder of Coolscan DNGs.
+- **`e200c62` "let a batch export finish"** — one composite frame in the
+  visible set raised `int("hdr")` during task construction, and because the
+  loop **builds every `ExportTask` before it dispatches any**, one bad frame
+  stopped the whole run and the ordinary frames beside it were not written.
+  **We already have the shape they converged to, one level better**:
+  `performExport` (AppModel.swift:1403-1448) has no build-all phase at all —
+  it renders and writes inside the loop with a **per-URL `do`/`catch`** that
+  counts `failures`, continues, and reports honestly ("Exported N of M (K
+  failed)"). A frame that fails costs that frame only.
+
+**Ported — 2026-08-17 (same session, user approved): ICC tagging on the
+Linux 16-bit TIFF export + the Qt JPEG leg** (from `dd6430f`). What landed:
+
+- `TIFF16.write` gained `icc: [UInt8]?` — TIFF tag 34675 (type 7
+  UNDEFINED), one appended IFD entry (34675 > 284, so the ascending-tag
+  order holds for free) with the blob after the BitsPerSample values
+  (offset stays word-aligned: every prior segment is even-length).
+  `icc: nil` stays untagged for negcli's linear-sensor debug dumps, which
+  have no real colorimetry to declare (the Mac leg tags those linear sRGB;
+  divergence noted at the call site).
+- **The profile blobs are byte-for-byte NegPy's own** `icc/sRGB-v4.icc` /
+  `icc/AdobeCompat-v4.icc` (480 bytes each, CC0 per their embedded `cprt`
+  tags, sanity-parsed before embedding: v4 monitor-class RGB, correct
+  D50-adapted colorants, parametric TRCs) — **the same profiles the
+  ColorIO display-transform oracle was regenerated from**, so a
+  colour-managed viewer applying them reproduces the transform the parity
+  suite pins. Maximum convergence with the reference for free. Embedded as
+  Swift byte literals in `negcli/ICCProfiles.swift` (symlinked into
+  CoreBridge like TIFF16.swift — no SwiftPM resource-bundle plumbing into
+  a C-consumed `.so`), regenerated by the new `scripts/embed_icc.py`,
+  which refuses malformed blobs.
+- `si_export_tiff` tags by the decoded `colorspace` option (the bridge
+  `exportRender` now returns the srgb decision it already computed, so
+  the tag and the in-kernel encode cannot disagree); negcli's
+  `writeTIFF16(romm: true)` embeds the Adobe profile — `romm` is no
+  longer advisory on Linux.
+- Qt JPEG leg: `setColorSpace(QColorSpace(adobe ? AdobeRgb : SRgb))` on
+  the wrapped QImage before `save` — Qt's JPEG handler embeds the
+  profile; metadata-only on the un-shared wrap, so the zero-copy bridge
+  buffer handoff survives.
+
+**Verification, honestly scoped — no Linux box reachable this session**
+(the swiftdev distrobox lives on the Steam Machine; no SSH route found).
+The writer itself was verified END-TO-END anyway: the gated Linux-only
+`TIFF16.swift` + `ICCProfiles.swift` were compiled un-gated on macOS
+against a stub and RUN — the emitted files pass a strict independent
+Python parser (ascending tags, word-aligned out-of-line values, intact
+pixel strip, blob byte-identical to the source profile, no trailing
+garbage) and **macOS ImageIO itself reads the profiles back** (`sips`:
+"A98C" / "sRGB"; untagged control reads nil). Mac `swift build` green,
+`make test` 292/292. **Still owed a pass in the distrobox:** the
+CoreBridge tuple-return refactor and the qt/main.cpp edit compiling, plus
+one real `si_export_tiff`/JPEG export inspected on-box. No parity
+surface, no fixture re-dump, no settings field, no kernel change, no
+SPIR-V rebuild.
+**Explicitly NOT the lcms2 work** — this is the separable tagging half,
+and doing it does not pre-empt the conversion half converging with
+NegPy's stack later.
+
+**Not applicable (the remaining ~30 commits, all Qt-shell, capture, packaging
+or asset-layer):** `9c3f449` Plustek OpticFilm 8200i USB backend + Scan tab on
+Windows and `c4ca66a` shutter labels carrying their unit (camera/scanner
+capture), `e2af4d4` renaming the SANE dependency group, `19de4b7`/`684cba8`/
+`608361a`/`9a8a1f0`/`bc31dfc` build and packaging (the lcms2 dylib-collision
+check, Windows path handling, a nix flake, a developer user-directory
+override), `1a3910f` a truncated thumbnail-cache entry passing the header
+check then breaking on the UI thread on every launch (their on-disk thumb
+cache; ours is an in-memory `[URL: CGImage]` that cannot outlive the process),
+`479da15` slides appearing inverted in the film strip because batch thumbs
+re-detected the film process from an 8-bit preview and warm content tripped
+the orange-mask test (we ship one process mode and never auto-detect),
+`f3a71a7`/`f49cb2d`/`c0ba5cd`/`480af38` half-frame diptych state, `0fedd27`
+Linear Output destination rules (a recorded N/A since `6410002`), `659057a`
+Unload in the canvas menu, `e7e2410` Reverse Scroll Zoom moved to the overflow
+menu, `8e42cf5` a manual update check, `66643e9` reporting an unusable user
+directory instead of aborting, `2cdbe9d` file pickers starting in a related
+folder, `0340a9c`/`3b27561`/`055dfd2`/`4568958`/`055bfc6` release prep, docs
+and test-portability chores, `eaa1948`/`45860a6` making two toast/overflow-bar
+tests environment-stable.
+
+**dump_fixtures.py:** compatible, and this range let it be settled
+mechanically rather than symbol by symbol. The script imports from exactly
+eight modules — `exposure/{logic,models,normalization,papers,processor}.py`,
+`process/models.py`, `kernel/image/logic.py`, `domain/interfaces.py`, plus
+`features/lab/logic.py` for the lab_color case — and **all nine files are
+AST-identical across the range** (docstrings stripped), including the two
+outside the pipeline dirs that the humanize sweep also touched. The two files
+that did change executably, `process/logic.py` and `process/sensor.py`, are
+**not imported by it**. The `crop_rect` rename is in `GeometryConfig`, which
+the script never constructs. A re-dump would be byte-identical; the
+`fixtures:` line does not move.
+
+**Still open (carried over, unchanged):** colour ring-around (±4cc/2cc spec),
+`91a1b78` tunable Auto Density/Grade targets (user-initiated only), the
+on-scan Color Mixer band re-tune pass (ours), and the two design calls left
+open by the 2026-08-13 COW fix — whether `clearCropAndStraighten` should also
+clear the analysis region's pinned angle, and whether the Qt bridge should
+learn that angle or record the divergence in CLAUDE.md. **New:** the
+distrobox verification pass owed on the ICC tagging port (compile
+CoreBridge + qt, inspect one real export), and (recorded as a candidate,
+not proposed) upstream's draggable Before/After split.
 
 ### 2026-08-14 — through `05cb59a` (0.49.0 → **0.50.0**, 9 commits)
 
