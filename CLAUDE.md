@@ -921,6 +921,15 @@ values where needed):
     own body — precomputed Bools leave stale cells (selection halo bug).
   - `.position()` expands a view's frame to its container: attach
     `contentShape`/gestures BEFORE positioning (histogram handle bug).
+  - A LEGACY scroller (mouse users / "Show scroll bars: Always") steals
+    17pt from a ScrollView's viewport only WHILE SHOWING, and macOS shows
+    it only while the content overflows — so sizing scroll content to the
+    viewport made every control's right edge breathe in and out as the
+    scrollbar toggled. Size the content against the scroller STYLE
+    (`NSScroller.preferredScrollerStyle`), never its visibility, and pin
+    it leading (a ScrollView centers narrower-than-viewport content):
+    ControlsSidebar's `scrollerGutter` + the two-frame pin in
+    scrollingControls. Overlay scrollers float and steal nothing.
   - `NSEvent.modifierFlags` polling in tap handlers is unreliable — use
     `TapGesture().modifiers(.command)` etc.
   - The app runs unbundled via `swift run`: activation policy is set

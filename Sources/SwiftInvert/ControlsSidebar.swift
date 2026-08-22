@@ -5,6 +5,22 @@ struct ControlsSidebar: View {
     @Bindable var model: AppModel
     @Environment(\.openWindow) private var openWindow
 
+    static let paneWidth: CGFloat = 290
+
+    /// Width a LEGACY scroller steals from the scroll viewport (17pt;
+    /// overlay scrollers float and steal nothing). The scroll content is
+    /// sized against the scroller STYLE, never its visibility: macOS
+    /// auto-hides a legacy scroller whenever the content happens to fit,
+    /// so sizing against the viewport re-flowed every control's width each
+    /// time it toggled — the breathing right edge. Style is stable per
+    /// input device; the notification below catches mouse⇄trackpad flips.
+    static func currentScrollerGutter() -> CGFloat {
+        NSScroller.preferredScrollerStyle == .legacy
+            ? NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy)
+            : 0
+    }
+    @State private var scrollerGutter = ControlsSidebar.currentScrollerGutter()
+
     @AppStorage("adjustmentsCollapsed") private var adjustmentsCollapsed = false
     @AppStorage("cropRotationCollapsed") private var cropRotationCollapsed = false
     @AppStorage("historyCollapsed") private var historyCollapsed = false
@@ -91,9 +107,22 @@ struct ControlsSidebar: View {
             // spacing) so a collapsed History header sits as far off the
             // bottom edge as collapsed C&R sits off its divider.
             .padding(.bottom, 4)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            // topLeading, not top: .top centers HORIZONTALLY, so any child
+            // whose minimum width exceeds the pane made the whole column
+            // overflow symmetrically (SwiftUI doesn't clip) and slide
+            // sideways — measured 296pt inside the 290pt pane on the first
+            // layout pass. Leading pins the left edge; .clipped() below
+            // keeps any residual overflow inside the pane.
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        .frame(width: 290)
+        .frame(width: Self.paneWidth)
+        .clipped()
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: NSScroller.preferredScrollerStyleDidChangeNotification)
+        ) { _ in
+            scrollerGutter = Self.currentScrollerGutter()
+        }
         .environment(\.controlEditingChanged) { model.setControlEditing($0) }
         .animation(.easeOut(duration: 0.12), value: adjustmentsCollapsed)
     }
@@ -311,6 +340,17 @@ struct ControlsSidebar: View {
                 }
             }
             .padding(12)
+            // HARD width, not the ScrollView's proposal: the proposal is the
+            // viewport, which shrinks by the scroller gutter exactly while
+            // the legacy scrollbar is SHOWING — and macOS shows it only
+            // while the content overflows, so every control's right edge
+            // breathed in and out as it toggled. Sized against the style's
+            // gutter instead, the scrollbar can come and go freely over a
+            // constant layout. The outer leading pin keeps the column at
+            // the left edge whichever width the viewport currently is (a
+            // ScrollView centers narrower-than-viewport content).
+            .frame(width: Self.paneWidth - scrollerGutter, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
