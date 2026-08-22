@@ -164,6 +164,22 @@ struct ControlsSidebar: View {
                         // it names the negative's own contrast and the grade
                         // that usually suits it.
                         NegativeCharacterRow(densityRange: model.densityRange)
+                        // Contrast Mask (NegPy 515c1f5): a grade-workflow
+                        // control, so it lives with Grade. Raw gamma, no
+                        // display inversion: right = + = range squeeze =
+                        // globally softer, the same direction our Grade
+                        // slider reads (right = higher R = softer). Upstream
+                        // inverts theirs for the same coherence — their grade
+                        // runs the other way.
+                        LabeledSlider(
+                            label: "Contrast Mask", value: $model.settings.contrastMask,
+                            range: -0.5...0.5, format: "%+.2f", defaultValue: 0,
+                            help: "Sandwich the negative with a blurred film mask, as in the darkroom. Right (+) squeezes the range so a harder grade then fits the paper — detail stays out of the compression; left (−) stretches instead, adding snap to the broad tones while grain and texture stay put.")
+                        LabeledSlider(
+                            label: "Mask Spacer", value: $model.settings.maskSpacer,
+                            range: 2...6, format: "%.1f%%", defaultValue: 4,
+                            help: "What holds the mask off the negative, as a percent of the frame: the scale above which tones are masked. Thick works the broad masses only; thin reaches into detail and bites harder (and lifts shadows beside something bright — the mask line). Inert with no mask.")
+                            .disabled(model.settings.contrastMask == 0)
                         Button {
                             model.toggleTestStrip()
                         } label: {

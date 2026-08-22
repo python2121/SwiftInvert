@@ -64,6 +64,16 @@ against the same fixtures, so the fallbacks are pinned).
   `encode_u8`) in one file selected by `-DKERNEL_*`; the checked-in `.spv`
   binaries are the build inputs (`scripts/compile_vulkan_shaders.sh`
   regenerates — rerun + commit them with ANY `.comp` edit).
+  **PENDING (2026-08-21): Contrast Mask on the Linux GPU** — the `.comp`
+  source already carries the mask fields/sample/gate (append-only, so the
+  stale `.spv` still reads its old 272-byte block correctly and simply
+  renders unmasked), but the `.spv` rebuild, the host plumbing (mask SSBO
+  at binding 3, `maskDims.zw` = render dims filled before upload, a
+  `maskPlane:` param on render/renderDisplay), the bridge `Session` plane
+  cache, the Qt sliders and a `VulkanParityTests` mask case are all owed
+  to the next distrobox session (batched with the ICC-tagging
+  verification pass). negcli's CPU fallback masks correctly on Linux
+  already.
 - SSBOs of interleaved RGB floats (RGBImage's own layout — upload/readback
   are memcpys), 1-D dispatch, std140 uniform blocks that are byte-identical
   to the shared `ShaderTypes.swift` (a SYMLINK into MetalRenderKit — one
@@ -450,8 +460,9 @@ zone, 0.20 roll-off) — gates Auto cast removal. Returns nil mid or shadow
 
 `ImageSession` caches: decode (per image) → oriented preview (per
 orientation) → `Prepared` + `ExposureAnalysis` (per rects) → GPU source
-textures (per crop). The "Analyzing…" indicator shows only when `prepare`
-will run.
+textures (per crop) → Contrast Mask plane + texture (per orient/rects/
+spacer, only while the mask is on). The "Analyzing…" indicator shows only
+when `prepare` will run.
 
 `AppModel.sessionLRU` retains the **2** most recent sessions (active + the one
 navigated from), so arrowing back to a frame doesn't rebuild the whole tower.
@@ -495,7 +506,19 @@ GPU uniform payload. Order matters:
    ×0.2 into density units); tone controls passthrough (shadowContrast's
    negative side remapped so slider −3 lands on the monotone floor −0.8,
    also hard-clamped in the kernels); `preSaturation`, `vibrance`,
-   `saturation` passthrough.
+   `saturation` passthrough; **`maskValScale`** (Contrast Mask, NegPy
+   515c1f5 port: −gamma·lumRange/range_ch — their contrast_mask_scale
+   folded with the exposureStops EV domain; .zero at gamma 0 gates the
+   whole feature). The mask PLANE is not a param: it's per-image data
+   (`ContrastMask.buildPlane` — normalized-val luma on the analysis grid,
+   Gaussian σ = maskSpacer% × grid short side matching cv2's kernel,
+   zero-mean, built from the PRINTED frame only), cached in the sessions
+   keyed on (orient, rects, spacer, analysis identity) and uploaded as an
+   r32float texture. Gamma drags are uniform-only; spacer/crop/bounds
+   changes re-blur (~20 ms). All three kernels hand-roll the same
+   half-pixel bilinear sample, so a proxy/HQ/export render samples one
+   plane identically; zone placement freezes the pin's plane sample and
+   the 1-px model adds it as a constant (exact, `Pin.maskVal`).
 
 ### 4. GPU render (`MetalRenderKit`, rgba32float, 8×8 threadgroups)
 
@@ -508,7 +531,8 @@ One command buffer, passes in order (`RenderPipeline.render` /
 2. **`printCurve`** — the asymmetric H&D print curve, per pixel:
    a. *Pre-saturation*: `c → mean + k(c − mean)` (density-deviation gain;
       default slider 1.15, kernel identity at 1.0).
-   b. Per channel: `val += cmyOffsets` → quadratic core
+   b. Per channel: `val += cmyOffsets` (+ the Contrast Mask's bilinear
+      plane sample × `maskValScale`, uniform-gated — see below) → quadratic core
       `v = slope(val − pivot) + curv·val²` → midtone paper-S
       `v += 0.15·0.6·tanh((v − v*)/0.6)` → **tone controls** (masks
       `wS = σ(3.5(v−1.40))`, `wH = σ(3.5(0.30−v))` on the incoming v,
@@ -659,7 +683,7 @@ verifies every stage boundary:
 
 Beyond parity, the suite covers the seams the fixtures reach only
 transitively, plus the app layer:
-- `SidecarCodecTests` + `HistoryLabelTests` are **drift-catchers**: each pins `ExposureSettings`' stored-property count (52) and exercises every field —
+- `SidecarCodecTests` + `HistoryLabelTests` are **drift-catchers**: each pins `ExposureSettings`' stored-property count (54) and exercises every field —
   adding a settings field fails both until the decoder, `HistoryLabels`, and
   the tests' mutation lists all get their line (see the control checklist).
 - `ImagePipelineSeamTests`: the prepare/finalize cache split (a reused
@@ -690,7 +714,11 @@ on top of the earlier syncs: 2125a34 pre-trim neutral axis, b3490eb-coupled
 auto constants, the 0.38 set with `paper_dmin` off + `true_black` on, the
 0.36 set). Fixtures were re-dumped from `0369b10` (the manifest records
 `paper_dmin` and `true_black` per config; the parity harnesses read both,
-so default flips on either side can't silently skew parity). NegPy's per-layer R/G/B trims,
+so default flips on either side can't silently skew parity). The
+**Contrast Mask** (ported 2026-08-21 from `515c1f5`, 0.52.0) has its own
+ADDITIVE fixture set dumped from `4ec75a7` (0.53.0) via
+`dump_fixtures.py contrast_mask` — the pre-existing fixtures stay at their
+recorded dump. NegPy's per-layer R/G/B trims,
 Split Grade and Zone Density (their convergent take on our tone controls)
 are NOT ported — our tone controls + 3-band grading cover the achromatic
 cases; per-channel crossover trims are a candidate future feature.
@@ -708,6 +736,16 @@ values where needed):
   matches the tuned-on-real-content philosophy) — but an on-scan re-tune
   pass is still worth doing,
 - default analysis buffer **0.10** vs NegPy 0.05 (tests pass 0.05 explicitly),
+- **Contrast Mask plane normalizes against the BASE bounds (pre-WP/BP
+  offset)** where upstream uses the offset-applied final bounds: ours keeps
+  white/black-point drags analysis-free (the plane is a blurred zero-mean
+  field of a source property — the 2125a34 pre-trim-neutral-axis argument).
+  Identical at zero offsets, which is every parity-fixture config; the
+  `contrast_mask` fixtures (additive dump, `dump_fixtures.py contrast_mask`)
+  pin plane/expansion/masked-chain at zero offsets. Also: the mask slider is
+  NOT display-inverted (right = + = squeeze = globally softer, matching our
+  Grade's right = softer; upstream inverts theirs because their grade runs
+  the other way),
 - NegPy's default lab sharpen (0.25 since 8bc9678; was 0.5 earlier in 0.38) is not implemented,
 - **vibrance is SwiftInvert-maintained since NegPy de79e13** (upstream
   deleted Lab Vibrance in favour of a density-space signed Dye Separation —
@@ -894,7 +932,7 @@ values where needed):
    decoder** (sidecar back-compat), **plus `historyLabel`**
    (HistoryLabels.swift) — and `RenderParams` + its init if the kernel
    needs it. Two tripwires enforce this: `SidecarCodecTests` and
-   `HistoryLabelTests` both pin the stored-property count (52) and mutate
+   `HistoryLabelTests` both pin the stored-property count (54) and mutate
    every field, so `make test` fails until all the lists have their line.
 2. `deriveRenderParams`: map settings → params (fold into existing params
    where the algebra allows — see overall contrast/exposure — before adding

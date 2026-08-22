@@ -33,7 +33,9 @@ enum Fixtures2 {
     @Test func uniformStrides() {
         // Must match the MSL structs in NegPipeline.metal.
         #expect(MemoryLayout<NormUniforms>.stride == 48)
-        #expect(MemoryLayout<CurveUniforms>.stride == 272)
+        #expect(MemoryLayout<CurveUniforms>.stride == 304)
+        #expect(MemoryLayout<CurveUniforms>.offset(of: \.maskScale) == 272)
+        #expect(MemoryLayout<CurveUniforms>.offset(of: \.maskDims) == 288)
         #expect(MemoryLayout<CurveUniforms>.offset(of: \.bandHues) == 224)
         #expect(MemoryLayout<CurveUniforms>.offset(of: \.bandSaturations) == 240)
         #expect(MemoryLayout<CurveUniforms>.offset(of: \.midCMY) == 80)
@@ -159,6 +161,64 @@ enum Fixtures2 {
 
         let (mean, maxV) = Self.diffStats(gpu.pixels, cpu.pixels)
         #expect(mean < 0.01 && maxV < 0.04, "tone controls GPU/CPU: mean \(mean), max \(maxV)")
+    }
+
+    /// Contrast Mask active: the GPU's hand-rolled bilinear plane sample +
+    /// uniform scale must match the CPU reference (which the contrast_mask
+    /// fixture pins against NegPy). Tight gate like hue trim's — the mask is
+    /// a small pre-curve add, and the standard 0.04 max could hide a
+    /// half-pixel mapping error.
+    @Test func contrastMaskParityWithCPU() throws {
+        let pipeline = try #require(GPU.pipeline, "Metal unavailable")
+        let pixels = try Fixtures2.floats("contrast_mask/input.bin")
+        let input = RGBImage(pixels: pixels, width: 64, height: 64)
+        let analysis = ExposureKernel.analyze(linearImage: input, analysisBuffer: 0.05)
+
+        var settings = ExposureSettings()
+        settings.preSaturation = 1.0
+        settings.skinProtection = 0
+        settings.contrastMask = 0.35
+        settings.maskSpacer = 4.0
+        let params = ExposureKernel.deriveRenderParams(settings, analysis)
+        let plane = try #require(
+            ContrastMask.buildPlane(
+                renderSource: input, bounds: analysis.baseBounds, spacerPercent: settings.maskSpacer))
+
+        let cpu = ReferenceCurve.encodeOutput(
+            ReferenceCurve.applyPrintCurve(
+                ReferenceCurve.normalize(input, bounds: params.finalBounds), params: params,
+                maskPlane: plane))
+        let gpu = try pipeline.render(
+            image: input, params: params, computeHistogram: false, maskPlane: plane
+        ).encoded
+        let (mean, maxV) = Self.diffStats(gpu.pixels, cpu.pixels)
+        #expect(mean < 1e-3 && maxV < 0.02, "contrast mask GPU/CPU: mean \(mean), max \(maxV)")
+
+        // And a RENDER-SIZE ≠ PLANE-SIZE case: upsample the source 3× so the
+        // GPU's bilinear mapping is exercised off the identity path.
+        let bw = input.width * 3, bh = input.height * 3
+        let big = RGBImage(width: bw, height: bh) { dst in
+            input.pixels.withUnsafeBufferPointer { src in
+                for y in 0..<bh {
+                    for x in 0..<bw {
+                        let s = ((y / 3) * input.width + (x / 3)) * 3
+                        let d = (y * bw + x) * 3
+                        dst[d] = src[s]
+                        dst[d + 1] = src[s + 1]
+                        dst[d + 2] = src[s + 2]
+                    }
+                }
+            }
+        }
+        let cpuBig = ReferenceCurve.encodeOutput(
+            ReferenceCurve.applyPrintCurve(
+                ReferenceCurve.normalize(big, bounds: params.finalBounds), params: params,
+                maskPlane: plane))
+        let gpuBig = try pipeline.render(
+            image: big, params: params, computeHistogram: false, maskPlane: plane
+        ).encoded
+        let (meanB, maxB) = Self.diffStats(gpuBig.pixels, cpuBig.pixels)
+        #expect(meanB < 1e-3 && maxB < 0.02, "contrast mask 3x GPU/CPU: mean \(meanB), max \(maxB)")
     }
 
     /// Hue Trim alone, at the tight gate. The bundled tone-controls case above

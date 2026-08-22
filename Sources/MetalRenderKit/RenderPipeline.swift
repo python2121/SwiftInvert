@@ -50,6 +50,8 @@ public final class RenderPipeline: @unchecked Sendable {
     /// the GPU quantizes for free and readback is 4× smaller with no CPU repack.
     private var display8: [SizeKey: MTLTexture] = [:]
     private var histBuffer: MTLBuffer?
+    /// See maskOrDummy — created once, bound whenever no mask plane is live.
+    private var dummyMaskTexture: MTLTexture?
     private let maxCachedPixels = 4_000_000
     /// Serializes render(): the cached intermediates and histogram buffer are
     /// shared mutable state (the app renders from one actor, but tests run
@@ -121,6 +123,44 @@ public final class RenderPipeline: @unchecked Sendable {
                 region: MTLRegionMake2D(0, 0, image.width, image.height), mipmapLevel: 0,
                 withBytes: buf.baseAddress!, bytesPerRow: image.width * 16)
         }
+        return tex
+    }
+
+    /// Upload a Contrast Mask plane as r32float (grid-sized, ~1.5 MB — the
+    /// slider costs a uniform write; only spacer/crop/bounds changes re-pay
+    /// this).
+    public func uploadMaskPlane(_ plane: ContrastMask.Plane) throws -> MTLTexture {
+        let desc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .r32Float, width: plane.width, height: plane.height, mipmapped: false)
+        desc.usage = [.shaderRead]
+        desc.storageMode = .shared
+        guard let tex = device.makeTexture(descriptor: desc) else {
+            throw RenderError.resource("mask plane \(plane.width)x\(plane.height)")
+        }
+        plane.values.withUnsafeBufferPointer { buf in
+            tex.replace(
+                region: MTLRegionMake2D(0, 0, plane.width, plane.height), mipmapLevel: 0,
+                withBytes: buf.baseAddress!, bytesPerRow: plane.width * 4)
+        }
+        return tex
+    }
+
+    /// 1×1 stand-in bound whenever no mask plane is supplied: Metal requires
+    /// the declared texture argument bound even though the uniform gate
+    /// (maskScale.w == 0) means it is never read.
+    private func maskOrDummy(_ maskPlane: MTLTexture?) throws -> MTLTexture {
+        if let maskPlane { return maskPlane }
+        if let dummyMaskTexture { return dummyMaskTexture }
+        let desc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .r32Float, width: 1, height: 1, mipmapped: false)
+        desc.usage = [.shaderRead]
+        desc.storageMode = .shared
+        guard let tex = device.makeTexture(descriptor: desc) else {
+            throw RenderError.resource("dummy mask texture")
+        }
+        var zero: Float = 0
+        tex.replace(region: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0, withBytes: &zero, bytesPerRow: 4)
+        dummyMaskTexture = tex
         return tex
     }
 
@@ -200,16 +240,19 @@ public final class RenderPipeline: @unchecked Sendable {
     /// intermediate textures must never escape to a caller (a subsequent render
     /// would overwrite them — concurrent test runs segfaulted on exactly that).
     public func render(
-        source: MTLTexture, params: RenderParams, computeHistogram: Bool = true, wantLinear: Bool = false
+        source: MTLTexture, params: RenderParams, computeHistogram: Bool = true, wantLinear: Bool = false,
+        maskPlane: MTLTexture? = nil
     ) throws -> Result {
         renderLock.lock()
         defer { renderLock.unlock() }
         let w = source.width, h = source.height
         let (normalized, linear, encodedOpt) = try intermediatesFor(width: w, height: h, needEncoded: true)
         let encoded = encodedOpt!
+        let maskTex = try maskOrDummy(maskPlane)
 
         var normU = UniformsBuilder.normUniforms(params)
-        var curveU = UniformsBuilder.curveUniforms(params)
+        var curveU = UniformsBuilder.curveUniforms(
+            params, maskDims: maskPlane.map { ($0.width, $0.height) })
         let levelsU = UniformsBuilder.levelsBuffer(params)
         if histBuffer == nil {
             histBuffer = device.makeBuffer(length: 1024 * 4, options: .storageModeShared)
@@ -227,6 +270,7 @@ public final class RenderPipeline: @unchecked Sendable {
 
         enc.setTexture(normalized, index: 0)
         enc.setTexture(linear, index: 1)
+        enc.setTexture(maskTex, index: 2)
         enc.setBytes(&curveU, length: MemoryLayout<CurveUniforms>.stride, index: 0)
         dispatch(enc, curvePSO, width: w, height: h)
 
@@ -272,10 +316,14 @@ public final class RenderPipeline: @unchecked Sendable {
 
     /// Convenience: full CPU-image → CPU-image render.
     public func render(
-        image: RGBImage, params: RenderParams, computeHistogram: Bool = true
+        image: RGBImage, params: RenderParams, computeHistogram: Bool = true,
+        maskPlane: ContrastMask.Plane? = nil
     ) throws -> (encoded: RGBImage, histogram: [UInt32]) {
         let source = try upload(image)
-        let result = try render(source: source, params: params, computeHistogram: computeHistogram)
+        let maskTex = try maskPlane.map { try uploadMaskPlane($0) }
+        let result = try render(
+            source: source, params: params, computeHistogram: computeHistogram,
+            maskPlane: maskTex)
         return (result.encoded, result.histogram)
     }
 
@@ -295,12 +343,14 @@ public final class RenderPipeline: @unchecked Sendable {
     /// writes straight into an rgba8unorm texture (float→8-bit quantization on
     /// the GPU) and reads back a quarter of the bytes.
     public func renderDisplay(
-        source: MTLTexture, params: RenderParams, computeHistogram: Bool = true
+        source: MTLTexture, params: RenderParams, computeHistogram: Bool = true,
+        maskPlane: MTLTexture? = nil
     ) throws -> DisplayResult {
         renderLock.lock()
         defer { renderLock.unlock() }
         let w = source.width, h = source.height
         let (normalized, linear, _) = try intermediatesFor(width: w, height: h, needEncoded: false)
+        let maskTex = try maskOrDummy(maskPlane)
 
         let key = SizeKey(w: w, h: h)
         let encoded8: MTLTexture
@@ -322,7 +372,8 @@ public final class RenderPipeline: @unchecked Sendable {
         }
 
         var normU = UniformsBuilder.normUniforms(params)
-        var curveU = UniformsBuilder.curveUniforms(params)
+        var curveU = UniformsBuilder.curveUniforms(
+            params, maskDims: maskPlane.map { ($0.width, $0.height) })
         let levelsU = UniformsBuilder.levelsBuffer(params)
         if histBuffer == nil {
             histBuffer = device.makeBuffer(length: 1024 * 4, options: .storageModeShared)
@@ -340,6 +391,7 @@ public final class RenderPipeline: @unchecked Sendable {
 
         enc.setTexture(normalized, index: 0)
         enc.setTexture(linear, index: 1)
+        enc.setTexture(maskTex, index: 2)
         enc.setBytes(&curveU, length: MemoryLayout<CurveUniforms>.stride, index: 0)
         dispatch(enc, curvePSO, width: w, height: h)
 

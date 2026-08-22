@@ -90,7 +90,32 @@ struct CurveUniforms {
     float skinProtection;
     float hueTrim;
     float _pad3;
+    // Contrast Mask: xyz = per-channel pre-curve scale for the plane
+    // sample, w = 1 when active (0 gates every mask read off).
+    float4 maskScale;
+    // Contrast Mask plane dims (x = width, y = height, zw pad) — uniforms,
+    // not texture queries, so all three kernel mirrors read one source.
+    float4 maskDims;
 };
+
+// Contrast Mask plane sample for output pixel `gid` of an out-size render:
+// OpenCV's half-pixel-centre bilinear with clamped taps (edge replication).
+// Mirrors ContrastMask.sample (Swift) and NegPipeline.comp — keep in step.
+static float contrast_mask_sample(
+    texture2d<float, access::read> plane, float2 dims, uint2 gid, float2 outSize
+) {
+    float2 pf = (float2(gid) + 0.5f) * dims / outSize - 0.5f;
+    float2 lo = clamp(floor(pf), float2(0.0f), dims - 1.0f);
+    float2 hi = min(lo + 1.0f, dims - 1.0f);
+    float2 f = clamp(pf - lo, float2(0.0f), float2(1.0f));
+    float v00 = plane.read(uint2(lo)).r;
+    float v10 = plane.read(uint2(hi.x, lo.y)).r;
+    float v01 = plane.read(uint2(lo.x, hi.y)).r;
+    float v11 = plane.read(uint2(hi)).r;
+    float top = v00 + (v10 - v00) * f.x;
+    float bot = v01 + (v11 - v01) * f.x;
+    return top + (bot - top) * f.y;
+}
 
 // Separation Damping reference spread — K.separationDampingRefSpread
 // (NegPy separation_damping_ref_spread); keep in sync.
@@ -278,10 +303,23 @@ kernel void printCurve(
     texture2d<float, access::read> input [[texture(0)]],
     texture2d<float, access::write> output [[texture(1)]],
     constant CurveUniforms &p [[buffer(0)]],
+    texture2d<float, access::read> maskPlane [[texture(2)]],
     uint2 gid [[thread_position_in_grid]]
 ) {
     if (gid.x >= input.get_width() || gid.y >= input.get_height()) { return; }
     float3 color = input.read(gid).rgb;
+
+    // Contrast Mask: bilinear plane sample × per-channel scale, applied
+    // alongside cmyOffsets below (a print-exposure input, like a dodge).
+    // Uniform-gated: at maskScale.w == 0 (the default) a 1×1 dummy is bound
+    // and nothing here runs.
+    float3 maskAdd = float3(0.0f);
+    if (p.maskScale.w != 0.0f) {
+        float s = contrast_mask_sample(
+            maskPlane, p.maskDims.xy, gid,
+            float2(float(input.get_width()), float(input.get_height())));
+        maskAdd = p.maskScale.xyz * s;
+    }
 
     // Pre-saturation: scale density deviations from the per-pixel neutral
     // (channel mean) before any print decision — mirrors ReferenceCurve.
@@ -308,7 +346,7 @@ kernel void printCurve(
 
     float3 dens;
     for (int ch = 0; ch < 3; ch++) {
-        float val = color[ch] + p.cmyOffsets[ch];
+        float val = color[ch] + p.cmyOffsets[ch] + maskAdd[ch];
         float v = p.slopes[ch] * (val - p.pivots[ch]) + p.curvatures[ch] * val * val;
 
         if (p.midtoneGamma != 0.0f) {

@@ -274,10 +274,42 @@ layout(std140, binding = 2) uniform CurveU {
     float skinProtection;
     float hueTrim;
     float _pad3;
+    // Contrast Mask (appended — earlier offsets unchanged, ShaderTypes.swift
+    // is the byte-layout source of truth): xyz = per-channel pre-curve scale
+    // for the plane sample, w = 1 when active (0 gates every mask read off).
+    vec4 maskScale;
+    // xy = plane dims; zw = RENDER dims, which the Vulkan host must fill in
+    // before upload (the Metal mirror reads its output texture's size — a
+    // flat SSBO has none to query).
+    vec4 maskDims;
 } p;
 #endif
 
 #ifdef KERNEL_CURVE
+// Contrast Mask plane: single-channel floats on the analysis grid. CURVE
+// only — declaring it in the shared section would put an unused binding in
+// colorPop's SPIR-V interface and break its descriptor layout.
+layout(std430, binding = 3) readonly buffer MaskPlane { float maskPlane[]; };
+
+// Bilinear plane sample at output pixel (x, y): OpenCV's half-pixel-centre
+// convention, taps clamped (edge replication). Mirrors ContrastMask.sample
+// (Swift) and contrast_mask_sample (MSL) — keep the three in lock step.
+float contrast_mask_sample(float x, float y) {
+    vec2 dims = p.maskDims.xy;
+    vec2 pf = (vec2(x, y) + 0.5) * dims / p.maskDims.zw - 0.5;
+    vec2 lo = clamp(floor(pf), vec2(0.0), dims - 1.0);
+    vec2 hi = min(lo + 1.0, dims - 1.0);
+    vec2 f = clamp(pf - lo, vec2(0.0), vec2(1.0));
+    int w = int(dims.x);
+    float v00 = maskPlane[int(lo.y) * w + int(lo.x)];
+    float v10 = maskPlane[int(lo.y) * w + int(hi.x)];
+    float v01 = maskPlane[int(hi.y) * w + int(lo.x)];
+    float v11 = maskPlane[int(hi.y) * w + int(hi.x)];
+    float top = v00 + (v10 - v00) * f.x;
+    float bot = v01 + (v11 - v01) * f.x;
+    return top + (bot - top) * f.y;
+}
+
 // Asymmetric H&D print curve → LINEAR reflectance (mirrors printCurve).
 void main() {
     uint gid = gl_GlobalInvocationID.x;
@@ -289,6 +321,15 @@ void main() {
     if (p.preSaturation != 1.0) {
         float m = (color.r + color.g + color.b) / 3.0;
         color = vec3(m) + p.preSaturation * (color - vec3(m));
+    }
+
+    // Contrast Mask: 1-D gid → (x, y) via the render width in maskDims.z.
+    vec3 maskAdd = vec3(0.0);
+    if (p.maskScale.w != 0.0) {
+        float outW = p.maskDims.z;
+        float py = floor((float(gid) + 0.5) / outW);
+        float px = float(gid) - py * outW;
+        maskAdd = p.maskScale.xyz * contrast_mask_sample(px, py);
     }
 
     const float eps = 1e-6;
@@ -308,7 +349,7 @@ void main() {
 
     vec3 dens;
     for (int ch = 0; ch < 3; ch++) {
-        float val = color[ch] + p.cmyOffsets[ch];
+        float val = color[ch] + p.cmyOffsets[ch] + maskAdd[ch];
         float v = p.slopes[ch] * (val - p.pivots[ch]) + p.curvatures[ch] * val * val;
 
         if (p.midtoneGamma != 0.0) {

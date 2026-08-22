@@ -1145,7 +1145,8 @@ final class AppModel {
             if target == nil {
                 guard
                     let z = try? await session.predictedZone(
-                        settings: snapshot, valLuma: sample.valLuma)
+                        settings: snapshot, valLuma: sample.valLuma,
+                        maskVal: sample.maskVal)
                 else { return }
                 target = (z * 3).rounded() / 3  // snap the metered read to thirds
             }
@@ -1154,7 +1155,8 @@ final class AppModel {
             else { return }
             let pin = ZonePlacement.Pin(
                 nx: u, ny: v, valRGB: sample.valRGB, valLuma: sample.valLuma,
-                targetZone: target!, retargeted: armed != nil)
+                targetZone: target!, retargeted: armed != nil,
+                maskVal: sample.maskVal)
             if state.pins.count < ZonePlacement.maxPins {
                 state.pins.append(pin)
             } else {
@@ -1191,9 +1193,11 @@ final class AppModel {
             pin.ny = v
             pin.valRGB = sample.valRGB
             pin.valLuma = sample.valLuma
+            pin.maskVal = sample.maskVal
             if !pin.retargeted {
                 let z = (try? await session.predictedZone(
-                    settings: snapshot, valLuma: sample.valLuma)) ?? pin.targetZone
+                    settings: snapshot, valLuma: sample.valLuma,
+                    maskVal: sample.maskVal)) ?? pin.targetZone
                 pin.targetZone = (z * 3).rounded() / 3
             }
             guard self.zonePlacementGeneration == generation,

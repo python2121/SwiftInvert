@@ -34,6 +34,10 @@ func settingsFrom(_ config: [String: Any]) -> ExposureSettings {
     s.shoulder = e["shoulder"] as! Double
     s.shoulderWidth = e["shoulder_width"] as! Double
     s.paperDmin = e["paper_dmin"] as! Bool
+    // Contrast Mask keys exist only in the contrast_mask fixture's config
+    // (NegPy >= 0.52); older manifests decode to the identity default.
+    s.contrastMask = e["contrast_mask"] as? Double ?? 0
+    s.maskSpacer = e["mask_spacer"] as? Double ?? 4.0
     return s
 }
 

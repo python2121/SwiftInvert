@@ -94,6 +94,18 @@ public struct ExposureSettings: Codable, Equatable, Sendable {
     /// it has no effect of its own). 0 = off.
     public var separationDamping: Double = 0
 
+    /// Contrast Mask (NegPy 515c1f5): unsharp-mask gamma, ±0.5. Positive
+    /// sandwiches a blurred positive and compresses the global range while
+    /// the blur keeps detail out of the compression (then a harder Grade
+    /// fits the paper); negative stretches instead. 0 = off (no plane
+    /// built, no kernel work). See ContrastMask.swift.
+    public var contrastMask: Double = 0
+    /// The mask's spacer: σ of the plane blur as % of the analysis grid's
+    /// short side, 2–6. A frequency cut-off, not a strength — thin reaches
+    /// into detail and bites harder; thick works the broad masses only.
+    /// Inert while contrastMask is 0.
+    public var maskSpacer: Double = 4.0
+
     /// Hue Trim (NegPy 7a07f5c): degrees of rotation of the print's colours
     /// about the neutral axis in the working CIELAB a*b* plane. 0 = off.
     ///
@@ -205,6 +217,8 @@ public struct ExposureSettings: Codable, Equatable, Sendable {
         blueSaturation = d(.blueSaturation, 1.0)
         printSaturation = d(.printSaturation, 1.0)
         separationDamping = d(.separationDamping, 0)
+        contrastMask = d(.contrastMask, 0)
+        maskSpacer = d(.maskSpacer, 4.0)
         hueTrim = d(.hueTrim, 0)
         preSaturation = d(.preSaturation, 1.15)
         temp = d(.temp, 0)
@@ -289,6 +303,11 @@ public struct RenderParams: Equatable, Sendable {
     /// Hue Trim in RADIANS (the kernels want radians; the slider is degrees).
     /// 0 = off.
     public var hueTrim: Double = 0
+    /// Contrast Mask per-channel pre-curve scale for the plane sample
+    /// (−gamma·lumRange/range_ch, ContrastMask.valScale). .zero = off; the
+    /// plane itself travels beside the params (it is per-image data, not a
+    /// uniform).
+    public var maskValScale: SIMD3<Double> = .zero
     /// Black point compensation (paper Dmax → display black).
     public var trueBlack: Bool = false
     // Per-band CMY density offsets (already scaled to density units).
@@ -311,6 +330,7 @@ public struct RenderParams: Equatable, Sendable {
         preSaturation: Double = 1.0, printSaturation: Double = 1.0,
         separationDamping: Double = 0,
         hueTrim: Double = 0,
+        maskValScale: SIMD3<Double> = .zero,
         trueBlack: Bool = false,
         shadowCMY: SIMD3<Double> = .zero, midCMY: SIMD3<Double> = .zero,
         highlightCMY: SIMD3<Double> = .zero,
@@ -341,6 +361,7 @@ public struct RenderParams: Equatable, Sendable {
         self.printSaturation = printSaturation
         self.separationDamping = separationDamping
         self.hueTrim = hueTrim
+        self.maskValScale = maskValScale
         self.trueBlack = trueBlack
         self.shadowCMY = shadowCMY
         self.midCMY = midCMY
@@ -536,6 +557,13 @@ public enum ExposureKernel {
             printSaturation: min(max(settings.printSaturation, 0.0), K.printSaturationMax),
             separationDamping: min(max(settings.separationDamping, 0.0), 1.0),
             hueTrim: min(max(settings.hueTrim, -30.0), 30.0) * .pi / 180.0,
+            // Contrast Mask: stops-per-plane-unit × the exposureStops EV
+            // domain, folded to one per-channel multiplier. lumRange is the
+            // pre-offset base range (the same NegPy quirk as grade's).
+            maskValScale: ContrastMask.valScale(
+                gamma: min(max(settings.contrastMask, -ContrastMask.gammaLimit), ContrastMask.gammaLimit),
+                lumRange: analysis.baseBounds.luminanceDensityRange,
+                finalBounds: finalBounds),
             trueBlack: settings.trueBlack,
             // Band sliders ±1 → ±cmy_max_density print-density offsets
             // (NegPy's shadow/highlight CMY scale, plus a mids band).

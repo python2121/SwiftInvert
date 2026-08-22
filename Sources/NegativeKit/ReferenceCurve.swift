@@ -37,7 +37,8 @@ public enum ReferenceCurve {
     /// color balance). Input normalized log; output linear reflectance in [0, 1].
     public static func applyPrintCurve(
         _ img: RGBImage,
-        params: RenderParams
+        params: RenderParams,
+        maskPlane: ContrastMask.Plane? = nil
     ) -> RGBImage {
         let eps = 1e-6
         let toe = params.toeEff * K.toeShoulderStrength
@@ -86,6 +87,12 @@ public enum ReferenceCurve {
         let hiContrast = params.highlightContrast * K.highlightContrastMax
 
         let preSat = params.preSaturation
+        // Contrast Mask: bilinear plane sample × per-channel scale, added
+        // alongside cmyOffsets (upstream's insertion point — the mask is a
+        // print-exposure input like a dodge). Mirrors NegPipeline.metal /
+        // NegPipeline.comp exactly.
+        let hasMask = maskPlane != nil && params.maskValScale != .zero
+        let width = img.width, height = img.height
         var out = img
         out.pixels.withUnsafeMutableBufferPointer { buf in
             var i = 0
@@ -98,9 +105,17 @@ public enum ReferenceCurve {
                         buf[i + ch] = Float(m + preSat * (Double(buf[i + ch]) - m))
                     }
                 }
+                var maskAdd = SIMD3<Double>.zero
+                if hasMask, let plane = maskPlane {
+                    let pix = i / 3
+                    let sample = Double(ContrastMask.sample(
+                        plane, x: pix % width, y: pix / width,
+                        outWidth: width, outHeight: height))
+                    maskAdd = params.maskValScale * sample
+                }
                 var dens = SIMD3<Double>()
                 for ch in 0..<3 {
-                    let val = Double(buf[i + ch]) + params.cmyOffsets[ch]
+                    let val = Double(buf[i + ch]) + params.cmyOffsets[ch] + maskAdd[ch]
                     var v = params.slopes[ch] * (val - params.pivots[ch]) + params.curvatures[ch] * val * val
                     if midtoneGamma != 0 {
                         v += midtoneGamma * gammaWidth * tanh((v - params.vStar) / gammaWidth)
@@ -247,11 +262,19 @@ public enum ReferenceCurve {
         return out
     }
 
-    /// Full CPU render: normalize → print curve → encode.
+    /// Full CPU render: normalize → print curve → encode. Builds the
+    /// Contrast Mask plane from the render input itself when the mask is on
+    /// (callers at proxy scale get the same plane the sessions cache; the
+    /// base-bounds normalization is the recorded divergence).
     public static func render(linearImage: RGBImage, settings: ExposureSettings, analysis: ExposureAnalysis) -> RGBImage {
         let params = ExposureKernel.deriveRenderParams(settings, analysis)
+        let maskPlane: ContrastMask.Plane? = params.maskValScale == .zero
+            ? nil
+            : ContrastMask.buildPlane(
+                renderSource: linearImage, bounds: analysis.baseBounds,
+                spacerPercent: settings.maskSpacer)
         let normalized = normalize(linearImage, bounds: params.finalBounds)
-        let positive = applyPrintCurve(normalized, params: params)
+        let positive = applyPrintCurve(normalized, params: params, maskPlane: maskPlane)
         return encodeOutput(positive, levels: params.levelsPoints)
     }
 }

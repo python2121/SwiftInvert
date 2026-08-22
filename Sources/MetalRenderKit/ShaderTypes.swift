@@ -61,6 +61,14 @@ public struct CurveUniforms {
     /// Hue Trim in radians (rides the ex-pad slot: stride unchanged at 272).
     public var hueTrim: Float = 0
     public var _pad3: Float = 0
+    /// Contrast Mask: xyz = per-channel pre-curve scale for the plane
+    /// sample (−gamma·lumRange/range_ch), w = 1 when the mask is active
+    /// (the kernels' uniform gate — 0 skips every mask read). Stride 304.
+    public var maskScale: SIMD4<Float> = .zero
+    /// Contrast Mask plane dimensions (x = width, y = height, zw pad).
+    /// Carried as uniforms so all three kernel mirrors read one source
+    /// (the GLSL SSBO has no dimensions to query).
+    public var maskDims: SIMD4<Float> = .zero
 }
 
 
@@ -81,8 +89,11 @@ public enum UniformsBuilder {
         )
     }
 
-    public static func curveUniforms(_ params: RenderParams) -> CurveUniforms {
-        CurveUniforms(
+    /// `maskDims` is the Contrast Mask plane's (width, height) when a plane
+    /// is bound; nil leaves the mask gated off even if the params carry a
+    /// scale (no plane, no reads — the two travel together).
+    public static func curveUniforms(_ params: RenderParams, maskDims: (width: Int, height: Int)? = nil) -> CurveUniforms {
+        var u = CurveUniforms(
             pivots: f4(params.pivots),
             slopes: f4(params.slopes),
             curvatures: f4(params.curvatures),
@@ -121,6 +132,11 @@ public enum UniformsBuilder {
             skinProtection: Float(params.skinProtection),
             hueTrim: Float(params.hueTrim)
         )
+        if let maskDims, params.maskValScale != .zero {
+            u.maskScale = f4(params.maskValScale, 1)
+            u.maskDims = SIMD4(Float(maskDims.width), Float(maskDims.height), 0, 0)
+        }
+        return u
     }
 
     /// Flat float layout consumed by `levels_remap` in NegPipeline.metal

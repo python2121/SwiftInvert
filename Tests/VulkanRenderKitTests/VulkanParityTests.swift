@@ -252,11 +252,13 @@ struct VulkanParityTests {
 struct VulkanLayoutTests {
     @Test func uniformStridesMatchStd140() {
         #expect(MemoryLayout<NormUniforms>.stride == 48)
-        #expect(MemoryLayout<CurveUniforms>.stride == 272)
+        #expect(MemoryLayout<CurveUniforms>.stride == 304)
         #expect(UniformsBuilder.levelsBufferFloats == 51)
         #expect(MemoryLayout<CurveUniforms>.offset(of: \.bandHues) == 224)
         #expect(MemoryLayout<CurveUniforms>.offset(of: \.separationDamping) == 256)
         #expect(MemoryLayout<CurveUniforms>.offset(of: \.hueTrim) == 264)
+        #expect(MemoryLayout<CurveUniforms>.offset(of: \.maskScale) == 272)
+        #expect(MemoryLayout<CurveUniforms>.offset(of: \.maskDims) == 288)
         #expect(MemoryLayout<CurveUniforms>.offset(of: \.toe) == 128)
     }
 }

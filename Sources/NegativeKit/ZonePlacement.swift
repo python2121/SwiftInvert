@@ -36,10 +36,16 @@ public enum ZonePlacement {
         /// Set once a zone is asked for: a dragged pin keeps it instead of
         /// re-reading (upstream `retargeted`).
         public var retargeted: Bool
+        /// Contrast Mask plane sample at the pin's position (0 with no mask).
+        /// The plane is spatial, which a 1-px forward model cannot see; the
+        /// sample is frozen with the pin (the plane doesn't depend on the
+        /// mask gamma, and any other edit clears the placement) and enters
+        /// the model as a constant val addend — the solve stays exact.
+        public var maskVal: Double
 
         public init(
             nx: Double, ny: Double, valRGB: SIMD3<Double>, valLuma: Double,
-            targetZone: Double, retargeted: Bool = false
+            targetZone: Double, retargeted: Bool = false, maskVal: Double = 0
         ) {
             self.nx = nx
             self.ny = ny
@@ -47,6 +53,7 @@ public enum ZonePlacement {
             self.valLuma = valLuma
             self.targetZone = targetZone
             self.retargeted = retargeted
+            self.maskVal = maskVal
         }
     }
 
@@ -105,7 +112,8 @@ public enum ZonePlacement {
     /// per-channel param to green, run the 1-px pixel through the real print
     /// curve + encode, read the zone ruler.
     public static func predictedZone(
-        settings: ExposureSettings, analysis: ExposureAnalysis, valLuma: Double
+        settings: ExposureSettings, analysis: ExposureAnalysis, valLuma: Double,
+        maskVal: Double = 0
     ) -> Double {
         var p = ExposureKernel.deriveRenderParams(settings, analysis)
         p.slopes = SIMD3(repeating: p.slopes.y)
@@ -116,7 +124,9 @@ public enum ZonePlacement {
         p.midCMY = SIMD3(repeating: p.midCMY.y)
         p.highlightCMY = SIMD3(repeating: p.highlightCMY.y)
         p.levelsPoints = [p.levelsPoints[1], p.levelsPoints[1], p.levelsPoints[1]]
-        let v = Float(valLuma)
+        // Contrast Mask: the pin's frozen plane sample × the green scale is a
+        // constant val addend — exactly what the kernels add at this pixel.
+        let v = Float(valLuma + p.maskValScale.y * maskVal)
         var px = RGBImage(pixels: [v, v, v], width: 1, height: 1)
         px = ReferenceCurve.applyPrintCurve(px, params: p)
         px = ReferenceCurve.encodeOutput(px, levels: p.levelsPoints)
@@ -184,7 +194,11 @@ public enum ZonePlacement {
         } else {
             return nil
         }
-        let achieved = pins.map { predictedZone(settings: solved, analysis: analysis, valLuma: $0.valLuma) }
+        let achieved = pins.map {
+            predictedZone(
+                settings: solved, analysis: analysis, valLuma: $0.valLuma,
+                maskVal: $0.maskVal)
+        }
         // The knee iteration can settle short of every ask: say so rather than
         // report the ask.
         if kneeLabel != nil,
@@ -202,8 +216,9 @@ public enum ZonePlacement {
         func residual(_ density: Double) -> Double {
             var placed = candidate
             placed.density = density
-            return predictedZone(settings: placed, analysis: analysis, valLuma: pin.valLuma)
-                - pin.targetZone
+            return predictedZone(
+                settings: placed, analysis: analysis, valLuma: pin.valLuma,
+                maskVal: pin.maskVal) - pin.targetZone
         }
         return bisectDecreasing(residual, lo: densityRange.lo, hi: densityRange.hi, resolution: densityResolution)
     }
@@ -220,8 +235,9 @@ public enum ZonePlacement {
             graded.grade = grade
             let (density, _) = solveDensity(graded, analysis, pin: dark)
             graded.density = density
-            return predictedZone(settings: graded, analysis: analysis, valLuma: light.valLuma)
-                - light.targetZone
+            return predictedZone(
+                settings: graded, analysis: analysis, valLuma: light.valLuma,
+                maskVal: light.maskVal) - light.targetZone
         }
         let (grade, gradeClamped) = bisectDecreasing(
             lightResidual, lo: K.isoRMin, hi: K.isoRMax, resolution: gradeResolution)
@@ -254,7 +270,9 @@ public enum ZonePlacement {
         var placed = candidate
         placed.grade = grade
         placed.density = density
-        let landed = predictedZone(settings: placed, analysis: analysis, valLuma: mid.valLuma)
+        let landed = predictedZone(
+            settings: placed, analysis: analysis, valLuma: mid.valLuma,
+            maskVal: mid.maskVal)
         if abs(landed - mid.targetZone) <= onTargetTol {
             return (candidate, grade, density, nil, clamped)
         }
@@ -266,7 +284,9 @@ public enum ZonePlacement {
             let (g, d, _) = solveGradeAndDensity(c, analysis, dark: dark, light: light)
             c.grade = g
             c.density = d
-            return predictedZone(settings: c, analysis: analysis, valLuma: mid.valLuma)
+            return predictedZone(
+                settings: c, analysis: analysis, valLuma: mid.valLuma,
+                maskVal: mid.maskVal)
         }
 
         // The control that moves this pin most WITH the outers held, or none

@@ -144,6 +144,8 @@ do {
         if let v = options["--highlights"].flatMap(Double.init) { settings.highlights = v }
         if let v = options["--highlight-contrast"].flatMap(Double.init) { settings.highlightContrast = v }
         if let v = options["--pre-saturation"].flatMap(Double.init) { settings.preSaturation = v }
+        if let v = options["--contrast-mask"].flatMap(Double.init) { settings.contrastMask = v }
+        if let v = options["--mask-spacer"].flatMap(Double.init) { settings.maskSpacer = v }
         if let v = options["--red-hue"].flatMap(Double.init) { settings.redHue = v }
         if let v = options["--red-saturation"].flatMap(Double.init) { settings.redSaturation = v }
         if let v = options["--yellow-hue"].flatMap(Double.init) { settings.yellowHue = v }
@@ -162,13 +164,26 @@ do {
         let analysisImage = full ? img.downsampled(maxLongEdge: 1536) : img
         let analysis = ExposureKernel.analyze(linearImage: analysisImage)
         let params = ExposureKernel.deriveRenderParams(settings, analysis)
+        // Contrast Mask plane from the ANALYSIS-size image, like the app's
+        // proxy build (σ is grid-relative, so a full-res render samples the
+        // same plane the preview would).
+        let maskPlane: ContrastMask.Plane? = params.maskValScale == .zero
+            ? nil
+            : ContrastMask.buildPlane(
+                renderSource: analysisImage, bounds: analysis.baseBounds,
+                spacerPercent: settings.maskSpacer)
         let tAnalyze = -start.timeIntervalSinceNow - tDecode
         #if canImport(MetalRenderKit)
         let pipeline = try RenderPipeline()
-        let (encoded, _) = try pipeline.render(image: img, params: params, computeHistogram: false)
+        let (encoded, _) = try pipeline.render(
+            image: img, params: params, computeHistogram: false, maskPlane: maskPlane)
         #else
         let encoded: RGBImage
         if let pipeline = try? VulkanRenderPipeline() {
+            // Contrast Mask pending on Linux GPU (Phase 2: NegPipeline.comp
+            // + host SSBO + .spv rebuild in the distrobox) — Vulkan renders
+            // unmasked until then; the CPU fallback below masks correctly.
+            _ = maskPlane
             encoded = try pipeline.render(image: img, params: params, computeHistogram: false).encoded
         } else {
             encoded = ReferenceCurve.render(linearImage: img, settings: settings, analysis: analysis)

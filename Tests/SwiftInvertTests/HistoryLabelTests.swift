@@ -39,6 +39,8 @@ import Testing
         ("skinProtection", { $0.skinProtection = 0.8 }),
         ("printSaturation", { $0.printSaturation = 1.3 }),
         ("separationDamping", { $0.separationDamping = 0.6 }),
+        ("contrastMask", { $0.contrastMask = 0.35 }),
+        ("maskSpacer", { $0.maskSpacer = 5.5 }),
         ("hueTrim", { $0.hueTrim = -12.5 }),
         ("saturation", { $0.saturation = 0.9 }),
         ("redHue", { $0.redHue = -0.25 }),

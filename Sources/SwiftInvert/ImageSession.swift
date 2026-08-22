@@ -139,6 +139,22 @@ actor ImageSession {
     private var croppedTexture: MTLTexture?
     private var croppedTextureRect: NormalizedRect?
 
+    /// Contrast Mask plane cache. Always built from the PROXY at render
+    /// geometry (σ is a fraction of the analysis grid, so every tier and the
+    /// export sample the same plane — the analysis-on-the-proxy invariant).
+    /// The gamma slider is uniform-only and never touches this; only
+    /// spacer/geometry/rect/analysis changes rebuild.
+    private struct MaskKey: Equatable {
+        var orient: OrientKey
+        var uncropped: Bool
+        var spacer: Double
+        var meter: MeterKey
+        var prep: PreparedKey
+    }
+    private var maskPlane: ContrastMask.Plane?
+    private var maskTexture: MTLTexture?
+    private var maskKey: MaskKey?
+
     /// Which source a display render should read from. Analysis ALWAYS runs on
     /// the 1536px proxy whatever this says — the tiers differ only in pixels on
     /// screen, so switching between them can never move the conversion.
@@ -302,6 +318,52 @@ actor ImageSession {
         return (preview!, analysis!)
     }
 
+    /// The cached Contrast Mask plane + GPU texture for these settings, nil
+    /// when the mask is off (the cache is freed — a plane at gamma 0 is dead
+    /// weight). `proxyImage` is the oriented, fine-rotated, UNCROPPED proxy;
+    /// the crop is applied here so the plane covers exactly the printed
+    /// frame (a bright rebate blurred into the mask prints as a vignette).
+    private func maskPlaneTexture(
+        proxyImage: RGBImage, settings: ExposureSettings, uncropped: Bool,
+        analysis: ExposureAnalysis
+    ) throws -> (plane: ContrastMask.Plane, texture: MTLTexture)? {
+        guard settings.contrastMask != 0 else {
+            maskPlane = nil
+            maskTexture = nil
+            maskKey = nil
+            return nil
+        }
+        let key = MaskKey(
+            orient: OrientKey(
+                rotation: settings.rotation, flipHorizontal: settings.flipHorizontal,
+                fineRotation: settings.fineRotation),
+            uncropped: uncropped,
+            spacer: settings.maskSpacer,
+            meter: MeterKey(
+                rotation: settings.rotation, flipHorizontal: settings.flipHorizontal,
+                meterAngle: Self.meterAngle(settings)),
+            prep: PreparedKey(analysisRect: settings.analysisRect, cropRect: settings.cropRect))
+        if maskPlane == nil || maskTexture == nil || key != maskKey {
+            let source = (uncropped || settings.cropRect == nil)
+                ? proxyImage
+                : proxyImage.cropped(to: settings.cropRect!)
+            guard
+                let plane = ContrastMask.buildPlane(
+                    renderSource: source, bounds: analysis.baseBounds,
+                    spacerPercent: settings.maskSpacer)
+            else {
+                maskPlane = nil
+                maskTexture = nil
+                maskKey = nil
+                return nil
+            }
+            maskPlane = plane
+            maskTexture = try pipeline.uploadMaskPlane(plane)
+            maskKey = key
+        }
+        return (maskPlane!, maskTexture!)
+    }
+
     /// The cached GPU texture for this frame's current crop state, plus the
     /// pixel window it covers (nil = the whole oriented image) — `contentWindow`
     /// needs the window that was actually used, not the one that was asked for.
@@ -409,6 +471,10 @@ actor ImageSession {
     func renderTestStrip(settings: ExposureSettings, orientation: Int) throws -> CGImage {
         let (image, analysis) = try prepare(settings: settings)
         let source = try sourceTexture(image: image, settings: settings, uncropped: false).texture
+        // One plane serves all 25 patches: density/grade don't touch it, and
+        // the per-patch derive rescales the mask uniform like any slider.
+        let mask = try maskPlaneTexture(
+            proxyImage: image, settings: settings, uncropped: false, analysis: analysis)
         var mosaic: [UInt8] = []
         var w = 0, h = 0
         for cell in TestStrip.cells(orientation: orientation) {
@@ -417,7 +483,8 @@ actor ImageSession {
             s.grade = cell.grade
             let params = ExposureKernel.deriveRenderParams(s, analysis)
             let result = try pipeline.renderDisplay(
-                source: source, params: params, computeHistogram: false)
+                source: source, params: params, computeHistogram: false,
+                maskPlane: mask?.texture)
             if mosaic.isEmpty {
                 w = result.width
                 h = result.height
@@ -442,8 +509,18 @@ actor ImageSession {
     /// freezes — the displayed rgba8 bytes are post-curve and can't serve.
     func sampleZonePin(
         settings: ExposureSettings, u: Double, v: Double, radius: Int = 2
-    ) throws -> (valRGB: SIMD3<Double>, valLuma: Double) {
+    ) throws -> (valRGB: SIMD3<Double>, valLuma: Double, maskVal: Double) {
         let (image, analysis) = try prepare(settings: settings)
+        // Contrast Mask plane sample at the pin — frozen with the pin so the
+        // 1-px forward model sees what the kernels add at this pixel.
+        let maskVal: Double
+        if let mask = try maskPlaneTexture(
+            proxyImage: image, settings: settings, uncropped: false, analysis: analysis)
+        {
+            maskVal = Double(ContrastMask.sample(mask.plane, atNormalizedU: u, v: v))
+        } else {
+            maskVal = 0
+        }
         let bounds = analysis.baseBounds.applyingOffsets(
             whitePoint: settings.whitePointOffset, blackPoint: settings.blackPointOffset)
         // Map through the crop: the displayed frame is preview ∩ cropRect.
@@ -467,14 +544,15 @@ actor ImageSession {
             }
         }
         let val = sum / n
-        return (val, K.lumaR * val.x + K.lumaG * val.y + K.lumaB * val.z)
+        return (val, K.lumaR * val.x + K.lumaG * val.y + K.lumaB * val.z, maskVal)
     }
 
     /// Zone the CURRENT settings print `valLuma` on (pin labels + the default
     /// target of an unarmed pin).
-    func predictedZone(settings: ExposureSettings, valLuma: Double) throws -> Double {
+    func predictedZone(settings: ExposureSettings, valLuma: Double, maskVal: Double = 0) throws -> Double {
         let (_, analysis) = try prepare(settings: settings)
-        return ZonePlacement.predictedZone(settings: settings, analysis: analysis, valLuma: valLuma)
+        return ZonePlacement.predictedZone(
+            settings: settings, analysis: analysis, valLuma: valLuma, maskVal: maskVal)
     }
 
     /// Solve the placement against the warm analysis (pure CPU, in the actor
@@ -521,7 +599,19 @@ actor ImageSession {
             $0.pixelROI(width: oriented.width, height: oriented.height)
         }
         let source = try pipeline.upload(image)
-        let result = try pipeline.renderDisplay(source: source, params: params)
+        // Detached like everything else here: the plane is built inline and
+        // never touches the mask cache (a background 0°-base render must not
+        // evict the committed orientation's plane).
+        var detachedMask: MTLTexture?
+        if settings.contrastMask != 0,
+            let plane = ContrastMask.buildPlane(
+                renderSource: image, bounds: analysis.baseBounds,
+                spacerPercent: settings.maskSpacer)
+        {
+            detachedMask = try pipeline.uploadMaskPlane(plane)
+        }
+        let result = try pipeline.renderDisplay(
+            source: source, params: params, maskPlane: detachedMask)
         guard let cg = ImageConversion.cgImage(rgba8: result.rgba, width: result.width, height: result.height)
         else { throw RenderError.resource("CGImage conversion") }
         return RenderOutput(
@@ -579,7 +669,12 @@ actor ImageSession {
             orientedSource = image
             tierBase = basePreview!
         }
-        let result = try pipeline.renderDisplay(source: source, params: params)
+        // Proxy-built whatever the tier: the same plane samples up under the
+        // normalized mapping, so a tier swap cannot move the mask.
+        let mask = try maskPlaneTexture(
+            proxyImage: image, settings: settings, uncropped: uncropped, analysis: analysis)
+        let result = try pipeline.renderDisplay(
+            source: source, params: params, maskPlane: mask?.texture)
         guard let cg = ImageConversion.cgImage(rgba8: result.rgba, width: result.width, height: result.height)
         else { throw RenderError.resource("CGImage conversion") }
         return RenderOutput(
@@ -593,14 +688,22 @@ actor ImageSession {
 
     /// Full-resolution export render (fresh decode, same analysis, crop applied).
     func exportRender(settings: ExposureSettings) throws -> RGBImage {
-        let (_, analysis) = try prepare(settings: settings)
+        let (proxy, analysis) = try prepare(settings: settings)
         var full = try RawDecoder().decode(url: url, quality: .full)
             .oriented(
                 rotationCW: settings.rotation, flipHorizontal: settings.flipHorizontal,
                 fineRotation: settings.fineRotation)
         if let crop = settings.cropRect { full = full.cropped(to: crop) }
         let params = ExposureKernel.deriveRenderParams(settings, analysis)
-        let encoded = try pipeline.render(image: full, params: params, computeHistogram: false).encoded
+        // The mask plane comes from the PROXY, like the analysis — the
+        // what-you-see invariant (σ is grid-relative, so the full-res render
+        // samples the identical plane the preview showed).
+        let mask = try maskPlaneTexture(
+            proxyImage: proxy, settings: settings, uncropped: false, analysis: analysis)
+        let encoded = try pipeline.render(
+            image: full, params: params, computeHistogram: false,
+            maskPlane: mask?.plane
+        ).encoded
         return encoded
     }
 }

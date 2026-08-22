@@ -1,0 +1,96 @@
+{
+ "input": {
+  "path": "contrast_mask/input.bin",
+  "dtype": "float32",
+  "shape": [
+   64,
+   64,
+   3
+  ]
+ },
+ "bounds": {
+  "floors": [
+   -1.0677508064230283,
+   -1.063369958015283,
+   -1.0748616774996123
+  ],
+  "ceils": [
+   -0.03959027645972879,
+   -0.03939848812160404,
+   -0.040462057570492344
+  ]
+ },
+ "lum_range": 1.025614976497039,
+ "planes": {
+  "spacer4": {
+   "spacer": 4.0,
+   "centre": 0.6721861958503723,
+   "plane": {
+    "path": "contrast_mask/plane_spacer4.bin",
+    "dtype": "float32",
+    "shape": [
+     64,
+     64
+    ]
+   }
+  },
+  "spacer2_5": {
+   "spacer": 2.5,
+   "centre": 0.6722530126571655,
+   "plane": {
+    "path": "contrast_mask/plane_spacer2_5.bin",
+    "dtype": "float32",
+    "shape": [
+     64,
+     64
+    ]
+   }
+  }
+ },
+ "ev": {
+  "gamma": 0.35,
+  "density_range": 1.025614976497039,
+  "out_shape": [
+   96,
+   128
+  ],
+  "scale": -1.1924567217369646,
+  "ev": {
+   "path": "contrast_mask/ev_96x128.bin",
+   "dtype": "float32",
+   "shape": [
+    96,
+    128
+   ]
+  }
+ },
+ "masked_chain": {
+  "exposure_config": {
+   "density": 1.0,
+   "grade": 115.0,
+   "wb_cyan": 0.0,
+   "wb_magenta": 0.0,
+   "wb_yellow": 0.0,
+   "auto_exposure": true,
+   "auto_normalize_contrast": true,
+   "cast_removal_strength": 0.5,
+   "toe": 0.0,
+   "toe_width": 2.5,
+   "shoulder": 0.0,
+   "shoulder_width": 2.5,
+   "paper_dmin": false,
+   "true_black": true,
+   "contrast_mask": 0.35,
+   "mask_spacer": 4.0
+  },
+  "output": {
+   "path": "contrast_mask/masked_output.bin",
+   "dtype": "float32",
+   "shape": [
+    64,
+    64,
+    3
+   ]
+  }
+ }
+}

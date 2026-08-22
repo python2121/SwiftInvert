@@ -57,6 +57,8 @@ from negpy.features.exposure.normalization import (
     prefilter_log_grid,
     resolve_analysis_region,
 )
+from negpy.features.exposure.logic import contrast_mask_ev, contrast_mask_scale, expand_mask_plane
+from negpy.features.exposure.normalization import contrast_mask_plane
 from negpy.features.exposure.papers import effective_paper_profile
 from negpy.features.exposure.processor import NormalizationProcessor, PhotometricProcessor
 from negpy.features.process.models import ProcessConfig, ProcessMode
@@ -421,11 +423,95 @@ def dump_lab_color() -> None:
     print("lab_color dumped")
 
 
+def dump_contrast_mask() -> None:
+    """Contrast Mask fixtures (NegPy 515c1f5; needs NegPy >= 0.52). Additive —
+    run alone (`dump_fixtures.py contrast_mask`) so the pre-existing fixtures
+    stay at the dump recorded in UPSTREAM.md's `fixtures:` line."""
+    img = synthetic_image()
+    root = OUT / "contrast_mask"
+    root.mkdir(parents=True, exist_ok=True)
+    process = ProcessConfig(white_point_offset=0.0, black_point_offset=0.0)
+    ctx = PipelineContext(original_size=(img.shape[1], img.shape[0]), scale_factor=1.0,
+                          process_mode=ProcessMode.C41)
+    NormalizationProcessor(process).process(img, ctx)
+    bounds = ctx.metrics["final_bounds"]
+    lum_range = float(ctx.metrics["norm_density_range"])
+    manifest = {
+        "input": dump_bin(root / "input.bin", img),
+        "bounds": {"floors": jsonable(bounds.floors), "ceils": jsonable(bounds.ceils)},
+        "lum_range": lum_range,
+        "planes": {},
+    }
+
+    # The zero-mean plane at two spacers (σ = spacer% × grid short side;
+    # 64px grid → the resize and block-median are both no-ops, isolating the
+    # normalize→luma→Gaussian→zero-mean chain the Swift build mirrors).
+    for name, spacer in {"spacer4": 4.0, "spacer2_5": 2.5}.items():
+        plane, centre = contrast_mask_plane(img, bounds, None, spacer=spacer)
+        manifest["planes"][name] = {
+            "spacer": spacer, "centre": float(centre),
+            "plane": dump_bin(root / f"plane_{name}.bin", plane),
+        }
+
+    # The EV map at a larger out-shape: pins the bilinear half-pixel
+    # expansion (cv2.INTER_LINEAR, edge-replicated) all three kernels
+    # hand-roll, times contrast_mask_scale.
+    plane4, _ = contrast_mask_plane(img, bounds, None, spacer=4.0)
+    gamma = 0.35
+    ev = contrast_mask_ev(plane4, gamma, lum_range, (96, 128))
+    manifest["ev"] = {
+        "gamma": gamma, "density_range": lum_range,
+        "out_shape": [96, 128],
+        "scale": float(contrast_mask_scale(gamma, lum_range)),
+        "ev": dump_bin(root / "ev_96x128.bin", ev),
+    }
+
+    # Masked full chain, wired exactly as DarkroomEngine does (plane from the
+    # SOURCE, expanded to render size, into the metrics the exposure stage
+    # reads). exposure_config carries the same keys the other parity
+    # harnesses read.
+    exposure = ExposureConfig(contrast_mask=0.35, mask_spacer=4.0)
+    ctx2 = PipelineContext(original_size=(img.shape[1], img.shape[0]), scale_factor=1.0,
+                           process_mode=ProcessMode.C41)
+    norm2 = NormalizationProcessor(process).process(img, ctx2)
+    p2, _ = contrast_mask_plane(img, ctx2.metrics["final_bounds"], None, spacer=exposure.mask_spacer)
+    ctx2.metrics["contrast_mask_plane"] = expand_mask_plane(p2, img.shape[:2], None)
+    ctx2.metrics["contrast_mask_roi"] = None
+    photo = PhotometricProcessor(exposure).process(norm2, ctx2)
+    encoded = working_oetf_encode(photo)
+    manifest["masked_chain"] = {
+        "exposure_config": {
+            "density": exposure.density, "grade": exposure.grade,
+            "wb_cyan": exposure.wb_cyan, "wb_magenta": exposure.wb_magenta,
+            "wb_yellow": exposure.wb_yellow,
+            "auto_exposure": exposure.auto_exposure,
+            "auto_normalize_contrast": exposure.auto_normalize_contrast,
+            "cast_removal_strength": exposure.cast_removal_strength,
+            "toe": exposure.toe, "toe_width": exposure.toe_width,
+            "shoulder": exposure.shoulder, "shoulder_width": exposure.shoulder_width,
+            "paper_dmin": exposure.paper_dmin,
+            "true_black": not exposure.paper_black,
+            "contrast_mask": exposure.contrast_mask,
+            "mask_spacer": exposure.mask_spacer,
+        },
+        "output": dump_bin(root / "masked_output.bin", np.asarray(encoded)),
+    }
+    (root / "manifest.json").write_text(json.dumps(manifest, indent=1))
+    print("contrast_mask dumped")
+
+
 if __name__ == "__main__":
     OUT.mkdir(parents=True, exist_ok=True)
+    only = sys.argv[1] if len(sys.argv) > 1 else None
+    if only == "contrast_mask":
+        # Additive dump: leaves every pre-existing fixture untouched.
+        dump_contrast_mask()
+        print(f"contrast_mask fixtures written to {OUT}", file=sys.stderr)
+        sys.exit(0)
     dump_closed_form()
     dump_ramp()
     dump_synthetic64()
     dump_synthetic_grid()
     dump_lab_color()
+    dump_contrast_mask()
     print(f"All fixtures written to {OUT}", file=sys.stderr)

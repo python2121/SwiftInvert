@@ -9,8 +9,8 @@ and appending a history entry.
 ## Last reviewed
 
 ```
-commit:   542b843  ("feat(macos): give NegPy a menu bar, with Window and Help")
-reviewed: 2026-08-18
+commit:   4ec75a7  ("feat(preview): configurable preview render size")
+reviewed: 2026-08-21
 fixtures: Tests/Fixtures/ dumped from 0369b10 except lab_color (partially
           re-dumped from a09cc46, 2026-07-31, with the pure gamut boost —
           the b8c596c dump had carried the interim in-boost skin damping).
@@ -39,6 +39,191 @@ updates this file. The manual procedure, for reference:
 6. Update the **Last reviewed** marker and append to the history below.
 
 ## Review history
+
+### 2026-08-21 — through `4ec75a7` (0.52.0 → **0.53.0**, 33 commits)
+
+**Four pipeline-relevant commits, nothing to port — the headline is a
+quantization DC-bias fix we never had, and two separate convergences where
+upstream adopted architecture we already ship.** Goldens unmoved (empty
+diff), `EXPOSURE_CONSTANTS` untouched, no renames. The pipeline diff is 68
+lines across four files. **The ⚑ Contrast Mask reminder was delivered at
+the top of this review** (still pending the on-scan trial → port/decline
+decision).
+
+**Ported (2026-08-21, same-day follow-up — the ⚑ decision was made):
+Contrast Mask, Phase 1 (Mac) complete.** The on-scan trial ran through
+NegPy's own `DarkroomEngine` on the user's frames (21 renders,
+`dist/contrast-mask-trial/`; the first uncropped pass instructively
+reproduced the rebate-vignette upstream warns about — the plane must be
+built from the printed frame). Verdict: negative values all looked
+terrible, +0.3 helped (sometimes a little much) — ported with the full
+±0.5 range (user's call) and no display inversion (right = + = squeeze,
+matching OUR Grade's right = softer; upstream inverts because their grade
+runs the other way). What landed:
+
+- `NegativeKit/ContrastMask.swift`: plane build (area-resize to the
+  analysis grid → `ReferenceCurve.normalize` (log+stretch, the b=1
+  collapse of their prefilter+normalize) → Rec.709 luma → separable
+  Gaussian matching cv2's kernel exactly (radius round(4σ), replicate
+  border, vDSP both passes ~20 ms) → zero-mean), the half-pixel bilinear
+  `sample` all three kernels mirror, and `valScale` (their
+  contrast_mask_scale folded with the exposureStops EV domain to one
+  per-channel multiplier — we have no EV map to ride).
+- Settings `contrastMask`/`maskSpacer` (+decoder, +HistoryLabels,
+  tripwires 52→54), `RenderParams.maskValScale`, derive.
+- Kernels: `ReferenceCurve.applyPrintCurve(maskPlane:)` and MSL
+  `printCurve` + `contrast_mask_sample` (texture 2, 1×1 dummy when off,
+  uniform-gated on `maskScale.w`); `CurveUniforms` +2 SIMD4 rows
+  (stride 272→304, both layout tests updated). GLSL `.comp` source
+  edited append-only — see the PENDING note in CLAUDE.md.
+- `ImageSession`: plane+texture cache keyed (orient, rects, spacer,
+  analysis identity), freed at gamma 0; wired through render (all
+  tiers sample the ONE proxy-built plane), test strip (one plane, 25
+  patches), detached renders (inline, no cache mutation), and
+  exportRender (what-you-see). Zone placement is EXACT, not
+  documented-away: `Pin.maskVal` freezes the pin's plane sample and
+  `predictedZone` adds it as the constant the kernels add at that pixel.
+- UI: slider pair under Grade (spacer disabled at mask 0, help text
+  cribbed from upstream's tooltips); negcli `--contrast-mask`/
+  `--mask-spacer`.
+- Fixtures: NEW additive `contrast_mask/` set dumped from `4ec75a7` via
+  the new `dump_fixtures.py contrast_mask` mode (plane at two spacers,
+  bilinear-expansion EV map, masked full chain) — pre-existing fixtures
+  untouched, `fixtures:` line unmoved. Tests: plane @1e-5, expansion
+  @1e-5, masked chain @1e-4, GPU-vs-CPU at the TIGHT gate (1e-3/0.02,
+  hue-trim precedent) including a 3× render-size case exercising the
+  bilinear mapping off the identity path; zero-mean/clamp/direction/
+  zone-model properties. **301 tests green** (was 292), `negcli bench`
+  unchanged at defaults (7.4 ms/frame), app renders headlessly.
+- One bug caught by the fixtures during development: the first build fed
+  `ReferenceCurve.normalize` an already-logged image (it logs
+  internally) — double-log clamped everything to −6 and the plane went
+  constant. The plane fixture caught it immediately; worth remembering
+  as exactly why the fixture-first order pays.
+- Recorded divergence (CLAUDE.md): the plane normalizes against BASE
+  bounds (pre-WP/BP offset) so those drags stay analysis-free; upstream
+  uses final bounds; identical at zero offsets (every fixture config).
+- **Phase 2 owed to the next distrobox session** (batched with the ICC
+  verification): `.spv` rebuild, Vulkan host mask SSBO (binding 3,
+  maskDims.zw = render dims), bridge Session plane cache, Qt sliders,
+  VulkanParityTests mask case. Until then Linux GPU renders unmasked
+  (append-only GLSL keeps the stale `.spv` correct-but-maskless);
+  negcli's CPU fallback masks correctly.
+
+**Checked, and we are clean — `6edbac7` round-to-nearest quantization.**
+Their `_to_uint8/16_jit` cast with a bare truncation, so **every 8- and
+16-bit colour export was half a level dark** — error distribution [-1, 0]
+instead of [-0.5, +0.5], a −0.5-level DC bias, "50% of all pixels one
+level off", on every JPEG/PNG/thumbnail AND the canvas itself; their
+greyscale twins had always rounded, which is what settles it as an
+oversight. **Audited every float→int pixel conversion of ours, all
+clean:** the five Swift sites all round (`* 255/65535 + 0.5` —
+ImageConversion, ColorIO, TIFF16, negcli, CoreBridge's RGBA8), the Metal
+display path quantizes via rgba8unorm hardware (round-to-nearest per
+spec), and the Vulkan display path packs with `packUnorm4x8`, which the
+GLSL spec defines as `round(clamp(c)·255)`. Two notes recorded:
+- **Histogram bin selection truncates in both our kernels**
+  (`uint(clamp(v*255))`, MSL 479-482 / GLSL 453-456) — checked and left
+  alone deliberately: that is *interval* binning, not value quantization,
+  and upstream drew the same line in this very range (their new
+  `density_hist.wgsl` code still bins by `u32()` truncation while the
+  export fix rounds). The known, harmless asymmetry: a pixel within half
+  a level of a bin boundary can be *displayed* as level k (display
+  rounds) but *binned* as k−1 — invisible in the shape-normalized plot;
+  `clipFractions`' 255 bin only counts exact 1.0, which slightly
+  understates hard clipping. Not worth diverging the bins from standard
+  interval semantics.
+- **If the ColorIO oracle is ever regenerated from NegPy ≥ 0.53, expect
+  half-level shifts** in the u8 reference values — their side was biased
+  low when the 2026-07-20 oracle was dumped. Not a reason to regenerate;
+  a reason not to be surprised.
+
+**Convergences (upstream adopted what we already ship — no action):**
+1. **`77fac17`'s b==2 block-median fast path is OUR optimization**,
+   formula-identical: "median of 4 = (sum − min − max)/2, no partition"
+   vs Prefilter.swift:66-68's closed form, which predates it. Two more
+   items in the same commit converge on the `prepare`/`finalize` split
+   we've had since the 2125a34 port: their `_analysis_cache_key` listed
+   whole dataclasses so a white/black-point drag re-ran the full meter
+   chain (117→9 ms — ours: "offsets fold into finalBounds at derive
+   time, WP/BP drags re-run NO analysis"), and their prefiltered log
+   grid is now cached independent of the clip sliders (133→54 ms —
+   ours: `Prepared`). Fixture note: their fast path computes the median
+   in float64 vs `np.median`'s middle-average, ≤1 ulp of float32 apart —
+   far inside the grid fixtures' 1e-5 gate, so no re-dump implication.
+2. **`5e1f436` splits their density histogram into R/G/B/L** (4×120
+   bins, WGSL atomics with per-channel offsets) — the exact shape our
+   `histogram256` has had from the start (4×256, R/G/B + Rec.709 luma).
+   The histogram itself stays N/A: it feeds their H&D chart, a recorded
+   non-port.
+
+**Deliberately skipped / not applicable with a shared-bug-class glance:**
+- **`62334b2` matrix/TRC input-ICC bypass fix** (dead D65 gate — ICC's
+  PCS is D50-relative so the gate never fired; wrong PCS reference for
+  non-D65-native profiles until Bradford-adapting via each profile's
+  `chad`; a linear-light matrix applied to gamma-encoded data). We ship
+  **no input-ICC path at all** (sensor-native decode contract), so
+  nothing is reachable — but it retroactively validates two of our
+  choices: embedding *their known-good* v4 profiles byte-for-byte for
+  the ICC tagging port rather than constructing our own (the wtpt/chad
+  D50 subtleties are exactly what we sidestepped), and pinning colour
+  transforms on chromatic witnesses (their "only got this right for
+  D65-native profiles by coincidence" is the 2026-08-11 rule again: a
+  neutral is never a sufficient witness).
+- **`b232cc9` ICC-tagging test with teeth** ("dropping `iccprofile=`
+  fails six cases") — a direct nudge at us: our 2026-08-17 ICC tagging
+  port has NO in-repo regression test (the verification harness was
+  scratchpad-only; TIFF16 lives in the negcli target, which no test
+  target imports). Attached to the owed distrobox pass: when on the box,
+  consider a `negcli`-driven check or moving TIFF16+ICCProfiles
+  somewhere testable so the tag can't silently vanish.
+- **`0184402` metadata into every export format** — the Mac `Exporter`
+  carries EXIF/TIFF/GPS into both formats already; **the Linux exports
+  carry none** (Qt JPEG via `QImage::save`, TIFF16 has no EXIF tags).
+  Same family as the ICC gap was; recorded as a candidate for Linux
+  export-metadata parity, alongside lcms2. `19f704d` (EXIF parse moved
+  out of a `finally`) is Python control flow with no counterpart.
+- **`7fcaf40` batch-export pipelining** (prefetch decode ∥ GPU render ∥
+  encode+write, at most two full-res buffers held) — our `performExport`
+  is strictly sequential per URL; a roll export could roughly overlap
+  decode (~0.5–0.7 s) with render. Recorded as a **candidate** perf
+  item, background-task only, no urgency.
+- **`4ec75a7` configurable preview render size** — ours is the fixed
+  1536 proxy + tier system; the tiers already cover the use case.
+- **`c4a627b` zoom-means-scan-pixels + honesty when undeliverable** —
+  adjacent to our HQ badge/tier honesty rules; nothing to take.
+- **`8fb19c7`/`f470c1f` Auto Crop fixes + parallel batch autocrop** —
+  recorded non-feature. **Peek Negative follow-ups** (`1d2fa8c` colour
+  management so the orange mask survives, `77ad629`, `6ff93fc`) — the
+  candidate stands; their colour-management fix is a design note for it
+  (peek must still go through the display transform).
+
+**Not applicable (rest):** `c6fa0b7` stitch/HDR persistence across folder
+switches, `a1652a8`/`3ae945a` capture date/place with a map picker,
+`d272321` slider debounce, `cba28dc` user-selectable sticky settings,
+`468c1a9` shortcut key, `76f25bb`/`74078d7`/`b078ab6`/`1294037` chores,
+`e9a93c6`/`b9e731f`/`87805ef` camera-scanning capture, `38f3b6e`/
+`06bdf81` triplet handling, `f6cebd2` Linux icon/desktop file (mildly
+interesting for eventual Qt-shell packaging), `a9634b9`/`bfa761b` 0.53.0
+release prep.
+
+**dump_fixtures.py:** compatible. Of the four changed pipeline files, the
+script imports only from `normalization.py` (the changed
+`_block_median_grid` is internal, imported signatures untouched) and
+`kernel/image/logic.py` (`working_oetf_decode/encode`, both untouched;
+the quantization fix is in functions the script never calls — it dumps
+float arrays). `density_histogram`'s shape change is in `analysis.py`,
+which the script doesn't import. The `fixtures:` line does not move.
+
+**Still open (carried over):** ~~⚑ the Contrast Mask decision~~ RESOLVED
+same-day — trialed on-scan, ported (Phase 1 above; Phase 2 owed to the
+distrobox), the distrobox pass owed on the ICC tagging port (now with the
+`b232cc9`-inspired test note attached, and now batched with the Contrast
+Mask Phase 2), colour ring-around, `91a1b78`
+tunable Auto targets, the Color Mixer re-tune pass, the two 2026-08-13
+design calls, Peek Negative (candidate), Before/After split (candidate),
+**new:** Linux export-metadata parity (candidate), batch-export
+pipelining (candidate).
 
 ### 2026-08-18 — through `542b843` (0.51.1 → **0.52.0**, 15 commits)
 
@@ -162,6 +347,7 @@ trialing on real scans before committing):**
    asked (2026-08-18) to be prompted at the next `/negpy-review` to
    decide: run the on-scan trial through NegPy 0.52.0, then port or
    decline. Don't let it sit silently in the carried-over list.
+   [RESOLVED 2026-08-21: reminded, trialed, PORTED — see that entry.]
 
 **Deliberately skipped:**
 
