@@ -52,6 +52,16 @@ private final class Session {
         var cropRect: NormalizedRect?
     }
 
+    /// Contrast Mask plane cache key, the Mac ImageSession's MaskKey: the
+    /// printed frame's geometry (the plane covers exactly what the kernels
+    /// render), the spacer (σ), and the analysis identity (the plane
+    /// normalizes by the metered base bounds).
+    struct MaskKey: Equatable {
+        var source: SourceKey
+        var spacer: Double
+        var analysis: AnalysisKey
+    }
+
     var meterKey: OrientKey?
     var meterPreview: RGBImage?
     var analysisKey: AnalysisKey?
@@ -60,6 +70,8 @@ private final class Session {
     /// uploaded GPU source, each keyed by the geometry that produced them.
     var orientedCache: [Int32: (key: SourceKey, image: RGBImage)] = [:]
     var sourceCache: [Int32: (key: SourceKey, buffer: VulkanRenderPipeline.SourceBuffer)] = [:]
+    var maskKey: MaskKey?
+    var maskBuffer: VulkanRenderPipeline.MaskBuffer?
 
     static let mediumTierPixelBudget = 20_000_000
 
@@ -119,36 +131,89 @@ private final class Session {
         }
     }
 
+    /// The tier's oriented (+fine rotation, inscribed) image, cached per tier.
+    private func orientedImage(key: SourceKey, tier: Tier) throws -> RGBImage {
+        let orientKey = SourceKey(orient: key.orient, fineRotation: key.fineRotation, cropRect: nil)
+        if let cached = orientedCache[tier.rawValue], cached.key == orientKey {
+            return cached.image
+        }
+        let base = try tierImage(tier)
+        let image = (key.orient.rotation == 0 && !key.orient.flip && key.fineRotation == 0)
+            ? base
+            : base.oriented(
+                rotationCW: key.orient.rotation, flipHorizontal: key.orient.flip,
+                fineRotation: key.fineRotation)
+        orientedCache[tier.rawValue] = (orientKey, image)
+        return image
+    }
+
+    private static func sourceKey(_ settings: ExposureSettings) -> SourceKey {
+        SourceKey(
+            orient: OrientKey(rotation: settings.rotation, flip: settings.flipHorizontal),
+            fineRotation: settings.fineRotation,
+            cropRect: settings.cropRect)
+    }
+
     /// GPU source for a tier: oriented (+fine rotation, inscribed) then
     /// cropped, both cached per tier so threshold crossings re-upload only
     /// when geometry actually changed.
     func source(
         settings: ExposureSettings, tier: Tier, pipeline: VulkanRenderPipeline
     ) throws -> VulkanRenderPipeline.SourceBuffer {
-        let key = SourceKey(
-            orient: OrientKey(rotation: settings.rotation, flip: settings.flipHorizontal),
-            fineRotation: settings.fineRotation,
-            cropRect: settings.cropRect)
+        let key = Self.sourceKey(settings)
         if let cached = sourceCache[tier.rawValue], cached.key == key { return cached.buffer }
 
-        let orientKey = SourceKey(orient: key.orient, fineRotation: key.fineRotation, cropRect: nil)
-        var image: RGBImage
-        if let cached = orientedCache[tier.rawValue], cached.key == orientKey {
-            image = cached.image
-        } else {
-            let base = try tierImage(tier)
-            image = (key.orient.rotation == 0 && !key.orient.flip && key.fineRotation == 0)
-                ? base
-                : base.oriented(
-                    rotationCW: key.orient.rotation, flipHorizontal: key.orient.flip,
-                    fineRotation: key.fineRotation)
-            orientedCache[tier.rawValue] = (orientKey, image)
-        }
+        var image = try orientedImage(key: key, tier: tier)
         if let crop = key.cropRect {
             image = image.cropped(to: crop)
         }
         let buffer = try pipeline.upload(image)
         sourceCache[tier.rawValue] = (key, buffer)
+        return buffer
+    }
+
+    /// The cached Contrast Mask plane for these settings, nil when the mask
+    /// is off (the cache is freed — a plane at gamma 0 is dead weight).
+    /// PROXY-built whatever the render tier, like the Mac ImageSession: σ is
+    /// grid-relative and the sample mapping is normalized, so every tier and
+    /// the export sample one identical plane — a tier swap cannot move the
+    /// mask. Rebuilds (~20 ms) only on spacer/geometry/analysis changes;
+    /// gamma drags hit only the uniform.
+    func maskPlane(
+        settings: ExposureSettings, analysis: ExposureAnalysis,
+        pipeline: VulkanRenderPipeline
+    ) throws -> VulkanRenderPipeline.MaskBuffer? {
+        guard settings.contrastMask != 0 else {
+            maskBuffer = nil
+            maskKey = nil
+            return nil
+        }
+        let key = MaskKey(
+            source: Self.sourceKey(settings),
+            spacer: settings.maskSpacer,
+            analysis: AnalysisKey(
+                orient: OrientKey(rotation: settings.rotation, flip: settings.flipHorizontal),
+                cropRect: settings.cropRect, analysisRect: settings.analysisRect))
+        if let maskBuffer, maskKey == key { return maskBuffer }
+        // The printed frame at proxy scale: oriented (+fine rotation), then
+        // the crop — a bright rebate blurred into the mask would print as a
+        // vignette the negative does not have.
+        var image = try orientedImage(key: key.source, tier: .proxy)
+        if let crop = settings.cropRect {
+            image = image.cropped(to: crop)
+        }
+        guard
+            let plane = ContrastMask.buildPlane(
+                renderSource: image, bounds: analysis.baseBounds,
+                spacerPercent: settings.maskSpacer)
+        else {
+            maskBuffer = nil
+            maskKey = nil
+            return nil
+        }
+        let buffer = try pipeline.uploadMaskPlane(plane)
+        maskBuffer = buffer
+        maskKey = key
         return buffer
     }
 }
@@ -289,9 +354,11 @@ public func si_render(
         let source = try session.source(
             settings: settings, tier: Session.Tier(rawValue: tier) ?? .proxy,
             pipeline: pipeline)
+        let mask = try session.maskPlane(
+            settings: settings, analysis: analysis, pipeline: pipeline)
         let display = try pipeline.renderDisplay(
             source: source, params: params, computeHistogram: histogram != nil,
-            srgbDisplay: srgbDisplay != 0)
+            srgbDisplay: srgbDisplay != 0, maskPlane: mask)
         outWidth?.pointee = Int32(display.width)
         outHeight?.pointee = Int32(display.height)
         if let histogram {
@@ -351,9 +418,11 @@ public func si_render_into(
         guard let dest, destCapacity >= needed else { return -1 }
         let analysis = session.analysis(settings: settings)
         let params = ExposureKernel.deriveRenderParams(settings, analysis)
+        let mask = try session.maskPlane(
+            settings: settings, analysis: analysis, pipeline: pipeline)
         let bins = try pipeline.renderDisplay(
             source: source, params: params, computeHistogram: histogram != nil,
-            srgbDisplay: srgbDisplay != 0, into: dest)
+            srgbDisplay: srgbDisplay != 0, maskPlane: mask, into: dest)
         if let histogram {
             bins.withUnsafeBufferPointer { histogram.update(from: $0.baseAddress!, count: 1024) }
         }
@@ -521,9 +590,26 @@ private func exportRender(
     let pipeline = try Bridge.shared.getPipeline()
     let params = ExposureKernel.deriveRenderParams(settings, analysis)
     let source = try pipeline.upload(full)
+    // The mask plane comes from the PROXY-scale printed frame, like the
+    // analysis — the what-you-see invariant (σ is grid-relative, so the
+    // full-res render samples the identical plane the preview showed).
+    var mask: VulkanRenderPipeline.MaskBuffer?
+    if settings.contrastMask != 0 {
+        var proxyPrinted = preview.oriented(
+            rotationCW: settings.rotation, flipHorizontal: settings.flipHorizontal,
+            fineRotation: settings.fineRotation)
+        if let crop = settings.cropRect { proxyPrinted = proxyPrinted.cropped(to: crop) }
+        if let plane = ContrastMask.buildPlane(
+            renderSource: proxyPrinted, bounds: analysis.baseBounds,
+            spacerPercent: settings.maskSpacer)
+        {
+            mask = try pipeline.uploadMaskPlane(plane)
+        }
+    }
     let srgb = (options.colorspace ?? "srgb") != "adobe"
     var encoded = try pipeline.render(
-        source: source, params: params, computeHistogram: false, srgbEncode: srgb
+        source: source, params: params, computeHistogram: false, srgbEncode: srgb,
+        maskPlane: mask
     ).encoded
     if let maxEdge = options.maxLongEdge, maxEdge >= 16 {
         encoded = encoded.downsampled(maxLongEdge: maxEdge)

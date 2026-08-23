@@ -180,11 +180,9 @@ do {
         #else
         let encoded: RGBImage
         if let pipeline = try? VulkanRenderPipeline() {
-            // Contrast Mask pending on Linux GPU (Phase 2: NegPipeline.comp
-            // + host SSBO + .spv rebuild in the distrobox) — Vulkan renders
-            // unmasked until then; the CPU fallback below masks correctly.
-            _ = maskPlane
-            encoded = try pipeline.render(image: img, params: params, computeHistogram: false).encoded
+            encoded = try pipeline.render(
+                image: img, params: params, computeHistogram: false, maskPlane: maskPlane
+            ).encoded
         } else {
             encoded = ReferenceCurve.render(linearImage: img, settings: settings, analysis: analysis)
         }

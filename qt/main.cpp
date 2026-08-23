@@ -607,6 +607,8 @@ private:
     void refreshDependentStates() {
         if (separationDampingRow_)
             separationDampingRow_->setEnabled(settingValue("printSaturation") != 1.0);
+        if (maskSpacerRow_)
+            maskSpacerRow_->setEnabled(settingValue("contrastMask") != 0.0);
     }
 
     // ── History (per file, session-scoped; entries hold full settings) ────
@@ -1100,6 +1102,11 @@ private:
 
         infoRow_ = new QLabel;
         infoRow_->setStyleSheet("font-size: 10px; color: gray;");
+        // Contrast Mask lives with Grade (a grade-workflow control). Raw
+        // gamma, no display inversion: right = + = range squeeze = globally
+        // softer, the same direction our Grade slider reads.
+        maskSpacerRow_ = settingSlider(tr("Mask Spacer"), "maskSpacer", 2, 6, 0.1, 4, 1,
+                                       QStringLiteral("%"));
         layout->addWidget(section(
             tr("Print"),
             {
@@ -1111,6 +1118,8 @@ private:
                 settingToggle(tr("Auto contrast"), "autoNormalizeContrast"),
                 settingSlider(tr("Grade (ISO R)"), "grade", 50, 180, 1, 115, 0),
                 infoRow_,
+                settingSlider(tr("Contrast Mask"), "contrastMask", -0.5, 0.5, 0.01, 0),
+                maskSpacerRow_,
             }));
 
         layout->addWidget(section(
@@ -1541,6 +1550,7 @@ private:
     HistogramWidget *histogram_ = nullptr;
     QLabel *infoRow_ = nullptr;
     QWidget *separationDampingRow_ = nullptr;
+    QWidget *maskSpacerRow_ = nullptr;
     QWidget *cropBar_ = nullptr;
     QSlider *straightenSlider_ = nullptr;
     QLabel *straightenValue_ = nullptr;

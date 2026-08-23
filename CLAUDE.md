@@ -64,16 +64,21 @@ against the same fixtures, so the fallbacks are pinned).
   `encode_u8`) in one file selected by `-DKERNEL_*`; the checked-in `.spv`
   binaries are the build inputs (`scripts/compile_vulkan_shaders.sh`
   regenerates — rerun + commit them with ANY `.comp` edit).
-  **PENDING (2026-08-21): Contrast Mask on the Linux GPU** — the `.comp`
-  source already carries the mask fields/sample/gate (append-only, so the
-  stale `.spv` still reads its old 272-byte block correctly and simply
-  renders unmasked), but the `.spv` rebuild, the host plumbing (mask SSBO
-  at binding 3, `maskDims.zw` = render dims filled before upload, a
-  `maskPlane:` param on render/renderDisplay), the bridge `Session` plane
-  cache, the Qt sliders and a `VulkanParityTests` mask case are all owed
-  to the next distrobox session (batched with the ICC-tagging
-  verification pass). negcli's CPU fallback masks correctly on Linux
-  already.
+  **Contrast Mask is live on the Linux GPU** (2026-08-22, closing the Mac
+  port's pending half): the plane rides an SSBO at `print_curve`'s
+  binding 3 — its own 4-binding descriptor layout, with a 4-byte dummy
+  bound when the mask is off (Vulkan requires every declared binding
+  bound even though the `maskScale.w` gate means it's never read) — and
+  the host fills `maskDims.zw` with the RENDER dims before upload (the
+  GLSL maps its 1-D gid to (x, y) through them; a flat SSBO has no size
+  to query, where the Metal mirror asks its output texture). `maskPlane:`
+  rides render/renderDisplay(+into) as an uploaded `MaskBuffer`; the
+  bridge `Session` caches plane+upload keyed (geometry, spacer, analysis
+  identity) and the export path builds its own from the proxy-scale
+  printed frame (the what-you-see invariant); Qt carries the slider pair
+  (spacer disabled at mask 0, like the Mac); `contrastMaskMatchesCPU`
+  pins GPU vs CPU at the Mac's tight gate (mean<1e-3, max<0.02)
+  including a 3× render-size ≠ plane-size case.
 - SSBOs of interleaved RGB floats (RGBImage's own layout — upload/readback
   are memcpys), 1-D dispatch, std140 uniform blocks that are byte-identical
   to the shared `ShaderTypes.swift` (a SYMLINK into MetalRenderKit — one
@@ -121,7 +126,8 @@ Shell feature state (Phase A, 2026-08-08):
 - **Controls mirror `ControlsSidebar` exactly** — same sections, ranges,
   defaults and direction conventions (Brightness = 2 − density, right =
   brighter), per-control reset-⨯ + double-click reset, Separation Damping
-  disabled at printSaturation 1, mixer/grading band pickers, and the
+  disabled at printSaturation 1, Mask Spacer disabled at contrastMask 0,
+  mixer/grading band pickers, and the
   GradientSlider color tracks (grading Temp/Tint/R↔C/G↔M/B↔Y static;
   mixer Hue/Saturation restyled per band — the Mac sections' exact color
   literals, stylesheet gradients on the groove). When the Mac sidebar
@@ -237,8 +243,10 @@ live re-binning from every render, history labels per channel. The
 inverse remap is re-expressed in C++ (the kernel stays the rendering
 source of truth).
 
-- Still missing (Phase D+): test strip, densitometer/zones, ICC-tagged
-  output (lcms2).
+- Still missing (Phase D+): test strip, densitometer/zones, the
+  littleCMS display/export CONVERSION path (exports are ICC-TAGGED
+  already — verified 2026-08-22 on negcli and si_export_tiff output,
+  tag 34675 carrying the 480-byte v4 profiles).
 
 **Toolchain constraints (this machine has Command Line Tools, no Xcode):**
 - No XCTest and Testing.framework lives outside default search paths → tests

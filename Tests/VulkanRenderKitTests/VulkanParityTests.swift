@@ -134,6 +134,63 @@ struct VulkanParityTests {
         try assertParity(s, "toe/shoulder knees + printSaturation/damping + trueBlack + paperDmin")
     }
 
+    /// Contrast Mask active: the GLSL 1-D-gid → (x, y) mapping through
+    /// maskDims.zw plus the hand-rolled bilinear plane sample must match the
+    /// CPU reference (pinned to NegPy by the contrast_mask fixtures). Tight
+    /// gate like the Mac's — the mask is a small pre-curve add, and the
+    /// standard 0.04 max could hide a half-pixel mapping error.
+    @Test func contrastMaskMatchesCPU() throws {
+        let pipeline = try requirePipeline()
+        var s = ExposureSettings()
+        s.preSaturation = 1.0
+        s.skinProtection = 0
+        s.contrastMask = 0.35
+        s.maskSpacer = 4.0
+        let params = ExposureKernel.deriveRenderParams(s, Self.analysis)
+        #expect(params.maskValScale != .zero, "mask gate should be on")
+        let plane = try #require(
+            ContrastMask.buildPlane(
+                renderSource: Self.image, bounds: Self.analysis.baseBounds,
+                spacerPercent: s.maskSpacer))
+
+        let cpu = ReferenceCurve.encodeOutput(
+            ReferenceCurve.applyPrintCurve(
+                ReferenceCurve.normalize(Self.image, bounds: params.finalBounds),
+                params: params, maskPlane: plane))
+        let gpu = try pipeline.render(
+            image: Self.image, params: params, computeHistogram: false, maskPlane: plane
+        ).encoded
+        let d = compare(cpu, gpu, gate: Gate(mean: 1e-3, max: 0.02))
+        #expect(d.pass, "contrast mask: mean \(d.mean) max \(d.max)")
+
+        // And a RENDER-SIZE ≠ PLANE-SIZE case: upsample the source 3× so the
+        // bilinear mapping is exercised off the identity path (the HQ/export
+        // situation — one proxy-built plane sampled by a bigger render).
+        let bw = Self.image.width * 3, bh = Self.image.height * 3
+        let big = RGBImage(width: bw, height: bh) { dst in
+            Self.image.pixels.withUnsafeBufferPointer { src in
+                for y in 0..<bh {
+                    for x in 0..<bw {
+                        let sIdx = ((y / 3) * Self.image.width + (x / 3)) * 3
+                        let dIdx = (y * bw + x) * 3
+                        dst[dIdx] = src[sIdx]
+                        dst[dIdx + 1] = src[sIdx + 1]
+                        dst[dIdx + 2] = src[sIdx + 2]
+                    }
+                }
+            }
+        }
+        let cpuBig = ReferenceCurve.encodeOutput(
+            ReferenceCurve.applyPrintCurve(
+                ReferenceCurve.normalize(big, bounds: params.finalBounds),
+                params: params, maskPlane: plane))
+        let gpuBig = try pipeline.render(
+            image: big, params: params, computeHistogram: false, maskPlane: plane
+        ).encoded
+        let dBig = compare(cpuBig, gpuBig, gate: Gate(mean: 1e-3, max: 0.02))
+        #expect(dBig.pass, "contrast mask 3x: mean \(dBig.mean) max \(dBig.max)")
+    }
+
     @Test func levelsRemapMatchesCPU() throws {
         var s = ExposureSettings()
         s.levelsRed = [SIMD2(0.3, 0.22), SIMD2(0.7, 0.8)]

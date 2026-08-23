@@ -206,11 +206,20 @@ public final class VulkanRenderPipeline: @unchecked Sendable {
     let context: VulkanContext
     public var deviceName: String { context.deviceName }
 
-    // One pipeline per kernel; two descriptor-set layouts (SSBO/SSBO/UBO for
-    // the value passes, SSBO/SSBO/SSBO for the levels-consuming passes).
+    // One pipeline per kernel; three descriptor-set layouts (SSBO/SSBO/UBO
+    // for the value passes, SSBO/SSBO/UBO/SSBO for print_curve — the fourth
+    // binding is the Contrast Mask plane — and SSBO/SSBO/SSBO for the
+    // levels-consuming passes).
+    enum LayoutKind {
+        case ubo    // normalize, color_pop
+        case curve  // print_curve (+ mask plane at binding 3)
+        case ssbo   // histogram, encode_f, encode_u8
+    }
     var layoutUBO: VkDescriptorSetLayout?
+    var layoutCurve: VkDescriptorSetLayout?
     var layoutSSBO: VkDescriptorSetLayout?
     var pipeLayoutUBO: VkPipelineLayout?
+    var pipeLayoutCurve: VkPipelineLayout?
     var pipeLayoutSSBO: VkPipelineLayout?
     var pipelines: [String: VkPipeline] = [:]
     var descriptorPool: VkDescriptorPool?
@@ -223,6 +232,10 @@ public final class VulkanRenderPipeline: @unchecked Sendable {
     var curveUBO: DeviceBuffer!
     var levelsSSBO: DeviceBuffer!
     var histSSBO: DeviceBuffer!
+    /// Bound at print_curve's binding 3 whenever no mask plane is supplied —
+    /// Vulkan requires every statically-declared binding bound even though
+    /// the uniform gate (maskScale.w == 0) means it is never read.
+    var dummyMaskSSBO: DeviceBuffer!
 
     /// Reused intermediates per size, mirroring the Metal cache discipline.
     private struct SizeKey: Hashable {
@@ -245,6 +258,21 @@ public final class VulkanRenderPipeline: @unchecked Sendable {
         }
     }
 
+    /// An uploaded Contrast Mask plane (single-channel floats on the analysis
+    /// grid) — the SSBO mirror of the Metal r32float mask texture. Grid-sized
+    /// (~1.5 MB); slider drags cost a uniform write, only spacer/crop/bounds
+    /// changes re-pay the upload.
+    public final class MaskBuffer {
+        let buffer: DeviceBuffer
+        public let width: Int
+        public let height: Int
+        init(buffer: DeviceBuffer, width: Int, height: Int) {
+            self.buffer = buffer
+            self.width = width
+            self.height = height
+        }
+    }
+
     public init() throws {
         context = try VulkanContext()
         try makeLayouts()
@@ -253,10 +281,12 @@ public final class VulkanRenderPipeline: @unchecked Sendable {
         let ssbo = VkBufferUsageFlags(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT.rawValue)
         let ubo = VkBufferUsageFlags(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT.rawValue)
         let xfer = VkBufferUsageFlags(VK_BUFFER_USAGE_TRANSFER_DST_BIT.rawValue)
-        normUBO = try DeviceBuffer(context: context, size: 48, usage: ubo)
-        curveUBO = try DeviceBuffer(context: context, size: 272, usage: ubo)
+        normUBO = try DeviceBuffer(context: context, size: MemoryLayout<NormUniforms>.stride, usage: ubo)
+        curveUBO = try DeviceBuffer(context: context, size: MemoryLayout<CurveUniforms>.stride, usage: ubo)
         levelsSSBO = try DeviceBuffer(context: context, size: 51 * 4, usage: ssbo)
         histSSBO = try DeviceBuffer(context: context, size: 1024 * 4, usage: ssbo | xfer, hostReadback: true)
+        dummyMaskSSBO = try DeviceBuffer(context: context, size: 4, usage: ssbo)
+        dummyMaskSSBO.mapped!.assumingMemoryBound(to: Float.self).pointee = 0
     }
 
     // MARK: - Setup
@@ -287,6 +317,10 @@ public final class VulkanRenderPipeline: @unchecked Sendable {
             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
             VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
         ])
+        layoutCurve = try layout(types: [
+            VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+        ])
         layoutSSBO = try layout(types: [
             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
@@ -316,7 +350,24 @@ public final class VulkanRenderPipeline: @unchecked Sendable {
             return result
         }
         pipeLayoutUBO = try pipeLayout(layoutUBO)
+        pipeLayoutCurve = try pipeLayout(layoutCurve)
         pipeLayoutSSBO = try pipeLayout(layoutSSBO)
+    }
+
+    func setLayout(for kind: LayoutKind) -> VkDescriptorSetLayout? {
+        switch kind {
+        case .ubo: return layoutUBO
+        case .curve: return layoutCurve
+        case .ssbo: return layoutSSBO
+        }
+    }
+
+    private func pipeLayout(for kind: LayoutKind) -> VkPipelineLayout? {
+        switch kind {
+        case .ubo: return pipeLayoutUBO
+        case .curve: return pipeLayoutCurve
+        case .ssbo: return pipeLayoutSSBO
+        }
     }
 
     private func loadSPIRV(_ name: String) throws -> [UInt32] {
@@ -331,12 +382,11 @@ public final class VulkanRenderPipeline: @unchecked Sendable {
     }
 
     private func makePipelines() throws {
-        // (kernel spv name, uses the UBO layout)
-        let kernels: [(String, Bool)] = [
-            ("normalize", true), ("print_curve", true), ("color_pop", true),
-            ("histogram", false), ("encode_f", false), ("encode_u8", false),
+        let kernels: [(String, LayoutKind)] = [
+            ("normalize", .ubo), ("print_curve", .curve), ("color_pop", .ubo),
+            ("histogram", .ssbo), ("encode_f", .ssbo), ("encode_u8", .ssbo),
         ]
-        for (name, usesUBO) in kernels {
+        for (name, kind) in kernels {
             let code = try loadSPIRV(name)
             var moduleInfo = VkShaderModuleCreateInfo()
             moduleInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO
@@ -360,7 +410,7 @@ public final class VulkanRenderPipeline: @unchecked Sendable {
                 var info = VkComputePipelineCreateInfo()
                 info.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO
                 info.stage = stage
-                info.layout = usesUBO ? pipeLayoutUBO : pipeLayoutSSBO
+                info.layout = pipeLayout(for: kind)
                 try vkCheck(
                     vkCreateComputePipelines(context.device, nil, 1, &info, nil, &pipeline),
                     "vkCreateComputePipelines(\(name))")
@@ -418,8 +468,10 @@ public final class VulkanRenderPipeline: @unchecked Sendable {
             if commandPool != nil { vkDestroyCommandPool(context.device, commandPool, nil) }
             if descriptorPool != nil { vkDestroyDescriptorPool(context.device, descriptorPool, nil) }
             if pipeLayoutUBO != nil { vkDestroyPipelineLayout(context.device, pipeLayoutUBO, nil) }
+            if pipeLayoutCurve != nil { vkDestroyPipelineLayout(context.device, pipeLayoutCurve, nil) }
             if pipeLayoutSSBO != nil { vkDestroyPipelineLayout(context.device, pipeLayoutSSBO, nil) }
             if layoutUBO != nil { vkDestroyDescriptorSetLayout(context.device, layoutUBO, nil) }
+            if layoutCurve != nil { vkDestroyDescriptorSetLayout(context.device, layoutCurve, nil) }
             if layoutSSBO != nil { vkDestroyDescriptorSetLayout(context.device, layoutSSBO, nil) }
         }
     }
@@ -439,6 +491,14 @@ public final class VulkanRenderPipeline: @unchecked Sendable {
             buf.mapped!.copyMemory(from: src.baseAddress!, byteCount: src.count * 4)
         }
         return SourceBuffer(buffer: buf, width: image.width, height: image.height)
+    }
+
+    public func uploadMaskPlane(_ plane: ContrastMask.Plane) throws -> MaskBuffer {
+        let buf = try storageBuffer(size: plane.values.count * 4)
+        plane.values.withUnsafeBufferPointer { src in
+            buf.mapped!.copyMemory(from: src.baseAddress!, byteCount: src.count * 4)
+        }
+        return MaskBuffer(buffer: buf, width: plane.width, height: plane.height)
     }
 
     private func readback(_ buf: DeviceBuffer, width: Int, height: Int) -> RGBImage {
@@ -513,10 +573,10 @@ public final class VulkanRenderPipeline: @unchecked Sendable {
     }
 
     private func bindAndDispatch(
-        _ cmd: VkCommandBuffer?, kernel: String, usesUBO: Bool, set: VkDescriptorSet?, n: UInt32,
+        _ cmd: VkCommandBuffer?, kernel: String, layout: LayoutKind, set: VkDescriptorSet?, n: UInt32,
         flags: UInt32 = 0
     ) {
-        let pipeLayout = usesUBO ? pipeLayoutUBO : pipeLayoutSSBO
+        let pipeLayout = pipeLayout(for: layout)
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelines[kernel])
         var setVar = set
         withUnsafePointer(to: setVar) { sPtr in
@@ -567,15 +627,28 @@ public final class VulkanRenderPipeline: @unchecked Sendable {
     private func encodeAndRun(
         source: SourceBuffer, params: RenderParams, computeHistogram: Bool,
         encodeKernel: String, encodeTarget: DeviceBuffer,
-        normalized: DeviceBuffer, linear: DeviceBuffer, encodeFlags: UInt32 = 0
+        normalized: DeviceBuffer, linear: DeviceBuffer, encodeFlags: UInt32 = 0,
+        maskPlane: MaskBuffer? = nil
     ) throws -> DeviceBuffer {
         let n = UInt32(source.width * source.height)
 
         // Pack uniforms — same builder as Metal, memcpy'd (std140 == C here).
         var normU = UniformsBuilder.normUniforms(params)
-        withUnsafeBytes(of: &normU) { normUBO.mapped!.copyMemory(from: $0.baseAddress!, byteCount: 48) }
-        var curveU = UniformsBuilder.curveUniforms(params)
-        withUnsafeBytes(of: &curveU) { curveUBO.mapped!.copyMemory(from: $0.baseAddress!, byteCount: 272) }
+        withUnsafeBytes(of: &normU) {
+            normUBO.mapped!.copyMemory(from: $0.baseAddress!, byteCount: $0.count)
+        }
+        var curveU = UniformsBuilder.curveUniforms(
+            params, maskDims: maskPlane.map { ($0.width, $0.height) })
+        if curveU.maskScale.w != 0 {
+            // maskDims.zw = RENDER dims: the GLSL sample maps its 1-D gid to
+            // (x, y) through these (the Metal mirror queries its output
+            // texture's size instead — a flat SSBO has none to query).
+            curveU.maskDims.z = Float(source.width)
+            curveU.maskDims.w = Float(source.height)
+        }
+        withUnsafeBytes(of: &curveU) {
+            curveUBO.mapped!.copyMemory(from: $0.baseAddress!, byteCount: $0.count)
+        }
         let levels = UniformsBuilder.levelsBuffer(params)
         levels.withUnsafeBufferPointer {
             levelsSSBO.mapped!.copyMemory(from: $0.baseAddress!, byteCount: 51 * 4)
@@ -609,12 +682,18 @@ public final class VulkanRenderPipeline: @unchecked Sendable {
         let normSet = try writeDescriptorSet(
             layout: layoutUBO,
             buffers: [(source.buffer, ssbo), (normalized, ssbo), (normUBO, ubo)])
-        bindAndDispatch(cmd, kernel: "normalize", usesUBO: true, set: normSet, n: n)
+        bindAndDispatch(cmd, kernel: "normalize", layout: .ubo, set: normSet, n: n)
         computeBarrier(cmd)
 
+        // The mask plane rides binding 3; the dummy stands in when off (the
+        // maskScale.w gate means it is never read).
         let curveSet = try writeDescriptorSet(
-            layout: layoutUBO, buffers: [(normalized, ssbo), (linear, ssbo), (curveUBO, ubo)])
-        bindAndDispatch(cmd, kernel: "print_curve", usesUBO: true, set: curveSet, n: n)
+            layout: layoutCurve,
+            buffers: [
+                (normalized, ssbo), (linear, ssbo), (curveUBO, ubo),
+                (maskPlane?.buffer ?? dummyMaskSSBO, ssbo),
+            ])
+        bindAndDispatch(cmd, kernel: "print_curve", layout: .curve, set: curveSet, n: n)
         computeBarrier(cmd)
 
         // Color pop writes into `normalized` (already consumed), which then
@@ -623,7 +702,7 @@ public final class VulkanRenderPipeline: @unchecked Sendable {
         if colorPopActive(params) {
             let popSet = try writeDescriptorSet(
                 layout: layoutUBO, buffers: [(linear, ssbo), (normalized, ssbo), (curveUBO, ubo)])
-            bindAndDispatch(cmd, kernel: "color_pop", usesUBO: true, set: popSet, n: n)
+            bindAndDispatch(cmd, kernel: "color_pop", layout: .ubo, set: popSet, n: n)
             computeBarrier(cmd)
             content = normalized
         }
@@ -631,12 +710,12 @@ public final class VulkanRenderPipeline: @unchecked Sendable {
         if computeHistogram {
             let histSet = try writeDescriptorSet(
                 layout: layoutSSBO, buffers: [(content, ssbo), (histSSBO, ssbo), (levelsSSBO, ssbo)])
-            bindAndDispatch(cmd, kernel: "histogram", usesUBO: false, set: histSet, n: n)
+            bindAndDispatch(cmd, kernel: "histogram", layout: .ssbo, set: histSet, n: n)
         }
 
         let encodeSet = try writeDescriptorSet(
             layout: layoutSSBO, buffers: [(content, ssbo), (encodeTarget, ssbo), (levelsSSBO, ssbo)])
-        bindAndDispatch(cmd, kernel: encodeKernel, usesUBO: false, set: encodeSet, n: n, flags: encodeFlags)
+        bindAndDispatch(cmd, kernel: encodeKernel, layout: .ssbo, set: encodeSet, n: n, flags: encodeFlags)
 
         try vkCheck(vkEndCommandBuffer(cmd), "vkEndCommandBuffer")
 
@@ -669,7 +748,7 @@ public final class VulkanRenderPipeline: @unchecked Sendable {
     /// export leg). Off for parity with the Mac's Adobe-encoded output.
     public func render(
         source: SourceBuffer, params: RenderParams, computeHistogram: Bool = true,
-        wantLinear: Bool = false, srgbEncode: Bool = false
+        wantLinear: Bool = false, srgbEncode: Bool = false, maskPlane: MaskBuffer? = nil
     ) throws -> Result {
         renderLock.lock()
         defer { renderLock.unlock() }
@@ -678,7 +757,8 @@ public final class VulkanRenderPipeline: @unchecked Sendable {
         let content = try encodeAndRun(
             source: source, params: params, computeHistogram: computeHistogram,
             encodeKernel: "encode_f", encodeTarget: encodedOpt!,
-            normalized: normalized, linear: linear, encodeFlags: srgbEncode ? 1 : 0)
+            normalized: normalized, linear: linear, encodeFlags: srgbEncode ? 1 : 0,
+            maskPlane: maskPlane)
         return Result(
             encoded: readback(encodedOpt!, width: w, height: h),
             linear: wantLinear ? readback(content, width: w, height: h) : nil,
@@ -686,17 +766,22 @@ public final class VulkanRenderPipeline: @unchecked Sendable {
     }
 
     public func render(
-        image: RGBImage, params: RenderParams, computeHistogram: Bool = true
+        image: RGBImage, params: RenderParams, computeHistogram: Bool = true,
+        maskPlane: ContrastMask.Plane? = nil
     ) throws -> (encoded: RGBImage, histogram: [UInt32]) {
         let source = try upload(image)
-        let result = try render(source: source, params: params, computeHistogram: computeHistogram)
+        let mask = try maskPlane.map { try uploadMaskPlane($0) }
+        let result = try render(
+            source: source, params: params, computeHistogram: computeHistogram,
+            maskPlane: mask)
         return (result.encoded, result.histogram)
     }
 
     /// The display encode chain up to (not including) readback; caller must
     /// hold `renderLock`. Returns the rgba8 GPU buffer for this size.
     private func displayEncode(
-        source: SourceBuffer, params: RenderParams, computeHistogram: Bool, srgbDisplay: Bool
+        source: SourceBuffer, params: RenderParams, computeHistogram: Bool, srgbDisplay: Bool,
+        maskPlane: MaskBuffer? = nil
     ) throws -> DeviceBuffer {
         let w = source.width, h = source.height
         let (normalized, linear, _) = try intermediatesFor(width: w, height: h, needEncoded: false)
@@ -716,7 +801,8 @@ public final class VulkanRenderPipeline: @unchecked Sendable {
         _ = try encodeAndRun(
             source: source, params: params, computeHistogram: computeHistogram,
             encodeKernel: "encode_u8", encodeTarget: encoded8,
-            normalized: normalized, linear: linear, encodeFlags: srgbDisplay ? 1 : 0)
+            normalized: normalized, linear: linear, encodeFlags: srgbDisplay ? 1 : 0,
+            maskPlane: maskPlane)
         return encoded8
     }
 
@@ -725,14 +811,14 @@ public final class VulkanRenderPipeline: @unchecked Sendable {
     /// tagged-Adobe readback.
     public func renderDisplay(
         source: SourceBuffer, params: RenderParams, computeHistogram: Bool = true,
-        srgbDisplay: Bool = false
+        srgbDisplay: Bool = false, maskPlane: MaskBuffer? = nil
     ) throws -> DisplayResult {
         renderLock.lock()
         defer { renderLock.unlock() }
         let w = source.width, h = source.height
         let encoded8 = try displayEncode(
             source: source, params: params, computeHistogram: computeHistogram,
-            srgbDisplay: srgbDisplay)
+            srgbDisplay: srgbDisplay, maskPlane: maskPlane)
         let rgba = [UInt8](unsafeUninitializedCapacity: w * h * 4) { buf, count in
             buf.baseAddress!.update(
                 from: encoded8.mapped!.assumingMemoryBound(to: UInt8.self), count: w * h * 4)
@@ -750,13 +836,14 @@ public final class VulkanRenderPipeline: @unchecked Sendable {
     /// with this call.
     public func renderDisplay(
         source: SourceBuffer, params: RenderParams, computeHistogram: Bool = true,
-        srgbDisplay: Bool = false, into dest: UnsafeMutableRawPointer
+        srgbDisplay: Bool = false, maskPlane: MaskBuffer? = nil,
+        into dest: UnsafeMutableRawPointer
     ) throws -> [UInt32] {
         renderLock.lock()
         defer { renderLock.unlock() }
         let encoded8 = try displayEncode(
             source: source, params: params, computeHistogram: computeHistogram,
-            srgbDisplay: srgbDisplay)
+            srgbDisplay: srgbDisplay, maskPlane: maskPlane)
         dest.copyMemory(from: encoded8.mapped!, byteCount: source.width * source.height * 4)
         return readHistogram()
     }
