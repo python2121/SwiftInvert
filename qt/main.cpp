@@ -662,10 +662,16 @@ private:
         const FileHistory &h = histories_.value(currentPath_);
         historyList_->blockSignals(true);
         historyList_->clear();
-        for (const HistoryEntry &e : h.entries) historyList_->addItem(e.label);
-        if (h.index >= 0) historyList_->setCurrentRow(h.index);
+        // Newest on top (the Mac HistoryPanel's order): row 0 is the last
+        // entry, so each item carries its entry index for click-to-jump.
+        for (int i = h.entries.size() - 1; i >= 0; --i) {
+            auto *item = new QListWidgetItem(h.entries[i].label);
+            item->setData(Qt::UserRole, i);
+            historyList_->addItem(item);
+        }
+        if (h.index >= 0) historyList_->setCurrentRow(h.entries.size() - 1 - h.index);
         historyList_->blockSignals(false);
-        historyList_->scrollToBottom();
+        historyList_->scrollToTop();
     }
 
     // ── Tools ─────────────────────────────────────────────────────────────
@@ -1228,12 +1234,12 @@ private:
             }));
 
         // History: per-file entries, click to jump (undo/redo walk the same
-        // list). Kept at the bottom like the Mac's HistoryPanel.
+        // list, newest on top). Kept at the bottom like the Mac's HistoryPanel.
         historyList_ = new QListWidget;
         historyList_->setFixedHeight(110);
         historyList_->setStyleSheet("font-size: 11px;");
         connect(historyList_, &QListWidget::itemClicked, this,
-                [this](QListWidgetItem *item) { jumpHistory(historyList_->row(item)); });
+                [this](QListWidgetItem *item) { jumpHistory(item->data(Qt::UserRole).toInt()); });
         layout->addWidget(section(tr("History"), {historyList_}));
 
         layout->addStretch();
