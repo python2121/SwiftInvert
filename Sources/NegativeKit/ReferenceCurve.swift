@@ -142,6 +142,15 @@ public enum ReferenceCurve {
                             + params.highlightCMY[ch] * wH
                     }
 
+                    // Highlight Hold's automatic burn: upstream's Zone
+                    // Density highlight term (8532dd92 rides it), the last
+                    // density op before the knees — their placement.
+                    if params.autoHighlight != 0 {
+                        let zHi = K.anchorTargetDensity + K.zoneDensityHighlightOffset
+                        v += params.autoHighlight
+                            * (1.0 - CurveLogic.sigmoid(K.zoneDensitySharpness * (v - zHi)))
+                    }
+
                     let v1 = dMinEff[ch] + CurveLogic.softplus(aHl * (v - dMinEff[ch])) / aHl
                     dens[ch] = dMaxEff[ch] - CurveLogic.softplus(aSh * (dMaxEff[ch] - v1)) / aSh
                 }

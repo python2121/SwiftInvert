@@ -81,6 +81,12 @@ func expectImageClose(
         }
         expectClose(analysis.anchor, meters["metered_anchor"] as! Double, accuracy: 1e-4, "anchor")
         expectClose(analysis.texturalRange, meters["textural_range"] as! Double, accuracy: 1e-4, "textural")
+        expectClose(
+            try #require(analysis.shadowPoint), meters["shadow_point"] as! Double,
+            accuracy: 1e-4, "shadow_point")
+        expectClose(
+            try #require(analysis.highlightPoint), meters["highlight_point"] as! Double,
+            accuracy: 1e-4, "highlight_point")
         let shadowRefs = meters["shadow_log_refs"] as! [Double]
         for ch in 0..<3 {
             expectClose(analysis.shadowRefs[ch], shadowRefs[ch], accuracy: 1e-4, "shadow ref \(ch)")
@@ -125,6 +131,11 @@ func expectImageClose(
         expectClose(params.toeEff, cp["toe_eff"] as! Double, accuracy: 1e-4, "\(name) toe_eff")
         expectClose(params.shoulderEff, cp["shoulder_eff"] as! Double, accuracy: 1e-4, "\(name) shoulder_eff")
         expectClose(params.vStar, cp["v_star"] as! Double, accuracy: 1e-6, "\(name) v_star")
+        // Highlight Hold's burn (8532dd92) — expo_dark drives it to the cap,
+        // so the zone term is exercised end-to-end by fullChain below.
+        expectClose(
+            params.autoHighlight, cp["auto_highlight"] as! Double, accuracy: 1e-4,
+            "\(name) auto_highlight")
     }
 
     @Test(arguments: ["default", "expo_dark", "expo_cmy"])

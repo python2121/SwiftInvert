@@ -43,8 +43,11 @@ public enum CurveLogic {
         density * logRange / K.cmyMaxDensity
     }
 
-    /// Fallback density range: auto_grade_target * nominal ratio.
-    public static var defaultGradeRange: Double { K.autoGradeTarget * K.autoGradeNominalRatio }
+    /// Fallback density range when none is measured: a normal negative's,
+    /// scaled by K (default_grade_range, 8532dd92 form).
+    public static var defaultGradeRange: Double {
+        K.autoGradeTarget * K.autoGradeNominalRatio * K.autoGradeNominalRange
+    }
 
     /// grade_to_slope: k = grade_contrast_scale * range / (ISO R / 100), clamped.
     public static func gradeToSlope(_ grade: Double, densityRange: Double?) -> Double {
@@ -70,7 +73,13 @@ public enum CurveLogic {
         return (toe + K.toeGradeStrength * slopeNorm, shoulder + K.shoulderGradeStrength * slopeNorm)
     }
 
-    /// effective_grade_range: Auto Grade damping of the floor-ceil/textural ratio.
+    /// effective_grade_range (8532dd92, Alkofer US 4,731,671). Auto Grade
+    /// off: the measured floor-to-ceil range, a fixed paper. On: the paper
+    /// gamma follows the negative's textural density scale, shrunk toward a
+    /// normal negative's — effective = K · floor_ceil · ((1−s) + s·n/t) —
+    /// so the printed textural range is (1−s) of the frame's own plus s of
+    /// the norm, capped at maxOverfill of the norm's print span (a grade
+    /// whose paper range is far shorter than the negative's clips both ends).
     public static func effectiveGradeRange(
         autoNormalizeContrast: Bool, floorCeilRange: Double?, texturalRange: Double?
     ) -> Double? {
@@ -78,18 +87,55 @@ public enum CurveLogic {
         guard let texturalRange, let floorCeilRange else { return defaultGradeRange }
         let measured = abs(texturalRange)
         if measured < 1e-6 { return 3.5 }
-        let ratio = abs(floorCeilRange) / measured
-        return K.autoGradeTarget * (K.autoGradeNominalRatio + K.autoGradeStrength * (ratio - K.autoGradeNominalRatio))
+        let q = K.autoGradeNominalRange / measured
+        let s = K.autoGradeStrength
+        let factor = min((1.0 - s) + s * q, q * K.autoGradeMaxOverfill)
+        return K.autoGradeTarget * abs(floorCeilRange) * factor
     }
 
     /// _reference_linear_value: straight-line density v* that the base toe/shoulder
-    /// bounds map onto anchor_target_density (closed form via inverse softplus).
-    public static func referenceLinearValue(dMin: Double = 0.0) -> Double {
-        let t = K.anchorTargetDensity
+    /// bounds map onto `target` (default anchor_target_density; Shadow Reach and
+    /// Highlight Hold pass their own — closed form via inverse softplus).
+    public static func referenceLinearValue(dMin: Double = 0.0, target: Double? = nil) -> Double {
+        let t = target ?? K.anchorTargetDensity
         let aHl = K.shoulderSharpnessBase
         let aSh = K.toeSharpnessBase
         let v1 = K.dMax - invSoftplus(aSh * (K.dMax - t)) / aSh
         return dMin + invSoftplus(aHl * (v1 - dMin)) / aHl
+    }
+
+    /// shadow_reach_slope (8532dd92; Gindele US 7,113,649, Ajewole
+    /// US 5,046,118): Auto Grade's floor on the slope — the textured dark
+    /// tail at `shadowPoint` must print at least shadowReachDensity while the
+    /// anchor stays at its target, so the slope is raised to the straight
+    /// line through both when the grade alone falls short. Never lowered.
+    public static func shadowReachSlope(
+        _ slope: Double, anchor: Double, shadowPoint: Double, dMin: Double = 0.0
+    ) -> Double {
+        let span = shadowPoint - anchor
+        if span <= 1e-6 { return slope }
+        let vBlack = referenceLinearValue(dMin: dMin, target: K.shadowReachDensity)
+        let needed = (vBlack - referenceLinearValue(dMin: dMin)) / span
+        return min(max(slope, needed), K.slopeMax)
+    }
+
+    /// highlight_hold_offset (8532dd92): Auto Grade's soft exposure — the
+    /// highlight-zone burn that lands the textured bright tail at
+    /// `highlightPoint` on highlightHoldDensity when the straight line would
+    /// print it brighter. Solved against the zone term's own weight at that
+    /// tone, so the burn lands exactly and stays under the shoulder. Never
+    /// lifts; 0 when the tone already holds (or the target is 0 = off).
+    public static func highlightHoldOffset(
+        slope: Double, pivot: Double, highlightPoint: Double, dMin: Double = 0.0
+    ) -> Double {
+        let target = K.highlightHoldDensity
+        if target <= 0.0 { return 0.0 }
+        let v = slope * (highlightPoint - pivot)
+        let vHold = referenceLinearValue(dMin: dMin, target: target)
+        if v >= vHold { return 0.0 }
+        let zHi = K.anchorTargetDensity + K.zoneDensityHighlightOffset
+        let w = 1.0 - sigmoid(K.zoneDensitySharpness * (v - zHi))
+        return min((vHold - v) / max(w, 1e-6), K.highlightHoldMax)
     }
 
     /// compute_pivot: solve so the reference tone prints at anchor_target_density.
@@ -147,11 +193,18 @@ public enum CurveLogic {
         texturalRange: Double?,
         dMin: Double = 0.0,
         anchor: Double? = nil,
-        neutralAxisNorm: (mid: SIMD3<Double>, shadow: SIMD3<Double>, highlight: SIMD3<Double>?)? = nil
+        neutralAxisNorm: (mid: SIMD3<Double>, shadow: SIMD3<Double>, highlight: SIMD3<Double>?)? = nil,
+        shadowPoint: Double? = nil
     ) -> (slopes: SIMD3<Double>, pivots: SIMD3<Double>, curvatures: SIMD3<Double>) {
         let rEff = effectiveGradeRange(
             autoNormalizeContrast: autoNormalizeContrast, floorCeilRange: lumRange, texturalRange: texturalRange)
-        let baseSlope = gradeToSlope(grade, densityRange: rEff)
+        var baseSlope = gradeToSlope(grade, densityRange: rEff)
+        // Shadow Reach rides Auto Grade only: the dark tail's floor raises
+        // the shared base slope before any per-channel cast solve.
+        if autoNormalizeContrast, let shadowPoint {
+            baseSlope = shadowReachSlope(
+                baseSlope, anchor: anchor ?? K.assumedAnchor, shadowPoint: shadowPoint, dMin: dMin)
+        }
         let eps = 1e-6
 
         if strength > 0, let na = neutralAxisNorm {

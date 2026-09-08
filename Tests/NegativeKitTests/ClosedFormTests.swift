@@ -60,6 +60,30 @@ import Testing
                 CurveLogic.referenceLinearValue(dMin: c["d_min"] as! Double),
                 c["out"] as! Double, accuracy: 1e-9, "\(c)")
         }
+        for c in try cases("reference_linear_value_target") {
+            expectClose(
+                CurveLogic.referenceLinearValue(
+                    dMin: c["d_min"] as! Double, target: c["target"] as? Double),
+                c["out"] as! Double, accuracy: 1e-9, "\(c)")
+        }
+    }
+
+    /// Shadow Reach / Highlight Hold oracles (8532dd92): the synthetic64
+    /// images never fire the reach, so these vectors are its real pin —
+    /// dumped from upstream's own shadow_reach_slope/highlight_hold_offset.
+    @Test func shadowReachAndHighlightHold() throws {
+        for c in try cases("shadow_reach_slope") {
+            let got = CurveLogic.shadowReachSlope(
+                c["slope"] as! Double, anchor: c["anchor"] as! Double,
+                shadowPoint: c["shadow_point"] as! Double, dMin: c["d_min"] as! Double)
+            expectClose(got, c["out"] as! Double, accuracy: 1e-9, "\(c)")
+        }
+        for c in try cases("highlight_hold_offset") {
+            let got = CurveLogic.highlightHoldOffset(
+                slope: c["slope"] as! Double, pivot: c["pivot"] as! Double,
+                highlightPoint: c["highlight_point"] as! Double, dMin: c["d_min"] as! Double)
+            expectClose(got, c["out"] as! Double, accuracy: 1e-9, "\(c)")
+        }
     }
 
     @Test func softplusOracles() throws {

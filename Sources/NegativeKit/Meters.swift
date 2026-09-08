@@ -35,16 +35,120 @@ public enum Meters {
         return luma
     }
 
-    /// measure_anchor_from_log: P50 of normalized luma, partially pulled toward
-    /// assumed_anchor and clamped to ±anchor_meter_band.
-    public static func anchor(grid: RGBImage, bounds: LogNegativeBounds) -> Double {
-        let lum = normalizedLuma(grid: grid, bounds: bounds)
-        let measured = Stats.percentile(lum, K.anchorMeterPercentile)
-        let anchor = K.assumedAnchor + K.anchorMeterStrength * (measured - K.assumedAnchor)
-        return min(max(anchor, K.assumedAnchor - K.anchorMeterBand), K.assumedAnchor + K.anchorMeterBand)
+    /// _textured_cells (NegPy 8532dd92, Boyack & Juenger US 5,724,456): the
+    /// cells of a luma grid that carry detail. The grid is tiled into sectors
+    /// of 2×2 blocks of activityBlock cells; a sector votes when its four
+    /// block means span more than activityGateDensity. Block means average
+    /// grain out, and a flat sector beside a textured one stays out because
+    /// only its own blocks are compared. Falls back to every cell when the
+    /// grid is smaller than one sector or too few sectors pass. The gate
+    /// reads whatever units `lum` is in (log D for the textural meter,
+    /// normalized luma for the anchor/points — upstream's own behaviour).
+    static func texturedCells(_ lum: [Float], width: Int, height: Int) -> [Float] {
+        let b = K.activityBlock
+        let hs = (height / (2 * b)) * 2 * b
+        let ws = (width / (2 * b)) * 2 * b
+        if hs == 0 || ws == 0 { return lum }
+
+        // Per-block means over the top-left hs×ws core (Double accumulation;
+        // numpy's float32 pairwise mean agrees to ~1 ulp over 64 taps).
+        let by = hs / b, bx = ws / b
+        var blocks = [Float](repeating: 0, count: by * bx)
+        lum.withUnsafeBufferPointer { src in
+            for j in 0..<by {
+                for i in 0..<bx {
+                    var sum = 0.0
+                    for y in (j * b)..<((j + 1) * b) {
+                        let row = y * width + i * b
+                        for x in 0..<b { sum += Double(src[row + x]) }
+                    }
+                    blocks[j * bx + i] = Float(sum / Double(b * b))
+                }
+            }
+        }
+
+        // Sector vote: max−min of the 2×2 block means against the gate.
+        let sy = by / 2, sx = bx / 2
+        var active = [Bool](repeating: false, count: sy * sx)
+        var activeCount = 0
+        for j in 0..<sy {
+            for i in 0..<sx {
+                let a = blocks[(2 * j) * bx + 2 * i], c = blocks[(2 * j) * bx + 2 * i + 1]
+                let d = blocks[(2 * j + 1) * bx + 2 * i], e = blocks[(2 * j + 1) * bx + 2 * i + 1]
+                let span = Double(max(max(a, c), max(d, e)) - min(min(a, c), min(d, e)))
+                if span > K.activityGateDensity {
+                    active[j * sx + i] = true
+                    activeCount += 1
+                }
+            }
+        }
+        if Double(activeCount) / Double(sy * sx) < K.activityMinFraction { return lum }
+
+        var kept: [Float] = []
+        kept.reserveCapacity(activeCount * 4 * b * b)
+        lum.withUnsafeBufferPointer { src in
+            for y in 0..<hs {
+                let sj = (y / (2 * b)) * sx
+                for x in 0..<ws where active[sj + x / (2 * b)] {
+                    kept.append(src[y * width + x])
+                }
+            }
+        }
+        return kept
     }
 
-    /// measure_textural_range_from_log: |P90 − P10| of raw log luma.
+    /// The three bounds-normalized textured-luma meters, sharing one gate and
+    /// one sort (upstream re-grids per meter; the inputs are identical):
+    /// - anchor (measure_anchor_from_log): the mean of the P5–P95 trimmed
+    ///   window and its midpoint, averaged, partially pulled toward
+    ///   assumed_anchor and clamped to ±anchor_meter_band — a skewed
+    ///   histogram is placed by its detail-bearing span, not its median.
+    /// - shadowPoint (measure_shadow_point_from_log): P99, the tone Shadow
+    ///   Reach prints at paper black.
+    /// - highlightPoint (measure_highlight_point_from_log): P2, the tone
+    ///   Highlight Hold keeps off paper white.
+    public static func texturedLumaMeters(
+        grid: RGBImage, bounds: LogNegativeBounds
+    ) -> (anchor: Double, shadowPoint: Double, highlightPoint: Double) {
+        let lum = texturedCells(
+            normalizedLuma(grid: grid, bounds: bounds), width: grid.width, height: grid.height)
+        let sorted = Stats.sortedAscending(lum)
+
+        let clip = K.anchorTrimClip
+        let lo = Stats.percentileOfSorted(sorted, clip)
+        let hi = Stats.percentileOfSorted(sorted, 100.0 - clip)
+        // Mean over the inclusive [lo, hi] window — the sorted array makes it
+        // a contiguous run (same value set as numpy's boolean select; the
+        // Double accumulator makes the sum order-independent).
+        var sum = 0.0
+        var count = 0
+        for v in sorted {
+            let d = Double(v)
+            if d < lo { continue }
+            if d > hi { break }
+            sum += d
+            count += 1
+        }
+        let inner = count > 0 ? sum / Double(count) : 0.5 * (lo + hi)
+        let measured = 0.5 * (inner + 0.5 * (lo + hi))
+        let pulled = K.assumedAnchor + K.anchorMeterStrength * (measured - K.assumedAnchor)
+        let anchor = min(max(pulled, K.assumedAnchor - K.anchorMeterBand), K.assumedAnchor + K.anchorMeterBand)
+
+        return (
+            anchor: anchor,
+            shadowPoint: Stats.percentileOfSorted(sorted, K.shadowReachPercentile),
+            highlightPoint: Stats.percentileOfSorted(sorted, K.highlightHoldPercentile)
+        )
+    }
+
+    /// measure_anchor_from_log (see texturedLumaMeters — kept as the narrow
+    /// entry point for callers that only want the exposure key).
+    public static func anchor(grid: RGBImage, bounds: LogNegativeBounds) -> Double {
+        texturedLumaMeters(grid: grid, bounds: bounds).anchor
+    }
+
+    /// measure_textural_range_from_log: |P90 − P10| of raw log luma over the
+    /// textured cells (8532dd92 — rebate and flat sky no longer set grade).
     public static func texturalRange(grid: RGBImage) -> Double {
         let n = grid.width * grid.height
         var lum = [Float](repeating: 0, count: n)
@@ -56,7 +160,7 @@ public enum Meters {
         }
         // Through Stats so this shares the radix sort with every other meter
         // (a bare lum.sort() left this the slowest line in prepare).
-        let sortedLum = Stats.sortedAscending(lum)
+        let sortedLum = Stats.sortedAscending(texturedCells(lum, width: grid.width, height: grid.height))
         let lo = Stats.percentileOfSorted(sortedLum, K.texturalRangeClip)
         let hi = Stats.percentileOfSorted(sortedLum, 100.0 - K.texturalRangeClip)
         return abs(hi - lo)

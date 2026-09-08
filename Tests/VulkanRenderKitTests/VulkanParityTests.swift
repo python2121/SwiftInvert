@@ -314,6 +314,7 @@ struct VulkanLayoutTests {
         #expect(MemoryLayout<CurveUniforms>.offset(of: \.bandHues) == 224)
         #expect(MemoryLayout<CurveUniforms>.offset(of: \.separationDamping) == 256)
         #expect(MemoryLayout<CurveUniforms>.offset(of: \.hueTrim) == 264)
+        #expect(MemoryLayout<CurveUniforms>.offset(of: \.autoHighlight) == 268)
         #expect(MemoryLayout<CurveUniforms>.offset(of: \.maskScale) == 272)
         #expect(MemoryLayout<CurveUniforms>.offset(of: \.maskDims) == 288)
         #expect(MemoryLayout<CurveUniforms>.offset(of: \.toe) == 128)

@@ -24,7 +24,9 @@ public enum K {
     // Toe/shoulder slider pre-scale.
     public static let toeShoulderStrength = 0.85
     // Softplus knee sharpness: a = base * widthRef / width.
-    public static let toeSharpnessBase = 4.0
+    // 4.0 → 6.0 in NegPy 8532dd92 (0.58.0): the earlier toe dropped system
+    // gamma below Buhr's preferred-reproduction envelope by scene D 1.4.
+    public static let toeSharpnessBase = 6.0
     public static let shoulderSharpnessBase = 3.0
     public static let toeShoulderWidthRef = 2.5
     // Density shift per toe/shoulder slider unit. toeHeight is larger than
@@ -68,8 +70,21 @@ public enum K {
     // Width (percentile points) of the luma-extreme band the same-pixel colour
     // floor refs read; the colour clip sets the band's depth.
     public static let colorBoundsBandWidth = 4.0
-    // Anchor metering.
-    public static let anchorMeterPercentile = 50.0
+    // Anchor metering (NegPy 8532dd92: the P50-of-every-cell meter became the
+    // mean+midpoint of the trimmed textured window — Boyack & Juenger,
+    // US 5,724,456 — so rebate, sky and flat walls stop setting exposure).
+    // Activity gate shared by the anchor, textural-range and reach/hold
+    // meters: the grid is tiled into sectors of 2×2 blocks of activityBlock
+    // cells; a sector votes only when its four block means span more than
+    // activityGateDensity (in the units of the luma passed — log D for the
+    // textural meter, normalized luma for the anchor/points, upstream's own
+    // behaviour). Below activityMinFraction of sectors passing, every cell
+    // votes.
+    public static let activityBlock = 8
+    public static let activityGateDensity = 0.05
+    public static let activityMinFraction = 0.05
+    // Per-tail percentile trim of the textured-cell window the anchor reads.
+    public static let anchorTrimClip = 5.0
     public static let anchorMeterBand = 0.12
     public static let anchorMeterStrength = 0.2
     // Grade-coupled knees. toeGradeStrength is rescaled by 0.35/0.90 so the
@@ -78,15 +93,42 @@ public enum K {
     // (mirrors NegPy 0.36).
     public static let toeGradeStrength = 0.15 * 0.35 / 0.90
     public static let shoulderGradeStrength = 0.12
-    // Auto grade (NegPy 2db0470/088c393 retune, coupled to the Adobe RGB
-    // working space — tuned against that output, ported together with it).
-    public static let autoGradeTarget = 0.6
-    public static let autoGradeStrength = 0.5
-    public static let autoGradeNominalRatio = 2.0
+    // Auto Grade (NegPy 8532dd92, Alkofer US 4,731,671): the paper gamma
+    // follows the negative's textural density scale, shrunk toward a normal
+    // negative's — effective = K · floor_ceil · min((1−s) + s·n/t, c·n/t).
+    public static let autoGradeTarget = 0.85
+    public static let autoGradeStrength = 0.4
+    // Sizes the unmetered fallback only (× nominalRange × target).
+    public static let autoGradeNominalRatio = 1.5
+    // Textural (P10–P90) density range of a normal negative, log10 D.
+    public static let autoGradeNominalRange = 0.9
+    // Cap on the textural range's print span, as a multiple of the norm's.
+    public static let autoGradeMaxOverfill = 1.2
     // Textural-range percentile margin.
     public static let texturalRangeClip = 10.0
-    // Variable-gamma paper S-curve.
-    public static let paperMidtoneGamma = 0.15
+    // Auto Grade shadow reach (Gindele US 7,113,649): the textured dark tail
+    // (this percentile of gated normalized luma) must print at least this
+    // straight-line density; the grade only ever goes harder for it.
+    public static let shadowReachPercentile = 99.0
+    public static let shadowReachDensity = 1.9
+    // Auto Grade highlight hold, the soft-exposure half of a split-grade
+    // print (Agfa US 4,104,069 / 3,839,036): the textured bright tail (this
+    // percentile) must print at least this density, met by an automatic
+    // highlight-zone burn (never a lift) capped at highlightHoldMax. 0 = off.
+    public static let highlightHoldPercentile = 2.0
+    public static let highlightHoldDensity = 0.10
+    public static let highlightHoldMax = 0.5
+    // Zone Density actuator constants (NegPy models.py zone_density_*): the
+    // hold burn rides upstream's Zone Density highlight term
+    // v += burn · (1 − σ(sharpness · (v − (anchorTarget + highlightOffset)))).
+    // We ship no user Zone Density sliders — the term exists for the auto
+    // burn only. Mirrored as literals in NegPipeline.metal and
+    // NegPipeline.comp (4.0 / 0.40) — keep all three in sync.
+    public static let zoneDensitySharpness = 4.0
+    public static let zoneDensityHighlightOffset = -0.40
+    // Variable-gamma paper S-curve (0.15 → 0.05 in 8532dd92: the Snap bell
+    // pushed system gamma over Buhr's envelope near scene D 0.8).
+    public static let paperMidtoneGamma = 0.05
     public static let paperGammaWidth = 0.6
 
     // ── Regional tone controls (SwiftInvert addition, no NegPy equivalent) ──────

@@ -9,11 +9,12 @@ and appending a history entry.
 ## Last reviewed
 
 ```
-commit:   4ec75a7  ("feat(preview): configurable preview render size")
-reviewed: 2026-08-21
-fixtures: Tests/Fixtures/ dumped from 0369b10 except lab_color (partially
-          re-dumped from a09cc46, 2026-07-31, with the pure gamut boost —
-          the b8c596c dump had carried the interim in-boost skin damping).
+commit:   dc8ac65f ("fix(exposure): unlock Linear RAW on the transfer when Positive is on")
+reviewed: 2026-09-07
+fixtures: Tests/Fixtures/ re-dumped WHOLE from dc8ac65f (2026-09-07, with
+          the 8532dd92 port — contrast_mask included; lab_color's vibrance
+          leg remains the reference formula frozen in dump_fixtures.py,
+          upstream deleted theirs).
 ```
 
 ## How to run a review
@@ -39,6 +40,395 @@ updates this file. The manual procedure, for reference:
 6. Update the **Last reviewed** marker and append to the history below.
 
 ## Review history
+
+### 2026-09-07 — through `dc8ac65f` (0.54.0 → **0.58.0**, 55 commits)
+
+**The goldens moved — `8532dd92` "literature-grounded print tone and
+automatic helpers" is the biggest deliberate default-look change since
+the 127bcd7 estimator rewrite, and it is the headline port proposal.**
+`test_scene_linear_relocation` was regenerated twice within that one
+commit (print-tone retune, then highlight hold). Everything else in the
+55-commit range is transparency/Positive modes, scanner backends,
+retouch, soft proofing and Qt-shell work — nothing else touches the
+inversion we ship. No print-path WGSL changed anywhere in the range
+(the one shader hunk is `transfer.wgsl`, the transparency curve).
+
+**PORTED (same session, 2026-09-07) — `8532dd92`, the print-tone +
+auto-helpers retune.** Landed exactly as scoped below with ONE mechanism
+correction found by an empirical parity probe before implementation: the
+original proposal solved the Highlight Hold burn against OUR tone-mask
+weight, but the hold fires at its 0.5 cap on the `expo_dark` fixture
+config, so the 1e-4 chain goldens force upstream's exact actuator —
+**Zone Density's highlight term is now IN the kernels**
+(`RenderParams.autoHighlight`, riding the `_pad3` uniform slot at offset
+268: stride and every later offset unchanged; term
+`v += burn·(1−σ(4(v−0.35)))` in ReferenceCurve + MSL + GLSL, last density
+op before the knees — upstream's placement; no user slider rides it). The
+`.spv` binaries were rebuilt ON THE MAC via `brew install glslang` — the
+unchanged kernels reproduced the box's binaries byte-identically, so the
+toolchains agree; only `print_curve.spv`/`color_pop.spv` moved. All
+fixtures re-dumped whole from `dc8ac65f`; `make test` 310/310 green (the
+Metal parity suite pins the burn at cap through the full chain);
+`negcli bench` unmoved (prepare 19.0 ms vs 18.9 baseline, render
+4.7 vs 4.5 ms/frame — noise). No settings field, no sidecar key
+(stored-property count stays 54). **Owed: a `swift test` run in the
+`swiftdev` distrobox** — the Vulkan side is compiled and committed but
+`VulkanParityTests` (which pin the new term against the re-dumped
+fixtures at the mask-tight gate) only execute on the box. The four
+movements, as reviewed:
+
+1. **Print-envelope constants**: `toe_sharpness_base` 4.0 → 6.0,
+   `paper_midtone_gamma` 0.15 → 0.05 (the mid-tone Snap bell was
+   pushing system gamma over Buhr's envelope and the early toe dropped
+   it below by D 1.4). Ours mirror as `K.toeSharpnessBase` /
+   `K.paperMidtoneGamma`, and both already travel to the GPU as
+   uniforms (`aToeBase`, `midtoneGamma`) — **no kernel edits, no .spv
+   rebuild**. Their paper profiles pin 4.0 for back-compat; we ship no
+   profiles, so we take 6.0 unconditionally.
+2. **Textured-cell metering** (Boyack & Juenger US 5,724,456): the
+   anchor and textural-range meters now read only "active" sectors of
+   the block-median grid — sectors of 2×2 blocks of `activity_block`
+   (8) cells vote when their block means span > `activity_gate_density`
+   (0.05 log D); below `activity_min_fraction` (0.05) passing, every
+   cell votes — so rebate, sky and flat walls no longer set grade or
+   exposure. Auto Density's metered tone becomes the average of the
+   P5–P95 trimmed window's mean and midpoint (`anchor_trim_clip` 5.0
+   replaces the deleted `anchor_meter_percentile` 50) instead of the
+   all-cell median. Maps to `Meters.swift` (anchor, texturalRange) —
+   the textured gate wants the 2-D grid, which our `Prefilter` output
+   already is.
+3. **Auto Grade re-derivation** (Alkofer US 4,731,671): the old
+   ratio-damping formula never saw the real density range; now
+   `effective = K·floor_ceil·min((1−s) + s·n/t, c·n/t)` with
+   `auto_grade_target` 0.85, `auto_grade_strength` 0.4,
+   `auto_grade_nominal_range` 0.9 (new — a normal negative's textural
+   range in log D), `auto_grade_max_overfill` 1.2 (new cap),
+   `auto_grade_nominal_ratio` 2.0 → 1.5 (now only sizes the unmetered
+   fallback, ×0.9 in `default_grade_range`). Maps to
+   `CurveLogic.effectiveGradeRange`/`defaultGradeRange`.
+4. **Shadow Reach + Highlight Hold**, the two-exposure split-grade
+   placement (Agfa US 4,104,069/3,839,036) with the anchor on top. Two
+   new per-frame meters on the textured normalized luma:
+   `shadow_point` (P99) and `highlight_point` (P2). Shadow Reach
+   (Gindele US 7,113,649): when Auto Grade's slope prints the dark tail
+   above `shadow_reach_density` (1.9, straight-line), raise the slope
+   to the line through anchor-at-target and tail-at-1.9 — never lower
+   (`shadow_reach_slope`, applied to base_slope inside
+   `per_channel_curve_params`). Highlight Hold: when the line prints
+   the bright tail under `highlight_hold_density` (0.10 D), add an
+   automatic burn to the highlight zone-density term, solved against
+   that term's own sigmoid weight at the tone so it lands exactly,
+   capped at `highlight_hold_max` (0.5), never lifts
+   (`highlight_hold_offset`). Upstream routes the burn to chart, wedge
+   and zone placement via `auto_highlight_from_metrics`; ours falls out
+   of derive — `RenderParams.autoHighlight` — and `predictedZone`/test
+   strip inherit it through derive.
+   **Port note (corrected during the port):** the proposal's original
+   "solve against OUR highlight mask wH = σ(3.5(0.30−v))" idea was
+   DISPROVED by the pre-implementation parity probe — the burn fires at
+   cap on `expo_dark`, so the 1e-4 chain goldens require upstream's exact
+   zone weight, and the actuator term was ported instead (see the PORTED
+   header above). Solved post-overall-contrast-fold (a SwiftInvert-only
+   control upstream lacks; identical at contrast 0 = every parity
+   config). Both new meters are bounds-normalized (base bounds,
+   pre-offset) → they live in `prepare`/`Prepared` alongside the anchor,
+   keeping WP/BP drags analysis-free.
+
+   Effort (as landed): `K` (~16 values moved/added), `Meters.swift`,
+   `Prepared`/`ExposureAnalysis` fields, `CurveLogic`,
+   `deriveRenderParams`; no settings field, no sidecar key; ONE kernel
+   term in all three mirrors (the proposal's "no kernel change" claim
+   fell to the parity probe — see the corrected port note above), layout
+   untouched (ex-pad slot). Fixture re-dump: done (meters and curve
+   params move; the goldens moved upstream by design — deep blacks
+   ~0.015 linear, mids ~0.001, plus per-frame slope/burn changes).
+   `dump_fixtures.py` grew `shadow_point`/`highlight_point` +
+   `auto_highlight` manifest keys, the `shadow_point` kwarg in its
+   re-derive, and closed-form vectors for `shadow_reach_slope` /
+   `highlight_hold_offset` / `_reference_linear_value(target=…)` (the
+   fixture images never fire the reach, so the vectors are its real
+   pin — new `AutoHelpersTests` carries the property tests). Note: the
+   2026-07-25 "anchor recalibration" A/B we dropped is NOT being
+   re-proposed — this is upstream's own retune of the same territory,
+   which is exactly the signal UPSTREAM.md exists to track.
+
+**Deliberately skipped:**
+
+- **Sharpening shadow-gain rolloff** (the `feat(lab)` quarter of
+  `8532dd92`, Gallagher & Gindele US 7,228,004): rides both sharpen
+  methods; NegPy's lab sharpen is a recorded non-port. If sharpening
+  ever lands here, the L* ramp `1/3 + 2/3·smoothstep(0,35,L)` comes
+  with it.
+- **`16753f7f` X-Trans previews via Markesteijn, not LINEAR** — we
+  never had the bug: our `.preview` X-Trans branch skips BOTH
+  `half_size` and `user_qual=0` (one `if !isXTrans` guard), so X-Trans
+  previews already decode at LibRaw's default = 3-pass Markesteijn.
+  Upstream landed on PPG = 1-pass Markesteijn (their RMSE gate passed
+  at 2.2× less decode time); ours is the slower, higher-quality
+  spelling of the same demosaic — a perf option, not a correctness gap.
+- **`91a1b78`-family update**: `8532dd92` grows Set Targets to seven
+  tunables (adds `shadow_reach_density`, `highlight_hold_density`).
+  The tunable-targets candidate stays user-initiated-only; if built, it
+  now includes these two.
+
+**Not applicable (with the shared-bug glance where warranted):**
+
+- Transparency/Positive family — `c274a310` (Slide + Input ICC
+  double-correcting primaries), `e52b2de0` (Cast Removal on
+  transparencies via a per-channel `neutral_axis_affine` on their
+  transfer curve), `f51e8aad`/`668e7982`/`dc8ac65f` (Positive Source
+  for finished positives): we ship no E-6/transparency/positive modes
+  and no Input ICC; the affine cast solve exists only on the transfer
+  curve we don't have.
+- `950f7298` soft proofing + printability/repair read-outs (proof LUT,
+  32³ gamut histogram): no soft proof here; the littleCMS display/
+  export CONVERSION path remains the recorded convergence target.
+- `16fd9aa1` host-stall perf: numba strided-copy helpers and cffi/TOML
+  warm caches — our uploads/readbacks are already straight memcpys
+  under the big-buffer discipline; nothing numerical.
+- `139c293b` user-selectable demosaic panel: our decode recipe is a
+  pinned contract (preview linear+half / export best); exposing it is
+  out of scope.
+- `8dec14d2` export bit-depth/compression options, `7e935a1b` one
+  Export-profile control + ICC import: export-UI surface; noted
+  against the Linux export-metadata parity + lcms2 candidates.
+- `b4f6b036` iGPU VRAM cap for HQ preview, `04242c84` tiled-export
+  memory: our HQ tiers already budget (20 MP medium gate) and we don't
+  tile exports; Mac is unified-memory, the NAVI33 measured fine.
+- `12d5054b` Linear Output WB gains on 3-color CFA: we always decode
+  unity WB and ship no Linear Output — no gains to get wrong.
+- `0c57057c` Copy Settings + Bounds paste: we copy adjustments only;
+  bounds/locks are not a SwiftInvert concept.
+- `ed7cc6fc`/`50f9abe4` GPS DMS rounding carries: we never re-encode
+  GPS values (and the 2cd687b hygiene port will strip vestigial GPS).
+- Scanner/capture: `9378b44a` nkscan Coolscan, `0697dca3`/`88501496`/
+  `8672581d` pyOpticfilm updates, `7873e3e5` SANE TPU source,
+  `cb94be1c` per-axis native DPI, `9d623ec0` gphoto2 NULL widgets,
+  `ab6f5c96` trichrome delay, `e11b128b`/`5d14b99b` trichrome
+  detection/tests, `d2c30260` Optical Removal rebuild (retouch).
+- UI/shell/packaging: `4d01b3c1` consistency pass, `2f47e378` text
+  tokens, `5a46c69e`/`d0f82a68` focus rings, `34b01c15` Flat Field
+  layout, `9ea82ef7` per-image lens distortion (their camera-rig
+  geometry), `0b0fd4fe` hot-folder path keys, `2ebf292f` Windows
+  `path:` search, `62b48564` human_bytes, `d0ce618c` batch progress,
+  `ae3286a4`/`6f5563e4`/`e8dc9973` Windows startup, `0efd02ba`
+  live-view Enter, `580dd485` profile slugs (no crosstalk here),
+  `94229b3f` flat-field migration test, `b4113090`/`cf0b17db` nix,
+  `69c024c4`/`53d3d6ed`/`930f0fbe` docs/skill, `c733af78`/`c8073876`/
+  `5e7eb0f3`/`2bee1d08` changelog/release.
+
+**dump_fixtures.py:** compatible as-is — every imported name survives;
+`per_channel_curve_params` gained only the defaulted `shadow_point`
+kwarg and `measure_anchor_from_log`'s signature is unchanged (its
+semantics moved, which is what the re-dump captures). The port session
+extends it per the note above; the `fixtures:` line advances only when
+that re-dump lands.
+
+**Still open (carried over):** the `2cd687b` export-EXIF-hygiene port
+proposal (2026-08-23) — still the small actionable item; colour
+ring-around; `91a1b78` tunable Auto Density/Grade targets (now a
+seven-tunable dialog upstream); the on-scan Color Mixer band re-tune
+pass; the two 2026-08-13 design calls; Peek Negative (candidate);
+Before/After split (candidate); Linux export-metadata parity
+(candidate, carrying the stripping rules + resolution-tag note);
+batch-export pipelining (candidate); in-repo ICC-tag regression test
+(candidate). **The `8532dd92` print-tone + auto-helpers port LANDED same
+session (see the PORTED header above); newly owed: a `swift test` pass in
+the `swiftdev` distrobox** — the Vulkan term + rebuilt `.spv` are
+committed but `VulkanParityTests` only run on the box.
+
+### 2026-08-27 — through `5f733c7` (post-0.54.0, 9 commits, no release tagged)
+
+**One pipeline-relevant commit and it is bit-exact by upstream's own
+design — a percentile-machinery perf refactor that converges, again, on
+architecture we already ship. Nothing to port.** Goldens unmoved (empty
+diff on both characterization tests), `EXPOSURE_CONSTANTS` untouched
+(`models.py` is not in the pipeline diffstat), no `.wgsl` changed, no
+renames, no VERSION/changelog movement. The whole pipeline diff is
+82+/32− in one file, `normalization.py`.
+
+**Convergence (no action) — `77b9454` "cut the CPU meter and export
+copies out of a GPU frame".** Their clip drag was re-running 49 numpy
+partitions on a grid the prefilter cache already held; the fix is
+`sorted_channel_grid` (one per-channel sort) + `percentile_from_sorted`
+(numpy's interpolation arithmetic reproduced exactly, weight dtype
+included), with both `_sample_log_bounds` passes and
+`measure_shadow_refs_from_log` indexing into the one sort. Commit
+message: "no bound moves by an ulp"; export bytes sha-identical across
+nine configs. **That is our `Stats` design verbatim** — "every order
+statistic funnels through `Stats.sortedAscending`", one sort per
+channel, since the RadixSort rewrite (prepare 120→21 ms) — and their
+clip-drag motivation is covered here one level stronger: WP/BP drags
+re-run NO analysis at all (offsets fold into `finalBounds` at derive
+time, the 2125a34 split). Second family member after `77fac17`'s cache
+split converged the same way. The satellite hunks are equally null:
+`nan_to_num`+`clip` → `to_log_density`'s `fmin`/`fmax` has identical
+NaN/inf semantics (fmax drops the NaN in favour of the bound); our
+`Prefilter` clips u16-derived data that is finite by construction, so
+there is no NaN leg to mirror. The neutral-axis micro-change
+(`band_chroma[keep]` vs `chroma_vals[idx]`, one gather for three
+channel medians) selects the same value set — pure vectorization.
+
+**Shared-bug glance, clean — `5f733c7` absolute resolution tags.**
+tifffile writes XResolution (1,1) with ResolutionUnit NONE when
+`resolution` is unset — an aspect ratio, not a DPI — so their exported
+TIFF read as 1 DPI in Preview and a 6000 px scan parsed as a 6000-inch
+print; PNG/WebP/JXL had the same hole, JPEG alone passed a dpi. Audited
+ours: the Mac `Exporter` sets no DPI keys and rebuilds the 0th IFD from
+scratch, so ImageIO writes its own sane defaults; the Linux `TIFF16`
+writer OMITS the resolution tags entirely (verified: tags 256–284 +
+34675 only), which is the spec-correct "no statement" readers default
+to 72 from — not tifffile's false (1,1)-NONE assertion. Nothing wrong
+on either path. A real DPI tag (the value a resize's long edge implies)
+attaches to the existing **Linux export-metadata parity** candidate
+rather than being worth a change alone.
+
+**Not applicable (rest, one line each):** `d785f0a` Plustek OpticFilm
+8100 V2 support; `4163730` batch bounds measured on the assembled
+composite (RGB-triplet/HDR batch analysis — we ship neither; one file
+per frame, bounds per render from the analysis cache, so the
+lone-exposure hazard has no counterpart); `78e68ee` Linear Output crash
+on camera DNGs (Linear Output is a recorded N/A; our decode path is one
+recipe with no degraded duplicate branch to rot); `8d7f103` sqlite
+connections in their flat-field migration (no flat field, no database);
+`98cbb74` Film Strip empty-by-filter messaging (their Qt shell);
+`dea35c4` `history_changed` emitted after the new config is live (Qt
+signal ordering — our HistoryPanel reads `@Observable` state directly,
+there is no signal to mis-order); `32ed2cb` Plustek prescan
+x-mirroring.
+
+**dump_fixtures.py:** compatible. Of its seven `normalization.py`
+imports, only `analyze_log_exposure_bounds_from_log` and
+`measure_shadow_refs_from_log` changed, each gaining a defaulted
+`sorted_grid=None` kwarg; `prefilter_log_grid`'s `to_log_density` swap
+is bit-exact. A re-dump would be byte-identical; the `fixtures:` line
+does not move.
+
+**Still open (carried over):** **the `2cd687b` export-EXIF-hygiene port
+proposal (2026-08-23) — still the actionable item**: strip
+ColorSpace/CFAPattern/SensingMethod/FileSource/SceneType and the
+vestigial GPS IFD from the Mac `Exporter`'s wholesale EXIF copy, first
+verifying on a real NEF which keys ImageIO round-trips. Plus: colour
+ring-around, `91a1b78` tunable Auto Density/Grade targets, the on-scan
+Color Mixer band re-tune pass, the two 2026-08-13 design calls, Peek
+Negative (candidate), Before/After split (candidate), Linux
+export-metadata parity (candidate — carrying `2cd687b`'s stripping
+rules and now the resolution-tag note), batch-export pipelining
+(candidate), in-repo ICC-tag regression test (candidate).
+
+### 2026-08-23 — through `0d5f434` (0.53.0 → **0.54.0**, 14 commits)
+
+**One pipeline-relevant commit and it is unreachable here twice over; the
+substance of the review is a shared-bug-class audit of `2cd687b`'s export
+EXIF hygiene, which found we carry several of the same stale tags — a
+small port is proposed.** Goldens unmoved (empty diff on both
+characterization tests), `EXPOSURE_CONSTANTS` untouched (`models.py` is
+not even in the pipeline diffstat), **no `.wgsl` anywhere in the repo
+changed**, no renames. The whole pipeline diff is 26 lines across two
+files. 0.54.0 was tagged mid-range; its changelog is metadata authoring,
+narrowband capture-mode renames and Qt-shell fixes.
+
+**To port (proposed, not yet implemented) — export EXIF hygiene from
+`2cd687b`.** Upstream found, via Adobe Bridge refusing to color-manage
+their exports, that carrying a source camera's EXIF through unchanged
+ships tags that are false for the rendered file: the EXIF **ColorSpace**
+tag (Nikon's non-standard 2 = Adobe RGB is common) describes the
+camera's in-body rendering and contradicts the embedded ICC profile —
+a strict reader drops color management entirely rather than guess; the
+**raw-capture markers** (CFAPattern, SensingMethod, FileSource,
+SceneType, TIFFEPStandardID) describe a Bayer mosaic that no longer
+exists after demosaic and made Bridge route a finished export through
+Camera Raw; and a **vestigial GPS IFD** (version marker, no
+coordinates) carried as noise. Audited against our Mac `Exporter`
+(Exporter.swift:93-110): **we copy the parsed EXIF dictionary wholesale**
+minus only PixelX/YDimension, and the GPS dictionary wholesale — so
+ColorSpace, CFAPattern, SensingMethod, FileSource, SceneType and an
+empty GPS block all carry through if ImageIO surfaces them from the
+RAW. Their *stale-pointer* half (0th-IFD StripOffsets/SubIFDs, maker
+notes absolute to the source's byte layout) is **structurally absent
+here**: our TIFF 0th IFD is rebuilt from scratch (Make/Model/DateTime +
+Software only — already the shape their fix converged to), and ImageIO
+re-serializes parsed dictionaries rather than copying byte layouts.
+The port is a handful of `exif[...] = nil` lines plus a
+coordinates-present check on the GPS dict; no settings field, no parity
+surface, no fixtures. First step of the port session: verify on a real
+NEF which of those keys ImageIO actually round-trips (the fix should
+delete what is really there, not a guessed list). The Linux export
+paths carry no metadata at all yet — the stripping rules attach to the
+existing **Linux export-metadata parity** candidate so it is built
+clean rather than fixed later.
+
+**Deliberately skipped / not applicable, with the shared-bug glance:**
+
+- **`859c1be` never fold camera WB into a narrowband capture matrix**
+  (the one path-filter hit; new `should_fold_camera_wb` =
+  `effective_linear_raw and not narrowband_scan`, asked by the
+  transparency transfer, Peek Negative and the GPU matrix alike) plus
+  its family **`1df4671`** (Trichrome triplets decode on a neutral WB —
+  three unrelated as-shot gains were tinting the assembled image) and
+  **`fa8d2d9`** (Apply white balance greyed for narrowband captures,
+  via a `wb_bake_block_reason()` the checkbox and the bake both ask).
+  The reasoning is sound and worth keeping — an as-shot WB estimate
+  describes a continuous-spectrum scene, and a narrowband capture has
+  none, so folding it is not a milder correction but a wrong one — and
+  it is **unreachable here twice over**, the `11f341a` argument again:
+  we ship no narrowband/transparency modes, and more fundamentally we
+  fold camera WB into nothing anywhere — `RawDecoder` always decodes
+  unity WB (`user_mul=(1,1,1,1)`, `use_camera_wb=0`) and we apply no
+  camera matrix at all (`output_color=RAW`, a scope contract). Their
+  "every site that folds must ask this one question" rule is our
+  single-decode-recipe contract from the other side.
+- **`898077f` stop the layout pass upscaling the preview** — their 1:1
+  zoomed closer than one scan pixel per device pixel whenever the
+  decoded preview landed below `preview_render_size` (a 4× crop read
+  "1:1" at what was really 400%), because the layout pass resampled
+  content up to the paper long edge and the canvas quoted zoom against
+  the pre-resample buffer. Fix: never resample above the content's own
+  resolution; the display shader magnifies instead. **Structurally
+  absent here**: we have no layout/resample stage — the render buffer
+  is the tier's own pixels, magnification happens at draw
+  (`scaleEffect`), and tier honesty is the HQ badge's whole design
+  (CLAUDE.md's "an HQ badge over them would lie" rule). Convergent
+  with, not corrective of, our scheme.
+- **`0d5f434` probe row height jitter** — their H&D chart UI; the
+  chart (and its 120-bin density histogram) is a recorded non-port.
+- **`43ff882` metadata presets + library** — metadata *authoring*
+  (development-process recipes, scan setups, XMP/EXIF/search fields);
+  out of scope. Only its hygiene sibling `2cd687b` (above) has a
+  counterpart here.
+- **Rest, one line each:** `0130e9a` Preferences dialog for their
+  `override.toml` keys; `cf6f004` narrowband capture-mode taxonomy
+  docs; `ec1e1b3` modeless windows float on macOS (their Qt shell —
+  we are native); `eb0c32a` shortcut labels in platform notation
+  (⌘ vs Ctrl — native menus give us this for free); `ca6c738` 0.54.0
+  release prep; `ae65197` pyopticfilm 1.1.2 (Plustek capture);
+  `de374d1` camera-scanning PTP claim arbitration.
+
+**dump_fixtures.py:** compatible. Of the two changed pipeline files,
+the script imports only `processor.py`'s two class names
+(`NormalizationProcessor`/`PhotometricProcessor`, both untouched — the
+change is an internal call swap to the new helper), and
+`process/logic.py` is not imported at all (only `process.models`).
+`EXPOSURE_CONSTANTS` untouched. The `fixtures:` line does not move.
+
+**Resolved since last review (SwiftInvert-side, `a4b0ace`,
+2026-08-22):** the owed distrobox pass is **closed** — Contrast Mask
+Phase 2 landed (Vulkan plane SSBO at binding 3, `.spv` rebuilt, bridge
+Session plane cache, Qt sliders, `VulkanParityTests` mask case at the
+tight gate; 233/233 green on the NAVI33) **and** the batched
+ICC-tagging verification ran (negcli + `si_export_tiff` output both
+carry tag 34675 with the 480-byte v4 profiles). The
+`b232cc9`-inspired *in-repo automated* ICC-tag regression test remains
+unbuilt (verification was on-box, manual) — stays a candidate.
+
+**Still open (carried over):** colour ring-around (±4cc/2cc spec),
+`91a1b78` tunable Auto Density/Grade targets (user-initiated only),
+the on-scan Color Mixer band re-tune pass (ours), the two 2026-08-13
+design calls, Peek Negative (candidate), Before/After split
+(candidate), Linux export-metadata parity (candidate — now carrying
+`2cd687b`'s stripping rules), batch-export pipelining (candidate),
+in-repo ICC-tag regression test (candidate). **New:** the `2cd687b`
+export-EXIF-hygiene port proposal above.
 
 ### 2026-08-21 — through `4ec75a7` (0.52.0 → **0.53.0**, 33 commits)
 

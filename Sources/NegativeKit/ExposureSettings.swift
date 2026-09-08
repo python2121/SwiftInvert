@@ -254,6 +254,12 @@ public struct ExposureAnalysis: Codable, Equatable, Sendable {
     public var baseBounds: LogNegativeBounds
     public var anchor: Double
     public var texturalRange: Double
+    /// Normalized luma of the textured dark tail (P99) — Shadow Reach's tone.
+    /// nil = not measured (fixture-built analyses) → reach stays inert.
+    public var shadowPoint: Double? = nil
+    /// Normalized luma of the textured bright tail (P2) — Highlight Hold's
+    /// tone. nil = not measured → hold stays inert.
+    public var highlightPoint: Double? = nil
     public var shadowRefs: SIMD3<Double>
     public var neutralMid: SIMD3<Double>?
     public var neutralShadow: SIMD3<Double>?
@@ -282,6 +288,11 @@ public struct RenderParams: Equatable, Sendable {
     public var darkShadows: Double = 0
     public var highlights: Double = 0
     public var highlightContrast: Double = 0
+    /// Highlight Hold's automatic burn (8532dd92): a Zone Density highlight
+    /// term rendered with upstream's own weight (zoneDensitySharpness at the
+    /// zone-highlight centre), derive-computed — never a settings field.
+    /// 0 = off (Auto Grade off, or the bright tail already holds).
+    public var autoHighlight: Double = 0
     // CIELAB chroma ops on the linear print (1.0 = off).
     public var vibrance: Double = 1.0
     public var saturation: Double = 1.0
@@ -324,7 +335,7 @@ public struct RenderParams: Equatable, Sendable {
         curvatures: SIMD3<Double>, cmyOffsets: SIMD3<Double>, toeEff: Double, shoulderEff: Double,
         toeWidth: Double, shoulderWidth: Double, dMin: Double, vStar: Double,
         shadows: Double = 0, shadowContrast: Double = 0, darkShadows: Double = 0, highlights: Double = 0,
-        highlightContrast: Double = 0, vibrance: Double = 1.0, saturation: Double = 1.0,
+        highlightContrast: Double = 0, autoHighlight: Double = 0, vibrance: Double = 1.0, saturation: Double = 1.0,
         skinProtection: Double = 0,
         bandHues: SIMD4<Double> = .zero, bandSaturations: SIMD4<Double> = SIMD4(repeating: 1.0),
         preSaturation: Double = 1.0, printSaturation: Double = 1.0,
@@ -352,6 +363,7 @@ public struct RenderParams: Equatable, Sendable {
         self.darkShadows = darkShadows
         self.highlights = highlights
         self.highlightContrast = highlightContrast
+        self.autoHighlight = autoHighlight
         self.vibrance = vibrance
         self.saturation = saturation
         self.skinProtection = skinProtection
@@ -392,6 +404,8 @@ public enum ExposureKernel {
         public let baseBounds: LogNegativeBounds
         public let anchor: Double
         public let texturalRange: Double
+        public let shadowPoint: Double
+        public let highlightPoint: Double
         public let shadowRefs: SIMD3<Double>
     }
 
@@ -415,12 +429,16 @@ public enum ExposureKernel {
         // biggest single line item in prepare).
         let channels = BoundsAnalysis.sortedChannels(grid: grid)
         let base = BoundsAnalysis.analyze(grid: grid, channelsSorted: channels)
+        // Anchor + reach/hold points read against the per-frame base bounds
+        // (luma_source_bounds), sharing one textured gate and one sort.
+        let textured = Meters.texturedLumaMeters(grid: grid, bounds: base)
         return Prepared(
             grid: grid,
             baseBounds: base,
-            // Anchor reads against the per-frame base (luma_source_bounds).
-            anchor: Meters.anchor(grid: grid, bounds: base),
+            anchor: textured.anchor,
             texturalRange: Meters.texturalRange(grid: grid),
+            shadowPoint: textured.shadowPoint,
+            highlightPoint: textured.highlightPoint,
             shadowRefs: Meters.shadowRefs(channelsSorted: channels)
         )
     }
@@ -437,6 +455,8 @@ public enum ExposureKernel {
             baseBounds: prepared.baseBounds,
             anchor: prepared.anchor,
             texturalRange: prepared.texturalRange,
+            shadowPoint: prepared.shadowPoint,
+            highlightPoint: prepared.highlightPoint,
             shadowRefs: prepared.shadowRefs,
             neutralMid: neutral?.mid,
             neutralShadow: neutral?.shadow,
@@ -486,7 +506,8 @@ public enum ExposureKernel {
             texturalRange: analysis.texturalRange,
             dMin: dMin,
             anchor: anchor,
-            neutralAxisNorm: neutralAxisNorm
+            neutralAxisNorm: neutralAxisNorm,
+            shadowPoint: analysis.shadowPoint
         )
 
         // Overall contrast: v → v + k·(v − v*) folded exactly into the core:
@@ -502,6 +523,17 @@ public enum ExposureKernel {
                 pivots[ch] += k * vStar / scaled
                 slopes[ch] = scaled
             }
+        }
+
+        // Highlight Hold (8532dd92): the automatic highlight-zone burn, from
+        // the green reference line — solved AFTER the overall-contrast fold
+        // (a SwiftInvert-only control upstream lacks) so the hold's promise
+        // is kept against the line actually rendered; identical to upstream
+        // at overallContrast 0, which is every parity config.
+        var autoHighlight = 0.0
+        if settings.autoNormalizeContrast, let highlightPoint = analysis.highlightPoint {
+            autoHighlight = CurveLogic.highlightHoldOffset(
+                slope: slopes.y, pivot: pivots.y, highlightPoint: highlightPoint, dMin: dMin)
         }
 
         // Temp rides the Planckian direction (yellow + coupled magenta, NegPy's
@@ -546,6 +578,7 @@ public enum ExposureKernel {
             darkShadows: settings.darkShadows,
             highlights: settings.highlights,
             highlightContrast: settings.highlightContrast,
+            autoHighlight: autoHighlight,
             vibrance: settings.vibrance,
             saturation: settings.saturation,
             skinProtection: min(max(settings.skinProtection, 0.0), 1.0),

@@ -89,7 +89,10 @@ struct CurveUniforms {
     float separationDamping;
     float skinProtection;
     float hueTrim;
-    float _pad3;
+    /// Highlight Hold's automatic burn (rides the ex-pad slot: stride
+    /// unchanged at 304). Applied through upstream's Zone Density highlight
+    /// weight — see the print_curve body.
+    float autoHighlight;
     // Contrast Mask: xyz = per-channel pre-curve scale for the plane
     // sample, w = 1 when active (0 gates every mask read off).
     float4 maskScale;
@@ -372,6 +375,15 @@ kernel void printCurve(
             float wH = fast_sigmoid(TONE_SHARPNESS * (HIGHLIGHT_ANCHOR - v));
             float wM = max(1.0f - wS - wH, 0.0f);
             v = v + p.shadowCMY[ch] * wS + p.midCMY[ch] * wM + p.highlightCMY[ch] * wH;
+        }
+
+        // Highlight Hold's automatic burn: upstream's Zone Density highlight
+        // term (last density op before the knees). 4.0 / 0.40 mirror
+        // K.zoneDensitySharpness / -K.zoneDensityHighlightOffset; zoneCenter
+        // is anchor_target_density — mirrors ReferenceCurve.
+        if (p.autoHighlight != 0.0f) {
+            float wZ = 1.0f - fast_sigmoid(4.0f * (v - (p.zoneCenter - 0.40f)));
+            v = v + p.autoHighlight * wZ;
         }
 
         float v1 = d_min_eff[ch] + softplus(a_hl * (v - d_min_eff[ch])) / a_hl;

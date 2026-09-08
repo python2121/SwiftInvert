@@ -60,7 +60,10 @@ public struct CurveUniforms {
     public var skinProtection: Float
     /// Hue Trim in radians (rides the ex-pad slot: stride unchanged at 272).
     public var hueTrim: Float = 0
-    public var _pad3: Float = 0
+    /// Highlight Hold's automatic burn (rides the ex-pad slot: stride and
+    /// every later offset unchanged — offset 268, pinned in both layout
+    /// tests). Applied via upstream's Zone Density highlight weight.
+    public var autoHighlight: Float = 0
     /// Contrast Mask: xyz = per-channel pre-curve scale for the plane
     /// sample (−gamma·lumRange/range_ch), w = 1 when the mask is active
     /// (the kernels' uniform gate — 0 skips every mask read). Stride 304.
@@ -130,7 +133,8 @@ public enum UniformsBuilder {
             bandSaturations: SIMD4<Float>(params.bandSaturations),
             separationDamping: Float(params.separationDamping),
             skinProtection: Float(params.skinProtection),
-            hueTrim: Float(params.hueTrim)
+            hueTrim: Float(params.hueTrim),
+            autoHighlight: Float(params.autoHighlight)
         )
         if let maskDims, params.maskValScale != .zero {
             u.maskScale = f4(params.maskValScale, 1)

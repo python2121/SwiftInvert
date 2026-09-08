@@ -36,7 +36,8 @@ distrobox enter swiftdev -- bash -lc 'cd ~/Documents/code/SwiftInvert && swift b
 # negcli builds there too (decode/thumb/render/bench/meter, Vulkan render).
 
 # Regenerate the checked-in SPIR-V after editing NegPipeline.comp:
-./scripts/compile_vulkan_shaders.sh   # (in the box; needs glslangValidator)
+./scripts/compile_vulkan_shaders.sh   # (in the box, or `brew install glslang`
+# on the Mac — but macOS bash 3.2 lacks `declare -A`; run its six lines directly)
 
 # Qt shell (in the box; apt qt6-base-dev qt6-base-dev-tools cmake ninja-build):
 swift build -c release --product SwiftInvertCore
@@ -443,10 +444,18 @@ that one function**, so keep new percentile/median code going through
    percentile-based (film density is bounded below by base). Recombined:
    `floor[ch] = mean(luma floors) + (colour floor[ch] − median(colour floors))`
    (same for ceils) → `LogNegativeBounds` (floors < ceils).
-4. **Meters** (all on the same grid):
-   - `anchor`: P50 of grid luma normalized by the **base** bounds, pulled 20%
-     from `assumedAnchor` 0.46, clamped ±0.12 — the auto-exposure key.
-   - `texturalRange`: |P90 − P10| of raw log luma — drives Auto Contrast.
+4. **Meters** (all on the same grid; since the 8532dd92 port the luma
+   meters read only the grid's **textured cells** — Boyack & Juenger
+   US 5,724,456: sectors of 2×2 blocks of 8 cells vote when their block
+   means span > 0.05, so rebate/sky/walls don't set exposure or grade;
+   all-cell fallback below 5% of sectors passing — `Meters.texturedCells`):
+   - `anchor`: mean of the P5–P95 trimmed window of textured luma
+     (normalized by the **base** bounds) averaged with the window midpoint,
+     pulled 20% from `assumedAnchor` 0.46, clamped ±0.12 — the
+     auto-exposure key.
+   - `texturalRange`: |P90 − P10| of textured raw log luma — Auto Contrast.
+   - `shadowPoint` / `highlightPoint`: P99 / P2 of textured normalized
+     luma — the tails Shadow Reach and Highlight Hold place (§3).
    - `shadowRefs`: P98 per channel — the cast-removal fallback tie.
 
 **`finalize(prepared)` → `ExposureAnalysis`**: the **neutral axis**
@@ -499,12 +508,24 @@ GPU uniform payload. Order matters:
    - *Base*: single shared linear curve.
    Inputs: `baseSlope = gradeToSlope(grade, effectiveGradeRange(...))` —
    grade is ISO R 50–180 (115 ≈ grade 2), `k = 2.9·range/(R/100)` clamped
-   [2,10]; Auto Contrast damps the floor-ceil/textural ratio toward 2.0.
+   [2,10]; Auto Contrast follows the textural density scale, shrunk toward
+   a normal negative's (8532dd92, Alkofer:
+   `0.85 · floorCeil · min(0.6 + 0.4·0.9/t, 1.2·0.9/t)`), then **Shadow
+   Reach** raises `baseSlope` (never lowers) until the textured dark tail
+   (`shadowPoint`, P99) prints ≥ 1.9 D with the anchor held at its target
+   (`CurveLogic.shadowReachSlope`; Auto Contrast only).
    `lumRange` comes from the **pre-offset** base bounds (NegPy quirk).
    `computePivot` solves so the reference tone prints at density 0.74.
 5. **Overall contrast** folds *exactly* into the core: `v→v+k(v−v*)` ⇒
    slopes,curvatures ×(1+k), pivot += k·v*/s′ (anchor invariant). k =
-   slider×0.5, slider −1…+2.
+   slider×0.5, slider −1…+2. Then **Highlight Hold** (8532dd92, Auto
+   Contrast only): if the textured bright tail (`highlightPoint`, P2) would
+   print < 0.10 D on the green line, `RenderParams.autoHighlight` gets the
+   burn that lands it there — solved against the zone term's own weight,
+   capped 0.5, never lifts (`CurveLogic.highlightHoldOffset`; computed
+   post-fold so the promise holds under overall contrast — identical to
+   upstream at contrast 0, i.e. every parity config). Derive-computed,
+   never a settings field; predictedZone/test strip inherit it via derive.
 6. **`cmyOffsets`** (pre-curve, normalized space): WB filtration
    (`slider×0.2 / channelRange`) with **Temp** folded along the Planckian
    direction (yellow + magenta×0.0029/0.0057) and **Tint** on magenta, plus
@@ -542,11 +563,15 @@ One command buffer, passes in order (`RenderPipeline.render` /
    b. Per channel: `val += cmyOffsets` (+ the Contrast Mask's bilinear
       plane sample × `maskValScale`, uniform-gated — see below) → quadratic core
       `v = slope(val − pivot) + curv·val²` → midtone paper-S
-      `v += 0.15·0.6·tanh((v − v*)/0.6)` → **tone controls** (masks
+      `v += 0.05·0.6·tanh((v − v*)/0.6)` (0.15 → 0.05 in the 8532dd92
+      retune) → **tone controls** (masks
       `wS = σ(3.5(v−1.40))`, `wH = σ(3.5(0.30−v))` on the incoming v,
       parallel form: shadows/highlights lifts + anchor-pivoted contrasts) →
       **3-band color** (same masks, `wM = max(1−wS−wH,0)`; NegPy's 2-band
-      regional CMY generalized) → shoulder softplus toward `d_min_eff`
+      regional CMY generalized) → **Highlight Hold burn**
+      `v += autoHighlight·(1 − σ(4(v−0.35)))` (upstream's Zone Density
+      highlight term — its weight, not our tone masks; uniform-gated at 0,
+      last density op before the knees) → shoulder softplus toward `d_min_eff`
       (paper white) → toe softplus toward `d_max_eff` (paper black) →
       **Print Saturation** (NegPy 0.45 port, on density above paper base,
       identity at default 1.0): uniform k around the per-pixel achromatic
@@ -714,22 +739,24 @@ For "what changed in NegPy?" requests, run the **`/negpy-review` skill**
 (`.claude/skills/negpy-review/`) — it fetches upstream, triages the diff
 around the inversion pipeline, and maintains UPSTREAM.md.
 
-Analysis semantics and kernel constants are synced with **NegPy 0.43**
-(`0369b10` tip; the estimator rewrite landed in `127bcd7`: two-pass
-RMS-chroma neutral axis with the rebuilt confidence, same-pixel colour
-floors, `neutral_axis_chroma_cap` 0.29 + the five new estimator constants —
-on top of the earlier syncs: 2125a34 pre-trim neutral axis, b3490eb-coupled
-auto constants, the 0.38 set with `paper_dmin` off + `true_black` on, the
-0.36 set). Fixtures were re-dumped from `0369b10` (the manifest records
-`paper_dmin` and `true_black` per config; the parity harnesses read both,
-so default flips on either side can't silently skew parity). The
-**Contrast Mask** (ported 2026-08-21 from `515c1f5`, 0.52.0) has its own
-ADDITIVE fixture set dumped from `4ec75a7` (0.53.0) via
-`dump_fixtures.py contrast_mask` — the pre-existing fixtures stay at their
-recorded dump. NegPy's per-layer R/G/B trims,
+Analysis semantics and kernel constants are synced with **NegPy 0.58.0**
+(`dc8ac65f` tip; the print-tone + auto-helpers retune landed in `8532dd92`,
+ported 2026-09-07: toe sharpness 6.0 / paper midtone gamma 0.05, textured-
+cell metering, the Alkofer Auto Grade, Shadow Reach and Highlight Hold —
+on top of the earlier syncs: 127bcd7 two-pass estimator + same-pixel colour
+floors, 2125a34 pre-trim neutral axis, b3490eb-coupled auto constants, the
+0.38 set with `paper_dmin` off + `true_black` on, the 0.36 set). ALL
+fixtures (contrast_mask included) were re-dumped from `dc8ac65f` (the
+manifest records `paper_dmin` and `true_black` per config; the parity
+harnesses read both, so default flips on either side can't silently skew
+parity; `expo_dark` fires Highlight Hold at its 0.5 cap, so the burn's
+kernel term is chain-pinned end to end). NegPy's per-layer R/G/B trims,
 Split Grade and Zone Density (their convergent take on our tone controls)
 are NOT ported — our tone controls + 3-band grading cover the achromatic
-cases; per-channel crossover trims are a candidate future feature.
+cases (EXCEPTION: Zone Density's *highlight term* now exists in all three
+kernels as Highlight Hold's actuator, `RenderParams.autoHighlight`, with
+upstream's own weight constants — no user slider rides it); per-channel
+crossover trims are a candidate future feature.
 
 **Deliberate divergences from NegPy** (fixture tests pin the NegPy-neutral
 values where needed):
@@ -967,7 +994,11 @@ values where needed):
    **A kernel change isn't finished on the Mac.** The `.spv` binaries are
    the build inputs, not the `.comp`, so an edit needs
    `./scripts/compile_vulkan_shaders.sh` re-run and the binaries committed —
-   that needs `glslangValidator`, i.e. the `swiftdev` distrobox. Each GPU is
+   that needs `glslangValidator` — the `swiftdev` distrobox, or
+   `brew install glslang` on the Mac (SPIR-V is platform-independent;
+   verified 2026-09-07: the Mac build reproduces the box's unchanged-kernel
+   binaries byte-identically — note macOS bash 3.2 lacks the script's
+   `declare -A`, so run its six compile lines directly). Each GPU is
    pinned to the CPU reference independently (`GPUParityTests` on macOS,
    `VulkanParityTests` on Linux), so a Metal-only port fails loudly — but
    only on the machine the Mac suite can't reach.

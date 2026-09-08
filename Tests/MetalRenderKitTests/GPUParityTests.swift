@@ -34,6 +34,7 @@ enum Fixtures2 {
         // Must match the MSL structs in NegPipeline.metal.
         #expect(MemoryLayout<NormUniforms>.stride == 48)
         #expect(MemoryLayout<CurveUniforms>.stride == 304)
+        #expect(MemoryLayout<CurveUniforms>.offset(of: \.autoHighlight) == 268)
         #expect(MemoryLayout<CurveUniforms>.offset(of: \.maskScale) == 272)
         #expect(MemoryLayout<CurveUniforms>.offset(of: \.maskDims) == 288)
         #expect(MemoryLayout<CurveUniforms>.offset(of: \.bandHues) == 224)

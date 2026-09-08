@@ -42,9 +42,11 @@ from negpy.features.exposure.logic import (
     filtration_offsets,
     grade_coupled_shape,
     grade_to_slope,
+    highlight_hold_offset,
     normalized_neutral_axis,
     normalized_shadow_refs,
     per_channel_curve_params,
+    shadow_reach_slope,
     slope_to_grade,
 )
 from negpy.features.exposure.models import EXPOSURE_CONSTANTS, ExposureConfig
@@ -166,6 +168,15 @@ def run_pipeline(img: np.ndarray, exposure: ExposureConfig, out_dir: Path, dump_
         anchor=ctx.metrics.get("metered_anchor") if exposure.auto_exposure else None,
         paper=paper,
         neutral_axis_norm=normalized_neutral_axis(final_bounds, neutral_axis_refs),
+        shadow_point=ctx.metrics.get("shadow_point"),
+    )
+    # Highlight Hold's automatic burn, exactly as PhotometricProcessor derives
+    # it (8532dd92) — the Swift deriveRenderParams' autoHighlight must match.
+    hl_point = ctx.metrics.get("highlight_point")
+    auto_highlight = (
+        highlight_hold_offset(slopes[1], pivots[1], hl_point, d_min=d_min, paper=paper)
+        if exposure.auto_normalize_contrast and hl_point is not None
+        else 0.0
     )
     cmy_offsets = filtration_offsets((exposure.wb_cyan, exposure.wb_magenta, exposure.wb_yellow), final_bounds)
     toe_eff, shoulder_eff = grade_coupled_shape(slopes[1], exposure.toe, exposure.shoulder)
@@ -193,6 +204,8 @@ def run_pipeline(img: np.ndarray, exposure: ExposureConfig, out_dir: Path, dump_
             "norm_density_range": jsonable(ctx.metrics.get("norm_density_range")),
             "metered_anchor": jsonable(ctx.metrics.get("metered_anchor")),
             "textural_range": jsonable(ctx.metrics.get("textural_range")),
+            "shadow_point": jsonable(ctx.metrics.get("shadow_point")),
+            "highlight_point": jsonable(hl_point),
             "shadow_log_refs": jsonable(ctx.metrics.get("shadow_log_refs")),
             "neutral_axis_refs": jsonable(neutral_axis_refs),
             "scan_clip_fractions": jsonable(ctx.metrics.get("scan_clip_fractions")),
@@ -204,6 +217,7 @@ def run_pipeline(img: np.ndarray, exposure: ExposureConfig, out_dir: Path, dump_
             "cast_strength": jsonable(strength),
             "d_min": jsonable(d_min),
             "v_star": jsonable(_reference_linear_value(d_min, paper)),
+            "auto_highlight": jsonable(auto_highlight),
         },
     }
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -290,6 +304,37 @@ def dump_closed_form() -> None:
         ],
         "reference_linear_value": [
             {"d_min": d, "out": jsonable(_reference_linear_value(d))} for d in (0.0, 0.06)
+        ],
+        "reference_linear_value_target": [
+            {"d_min": d, "target": t, "out": jsonable(_reference_linear_value(d, target=t))}
+            for d, t in [(0.0, 1.9), (0.06, 1.9), (0.0, 0.10), (0.06, 0.10), (0.0, 0.75)]
+        ],
+        # Shadow Reach / Highlight Hold oracles (8532dd92) — the fixture
+        # images never fire the reach, so these vectors are its real pin.
+        "shadow_reach_slope": [
+            {"slope": s, "anchor": a, "shadow_point": sp, "d_min": d,
+             "out": jsonable(shadow_reach_slope(s, a, sp, d_min=d))}
+            for s, a, sp, d in [
+                (2.0, 0.46, 0.95, 0.0),   # flat frame: reach raises
+                (2.0, 0.46, 0.95, 0.06),
+                (5.0, 0.46, 0.95, 0.0),   # already hard enough: unchanged
+                (2.0, 0.52, 0.80, 0.0),   # short span: raises harder
+                (2.0, 0.46, 0.46, 0.0),   # degenerate span: unchanged
+                (2.0, 0.60, 0.55, 0.0),   # negative span: unchanged
+                (2.0, 0.46, 0.50, 0.0),   # tiny span: clamps at slope_max
+            ]
+        ],
+        "highlight_hold_offset": [
+            {"slope": s, "pivot": p, "highlight_point": hp, "d_min": d,
+             "out": jsonable(highlight_hold_offset(s, p, hp, d_min=d))}
+            for s, p, hp, d in [
+                (3.0, 0.22, 0.05, 0.0),   # bright tail past paper white: burns
+                (3.0, 0.22, 0.05, 0.06),
+                (3.0, 0.22, 0.30, 0.0),   # tail already holds: 0
+                (3.0, 0.55, 0.10, 0.0),   # deep pivot: caps at hold_max
+                (2.0, 0.10, 0.02, 0.0),
+                (6.0, 0.30, 0.12, 0.06),
+            ]
         ],
         "softplus": [{"x": x, "out": jsonable(_softplus(x))} for x in (-20.0, -5.0, -1.0, 0.0, 1.0, 5.0, 20.0)],
         "inv_softplus": [{"y": y, "out": jsonable(float(_inv_softplus_np(np.array([y], dtype=np.float64))[0]))}
