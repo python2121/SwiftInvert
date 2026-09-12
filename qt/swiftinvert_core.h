@@ -27,9 +27,14 @@ int32_t si_size(int64_t session, int32_t *width, int32_t *height);
  * retained), 2 = full resolution (first call pays the ~3–5 s decode, then
  * cached for the session). Analysis always runs on the proxy, so the
  * conversion is tier-invariant. histogram (nullable) receives the 4×256
- * bins: R,G,B,Rec.709-luma raw counts in the display domain. */
+ * bins: R,G,B,Rec.709-luma raw counts in the display domain.
+ * uncropped != 0 renders the whole frame outside cropRect as well — the
+ * crop and analysis tools' preview. It widens only what is RENDERED; the
+ * meter stays scoped by the settings' own cropRect, so opening a tool
+ * cannot move the conversion. Deleting cropRect from settings_json would
+ * do both, which is exactly what this parameter exists to avoid. */
 uint8_t *si_render(int64_t session, const char *settings_json,
-                   int32_t srgb_display, int32_t tier,
+                   int32_t srgb_display, int32_t tier, int32_t uncropped,
                    int32_t *width, int32_t *height,
                    uint32_t *histogram /* uint32[1024] or NULL */);
 
@@ -39,7 +44,7 @@ uint8_t *si_render(int64_t session, const char *settings_json,
  * the measured GPU source stays cached); 0 on failure. Never read dest
  * while a render is writing it. */
 int32_t si_render_into(int64_t session, const char *settings_json,
-                       int32_t srgb_display, int32_t tier,
+                       int32_t srgb_display, int32_t tier, int32_t uncropped,
                        uint8_t *dest, int64_t dest_capacity,
                        int32_t *width, int32_t *height,
                        uint32_t *histogram /* uint32[1024] or NULL */);

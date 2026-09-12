@@ -9,8 +9,9 @@ and appending a history entry.
 ## Last reviewed
 
 ```
-commit:   dc8ac65f ("fix(exposure): unlock Linear RAW on the transfer when Positive is on")
-reviewed: 2026-09-07
+commit:   0755c340 ("UI consistency pass 6: feedback, dialogs, sections, tokens,
+                     controls, copy, keys")
+reviewed: 2026-09-12
 fixtures: Tests/Fixtures/ re-dumped WHOLE from dc8ac65f (2026-09-07, with
           the 8532dd92 port — contrast_mask included; lab_color's vibrance
           leg remains the reference formula frozen in dump_fixtures.py,
@@ -40,6 +41,196 @@ updates this file. The manual procedure, for reference:
 6. Update the **Last reviewed** marker and append to the history below.
 
 ## Review history
+
+### 2026-09-12 — through `0755c340` (0.58.0, no release tagged, 11 commits)
+
+**No inversion-pipeline change upstream — but the range's one
+architectural fix, `19823af7`, is a direct hit on a bug class we carry on
+the Qt shell: the crop tool re-meters the frame.** Goldens unmoved (empty
+diff on both characterization tests), VERSION unmoved, `models.py` /
+`EXPOSURE_CONSTANTS` untouched, **no `.wgsl` anywhere in the repo
+changed**, no renames. The whole `features/exposure/` tree has an empty
+diff; the entire pipeline-path diffstat is **33 added lines in one file**
+(`process/capture_color.py`, additive, for Peek Negative — see below).
+The substance of this review is therefore two shared-bug-class audits
+against our source, one of which found a real, reachable defect.
+
+**PORTED (same session, 2026-09-12) — 1. Qt crop/analysis tools widen the
+RENDER without moving the METER.** Upstream's
+`19823af7` third movement gave the GPU engine a `full_frame` flag for the
+crop tool's "show the whole rotated frame" preview, and the comment it
+lands with is the whole rule: *"roi stays the real crop throughout, for
+the meter, the contrast mask and the reported overlay — only the render's
+own dispatch extent widens."* Previously their crop preview fell off the
+GPU entirely (`prefer_gpu = False`).
+
+- **The Mac is already correct, structurally**: `uncropped:` is a
+  parameter of `ImageSession.render`, NOT a settings mutation, so
+  `prepare(linearImage:cropRect:analysisRect:)` is always handed
+  `settings.cropRect` (ImageSession.swift:306-311) and `PreparedKey`
+  cannot move when a tool opens. Exactly their corrected design, arrived
+  at from the other side.
+- **The Qt shell is not.** `renderSettings()` (qt/main.cpp:493-502)
+  implements tool geometry by **deleting keys from the settings JSON** —
+  `s.remove("cropRect")` for Crop, plus `fineRotation` for Analysis — and
+  that JSON is the bridge's only channel: `CoreBridge` prepares with
+  `settings.cropRect` (CoreBridge.swift:106-110), which is now nil. So
+  **opening Crop & Straighten on Linux re-meters the whole uncropped
+  frame** — rebate and all — and exposure, cast and Auto Grade visibly
+  shift on entry and shift back on Apply/Cancel. That is upstream's bug
+  in our code, with their fix as the spec.
+
+**What landed.** `si_render` and `si_render_into` take an `uncropped`
+flag (after `tier`; `qt/swiftinvert_core.h` updated in the same change —
+an ABI change, so rebuild both sides together), and it reaches ONLY the
+bridge `Session`'s source geometry: `sourceKey(_:uncropped:)` records the
+crop it really built with (`nil` when uncropped), so the per-tier source
+cache can never serve a cropped buffer for an uncropped render or the
+reverse, while `analysis(settings:)` keeps reading `settings.cropRect`
+untouched. Qt's `renderSettings()` no longer deletes `cropRect` for
+either tool; a new `renderUncropped()` supplies the flag at both call
+sites (the async `si_render_into` path and `--selftest`'s sync
+`si_render`). `fineRotation` stripping STAYS a settings substitution for
+the analysis tool, and the comment now says why that one is legitimate:
+its rect is normalized on the orientation-only frame and the meter
+ignores fine rotation by invariant, so dropping it moves the canvas
+without moving anything measured. No pipeline surface, no settings field,
+no kernel change, no fixtures; the Mac is untouched (`make test` 310/310
+green, as expected — CoreBridge and qt are Linux-only targets).
+
+The Contrast Mask plane was carried along deliberately rather than fixed:
+`maskPlane` now takes the same flag and keeps building from the uncropped
+frame while a tool is open, because the kernels map the plane over the
+frame they render and a crop-sized plane would be stretched across the
+wider one. That preserves today's behaviour exactly and keeps Linux and
+the Mac identical — it is item 2 below, on both platforms, not a
+regression introduced here.
+
+**Owed: a build + `--selftest` on the box.** This is Linux-only code and
+the Mac cannot compile it (`CoreBridge` is gated `#if !os(macOS)` behind
+VulkanRenderKit, and qt needs Qt6); `swiftc -parse` is the only check
+that ran here. The next distrobox session should
+`swift build -c release --product SwiftInvertCore`, rebuild `qt/build`,
+and confirm in the GUI that entering Crop & Straighten on a frame with a
+committed crop no longer changes the tone — batch it with the `8532dd92`
+`swift test` pass already owed.
+
+**To port (proposed) — 2. the Contrast Mask plane must stay on the
+printed frame in tool modes (Mac + Linux).** Same commit's rule, second
+clause. `ImageSession.maskPlaneTexture` keys on `uncropped` and builds
+from the full proxy when a tool is open (ImageSession.swift:347-349), so
+with the mask engaged, entering Crop & Straighten blurs the **rebate into
+the plane** — precisely the vignette upstream warns about and that our
+own 2026-08-21 on-scan trial reproduced ("the first uncropped pass
+instructively reproduced the rebate-vignette upstream warns about; the
+plane must be built from the printed frame"). The preview inside the tool
+therefore shows a mask the committed render will not, and the plane
+re-blurs (~20 ms) on entry and exit. Honest cost: the correct fix is not
+free, because a plane built on the crop no longer covers the wider
+render — the kernels map the plane over the render rect, so they would
+need the plane's **coverage rect as a uniform** and clamp outside it
+(edge-replicate), in all three mirrors. Medium effort for a
+tool-mode-only visual; worth doing after item 1, and a candidate to batch
+with the next kernel change rather than alone. The bridge `Session` has
+the identical shape (CoreBridge.swift:196-202) and gets it in the same
+change.
+
+**Deliberately skipped:**
+
+- **`c06273a7` + `db7377d3` Peek Negative fixes** — Peek Negative is a
+  recorded *candidate* here, not a feature, so nothing is reachable; but
+  these two commits are now the best spec for it and are recorded as
+  design notes rather than re-derived later. Their diagnosis: painting
+  the decoded raw with only the camera matrix and the working OETF gives
+  "dark and flat, nothing like the film", and unbalanced sensor RGB
+  renders an orange mask **green**. Two corrections: (a) fold the as-shot
+  WB multipliers into the matrix *for this view only* — their render path
+  refuses them on narrowband captures (`should_fold_camera_wb`, the
+  `859c1be` rule) but a peek only has to show the film the way the eye
+  and every raw viewer see it; (b) the new `lightbox_level` (the range's
+  only pipeline-path hunk): **one scalar** gain putting the P99.5 of the
+  whole frame at 0.95 in the working space, measured **before the crop**
+  (cropping into the picture would move the reference and change
+  brightness as the user frames) and applied after. Scalar and not
+  per-channel on evidence — "a per-channel reference neutralizes whatever
+  it lands on, which is the rebate on a scan with no bare light around
+  the film, and that renders an orange mask olive". This matters *more*
+  here than upstream if we ever build it: we decode `output_color=RAW`
+  with unity WB and apply no camera matrix at all, so a naive peek of
+  ours would be both green and dark by construction. `db7377d3`'s UX half
+  (a NEGATIVE badge on the canvas so a view left on doesn't read as a
+  broken render; Esc leaves whatever owns the canvas before it touches
+  the active tool) is convergent with our existing Escape-precedence
+  rule for the test strip and zone placement.
+- **`f01b5904` fractional slider keyboard step** — their `CompactSlider`
+  keeps a precision-scaled integer space and only set `singleStep` when
+  `step >= 1.0`, so every fractional-step slider silently arrow-stepped
+  by 1/precision (Grade moved 0.01 ISO-R per press). **Glanced at both
+  our shells, neither can have it**: the Qt `makeSlider`
+  (qt/main.cpp:955-962) sizes its integer range as
+  `ticks = (max − min)/step`, so one internal unit *is* one declared step
+  and Qt's default `singleStep` of 1 is already right; the Mac's
+  `LabeledSlider` uses a continuous `Slider(value:in:)` with no declared
+  step at all, so there is no declaration to ignore (keyboard stepping is
+  SwiftUI's own default — a deliberate non-decision, not a defect).
+- **`4a97056c` stale texture view raising during draw** — a repaint
+  landing after their texture pool retired the previous size's
+  `tex_final` but before the next `update_texture()`. **Structurally
+  absent**: our render contract is "returns read-back buffers, never live
+  textures" (CLAUDE.md threading/reuse contract), and the display path
+  hands SwiftUI/Qt an owned bitmap, so there is no GPU object for an
+  independent expose/resize repaint to outlive.
+- **`da4e44ca` bounded memory for Linear DNG decode and CPU export** —
+  row-blocked float64 normalization in `_peek_linear_dng_rgb` and
+  row-blocked `apply_output_sharpening`/`apply_saturation` in the CPU lab
+  path. Not applicable twice: **Linear DNG is a recorded N/A** (our
+  decode is one pinned LibRaw recipe, no DNG linearization table leg),
+  and our Lab ops run in the GPU `colorPop` pass with no CPU tile path to
+  bound. Its spirit — never materialize a full-frame float64 temporary —
+  is our big-buffer discipline, which we apply at allocation
+  (`unsafeUninitializedCapacity`) rather than by blocking. Two of its
+  three touched files sit outside the tracked pipeline paths.
+
+**Not applicable (rest, one line each):** `6d93baf9` v4b Scanlight
+hardware ID 3 recognised as white-LED-capable (their capture hardware
+table); `8e7474ff` incremental heal-stroke baking keyed on buffer
+identity (retouch — a recorded non-feature; its `img is baseline` cache
+key is a neat trick with nothing here to key); `56494c5c` export
+filename/contact-sheet path fields losing the caret to a 150 ms AppState
+resync (`setText` on a focused field — our ExportSheet has no filename
+field and no resync loop, and the Qt export dialog is modal with sticky
+QSettings, read once); `6f377550` per-file half-frame split with
+auto-detected gutter (half-frame assets — not shipped); `0755c340` UI
+consistency pass 6 (toast severity, worker errors no longer blanking the
+canvas, dialog footers, theme tokens, section guides — their Qt shell;
+the one transferable line, *a failed export must not blame a load or wipe
+the frame on screen*, is already how `AppModel`'s export batch reports).
+
+**dump_fixtures.py:** compatible, and a re-dump would be byte-identical.
+Every one of its `features/exposure/*` imports is in a tree with an empty
+diff; `features/process/models.py` and `kernel/image/logic.py` are
+untouched; the only signature-adjacent change anywhere it reaches is
+`PipelineContext` gaining a defaulted `cache_stages: bool = True`
+(`domain/interfaces.py`), which its bare constructions pick up correctly.
+The `fixtures:` line does not move.
+
+**Still open (carried over):** **the `swift test` pass owed in the
+`swiftdev` distrobox** for the 2026-09-07 `8532dd92` port — the Highlight
+Hold term and rebuilt `.spv` are committed, but `VulkanParityTests` pin
+them against the re-dumped fixtures only on the box, so the Linux GPU
+side of that port is compiled-and-committed, not verified — **now joined
+by item 1's own build + GUI check, which is in exactly the same
+position**. One box session covers both, and should come before item 2,
+which touches the kernels. Plus: the `2cd687b` export-EXIF-hygiene
+port proposal (2026-08-23), colour ring-around, `91a1b78` tunable Auto
+Density/Grade targets (now seven tunables upstream), the on-scan Color
+Mixer band re-tune pass, the two 2026-08-13 design calls, Peek Negative
+(candidate — now carrying `c06273a7`'s WB-fold + `lightbox_level` spec
+and `db7377d3`'s badge/Esc UX), Before/After split (candidate), Linux
+export-metadata parity (candidate), batch-export pipelining (candidate),
+in-repo ICC-tag regression test (candidate). **New this range:** the
+tool-mode Contrast Mask plane scoping (item 2, proposed); item 1 landed
+the same session.
 
 ### 2026-09-07 — through `dc8ac65f` (0.54.0 → **0.58.0**, 55 commits)
 

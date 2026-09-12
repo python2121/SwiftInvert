@@ -147,20 +147,28 @@ private final class Session {
         return image
     }
 
-    private static func sourceKey(_ settings: ExposureSettings) -> SourceKey {
+    /// The geometry a render actually covers. `uncropped` is the tools'
+    /// widened extent (see si_render) and belongs HERE, in the source
+    /// geometry, rather than in the settings: dropping `cropRect` from the
+    /// settings JSON would also un-scope the meter, and the crop tool must
+    /// not re-meter the frame. The key carries it as the crop it really
+    /// built with, so the cache can never serve a cropped buffer for an
+    /// uncropped render or the reverse.
+    private static func sourceKey(_ settings: ExposureSettings, uncropped: Bool) -> SourceKey {
         SourceKey(
             orient: OrientKey(rotation: settings.rotation, flip: settings.flipHorizontal),
             fineRotation: settings.fineRotation,
-            cropRect: settings.cropRect)
+            cropRect: uncropped ? nil : settings.cropRect)
     }
 
     /// GPU source for a tier: oriented (+fine rotation, inscribed) then
     /// cropped, both cached per tier so threshold crossings re-upload only
     /// when geometry actually changed.
     func source(
-        settings: ExposureSettings, tier: Tier, pipeline: VulkanRenderPipeline
+        settings: ExposureSettings, tier: Tier, uncropped: Bool,
+        pipeline: VulkanRenderPipeline
     ) throws -> VulkanRenderPipeline.SourceBuffer {
-        let key = Self.sourceKey(settings)
+        let key = Self.sourceKey(settings, uncropped: uncropped)
         if let cached = sourceCache[tier.rawValue], cached.key == key { return cached.buffer }
 
         var image = try orientedImage(key: key, tier: tier)
@@ -180,7 +188,7 @@ private final class Session {
     /// mask. Rebuilds (~20 ms) only on spacer/geometry/analysis changes;
     /// gamma drags hit only the uniform.
     func maskPlane(
-        settings: ExposureSettings, analysis: ExposureAnalysis,
+        settings: ExposureSettings, analysis: ExposureAnalysis, uncropped: Bool,
         pipeline: VulkanRenderPipeline
     ) throws -> VulkanRenderPipeline.MaskBuffer? {
         guard settings.contrastMask != 0 else {
@@ -189,7 +197,7 @@ private final class Session {
             return nil
         }
         let key = MaskKey(
-            source: Self.sourceKey(settings),
+            source: Self.sourceKey(settings, uncropped: uncropped),
             spacer: settings.maskSpacer,
             analysis: AnalysisKey(
                 orient: OrientKey(rotation: settings.rotation, flip: settings.flipHorizontal),
@@ -197,9 +205,15 @@ private final class Session {
         if let maskBuffer, maskKey == key { return maskBuffer }
         // The printed frame at proxy scale: oriented (+fine rotation), then
         // the crop — a bright rebate blurred into the mask would print as a
-        // vignette the negative does not have.
+        // vignette the negative does not have. A tool's widened render is
+        // the exception, and it has to be: the kernels map the plane over
+        // the frame they render, so a crop-sized plane would be stretched
+        // across the wider one. Same tradeoff the Mac ImageSession makes
+        // (the rebate is back in the plane while a tool is open) — see the
+        // UPSTREAM.md 2026-09-12 item 2, which fixes both at once by giving
+        // the plane its own coverage rect.
         var image = try orientedImage(key: key.source, tier: .proxy)
-        if let crop = settings.cropRect {
+        if !uncropped, let crop = settings.cropRect {
             image = image.cropped(to: crop)
         }
         guard
@@ -321,10 +335,15 @@ public func si_size(
 /// 2 = full resolution (first call pays the ~3–5 s decode, then cached).
 /// Analysis always runs on the proxy regardless, so the conversion is
 /// tier-invariant.
+/// `uncropped` != 0 renders the whole frame outside `cropRect` too — the
+/// crop and analysis tools' preview. It widens only what is RENDERED: the
+/// meter stays scoped by the settings' own `cropRect`, so opening a tool
+/// cannot move the conversion. (Passing settings with `cropRect` deleted
+/// would do both, which is the bug this parameter exists to avoid.)
 @_cdecl("si_render")
 public func si_render(
     _ handle: Int64, _ settingsJSON: UnsafePointer<CChar>?, _ srgbDisplay: Int32,
-    _ tier: Int32,
+    _ tier: Int32, _ uncropped: Int32,
     _ outWidth: UnsafeMutablePointer<Int32>?, _ outHeight: UnsafeMutablePointer<Int32>?,
     _ histogram: UnsafeMutablePointer<UInt32>?
 ) -> UnsafeMutablePointer<UInt8>? {
@@ -353,9 +372,10 @@ public func si_render(
         let params = ExposureKernel.deriveRenderParams(settings, analysis)
         let source = try session.source(
             settings: settings, tier: Session.Tier(rawValue: tier) ?? .proxy,
-            pipeline: pipeline)
+            uncropped: uncropped != 0, pipeline: pipeline)
         let mask = try session.maskPlane(
-            settings: settings, analysis: analysis, pipeline: pipeline)
+            settings: settings, analysis: analysis, uncropped: uncropped != 0,
+            pipeline: pipeline)
         let display = try pipeline.renderDisplay(
             source: source, params: params, computeHistogram: histogram != nil,
             srgbDisplay: srgbDisplay != 0, maskPlane: mask)
@@ -384,7 +404,8 @@ public func si_render(
 @_cdecl("si_render_into")
 public func si_render_into(
     _ handle: Int64, _ settingsJSON: UnsafePointer<CChar>?, _ srgbDisplay: Int32,
-    _ tier: Int32, _ dest: UnsafeMutableRawPointer?, _ destCapacity: Int64,
+    _ tier: Int32, _ uncropped: Int32,
+    _ dest: UnsafeMutableRawPointer?, _ destCapacity: Int64,
     _ outWidth: UnsafeMutablePointer<Int32>?, _ outHeight: UnsafeMutablePointer<Int32>?,
     _ histogram: UnsafeMutablePointer<UInt32>?
 ) -> Int32 {
@@ -411,7 +432,7 @@ public func si_render_into(
         let pipeline = try Bridge.shared.getPipeline()
         let source = try session.source(
             settings: settings, tier: Session.Tier(rawValue: tier) ?? .proxy,
-            pipeline: pipeline)
+            uncropped: uncropped != 0, pipeline: pipeline)
         outWidth?.pointee = Int32(source.width)
         outHeight?.pointee = Int32(source.height)
         let needed = Int64(source.width * source.height * 4)
@@ -419,7 +440,8 @@ public func si_render_into(
         let analysis = session.analysis(settings: settings)
         let params = ExposureKernel.deriveRenderParams(settings, analysis)
         let mask = try session.maskPlane(
-            settings: settings, analysis: analysis, pipeline: pipeline)
+            settings: settings, analysis: analysis, uncropped: uncropped != 0,
+            pipeline: pipeline)
         let bins = try pipeline.renderDisplay(
             source: source, params: params, computeHistogram: histogram != nil,
             srgbDisplay: srgbDisplay != 0, maskPlane: mask, into: dest)

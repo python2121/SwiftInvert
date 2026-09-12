@@ -404,6 +404,7 @@ public:
         const int tier = desiredTier();
         lastTier_ = tier;
         const QByteArray json = QJsonDocument(renderSettings()).toJson(QJsonDocument::Compact);
+        const int32_t uncropped = renderUncropped();
         const int back = backBuffer_;
         if (!frameBuffers_[back]) frameBuffers_[back] = std::make_shared<QByteArray>();
         auto buffer = frameBuffers_[back];
@@ -437,18 +438,18 @@ public:
                 requestRender();
             }
         });
-        watcher->setFuture(QtConcurrent::run([session, json, tier, buffer] {
+        watcher->setFuture(QtConcurrent::run([session, json, tier, uncropped, buffer] {
             QElapsedTimer timer;
             timer.start();
             RenderOutcome outcome;
             outcome.histogram.resize(1024);
             int32_t w = 0, h = 0;
             int32_t r = si_render_into(session, json.constData(), /*srgb_display=*/1, tier,
-                                       reinterpret_cast<uint8_t *>(buffer->data()),
+                                       uncropped, reinterpret_cast<uint8_t *>(buffer->data()),
                                        buffer->size(), &w, &h, outcome.histogram.data());
             if (r == -1) {  // buffer too small: size it and go again (source cached)
                 buffer->resize(w * h * 4);
-                r = si_render_into(session, json.constData(), 1, tier,
+                r = si_render_into(session, json.constData(), 1, tier, uncropped,
                                    reinterpret_cast<uint8_t *>(buffer->data()),
                                    buffer->size(), &w, &h, outcome.histogram.data());
             }
@@ -489,17 +490,26 @@ private:
     bool settingBool(const QString &key) const { return settings_.value(key).toBool(); }
 
     // The JSON a render should use right now: tools substitute geometry so
-    // the canvas shows the space they operate in.
+    // the canvas shows the space they operate in. The CROP is NOT one of
+    // those substitutions — it rides si_render's `uncropped` flag instead
+    // (see renderUncropped): deleting cropRect here would also un-scope the
+    // METER, and the conversion would visibly shift on entering the tool
+    // and shift back on Apply. Fine rotation is a true substitution: the
+    // analysis tool's rect is normalized on the orientation-only frame, and
+    // the meter ignores fine rotation by invariant, so dropping it moves
+    // the canvas without moving anything measured.
     QJsonObject renderSettings() const {
         QJsonObject s = showingBaseline_ ? QJsonObject() : settings_;
-        if (tool_ == Tool::Crop) {
-            s.remove("cropRect");
-        } else if (tool_ == Tool::Analysis) {
-            s.remove("cropRect");
+        if (tool_ == Tool::Analysis) {
             s.remove("fineRotation");
         }
         return s;
     }
+
+    // Tools show the frame outside the crop too: the crop tool's box is
+    // drawn over the whole (fine-rotated) frame, and the analysis rect maps
+    // 1:1 to the metering space only when the full frame is on screen.
+    int32_t renderUncropped() const { return tool_ == Tool::None ? 0 : 1; }
 
     void editSetting(const QString &key, const QJsonValue &value) {
         settings_.insert(key, value);
@@ -1637,7 +1647,8 @@ bool MainWindow::selfTest(const QString &target, const QString &screenshotPath) 
         int32_t w = 0, h = 0;
         QVector<quint32> bins(1024);
         const QByteArray json = QJsonDocument(renderSettings()).toJson(QJsonDocument::Compact);
-        uint8_t *rgba = si_render(session_, json.constData(), 1, 0, &w, &h, bins.data());
+        uint8_t *rgba = si_render(session_, json.constData(), 1, 0, renderUncropped(),
+                                  &w, &h, bins.data());
         if (!rgba) {
             fprintf(stderr, "selftest: %s\n", qPrintable(takeString(si_last_error())));
             return false;

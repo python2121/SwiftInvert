@@ -116,7 +116,9 @@ contract: sessions are int64 handles (`si_open` = preview decode + analyze
 JSON (missing keys = defaults, so the frontend never re-implements
 fields — `si_default_settings` seeds the sliders), every returned buffer
 is malloc'd/`si_free`'d, `si_render` returns rgba8 via Vulkan
-renderDisplay (~2–5 ms), `si_thumbnail` returns the embedded camera JPEG
+renderDisplay (~2–5 ms) and takes an `uncropped` flag that widens what is
+RENDERED without touching what is METERED (see Phase B),
+`si_thumbnail` returns the embedded camera JPEG
 (Qt decodes it). `qt/main.cpp` (Widgets + CMake) is folder browsing, a
 fit-to-window canvas, controls editing the settings JSON with latest-wins
 async renders, and a `--selftest <png>` mode that renders + screenshots
@@ -157,12 +159,25 @@ Phase B (2026-08-08) — geometry + canvas interactions:
   crop/analysis rects; render source = oriented(+fineRotation, inscribed)
   THEN cropped — so cropRect is normalized on the fine-rotated frame.
   All tiers keyed; slider drags rebuild nothing.
-- Qt tools exploit that JSON contract with zero new bridge surface: the
-  CROP tool renders with cropRect stripped (the drawn box IS the stored
-  rect, straighten slider ±45° edits fineRotation live; Apply commits,
-  Cancel/Escape restores the entry snapshot); the ANALYSIS tool renders
-  orientation-only (cropRect+fineRotation stripped) so its rect maps 1:1
-  to the metering space (analysisRectFineRotation written as 0).
+- Qt tools show the frame OUTSIDE the crop, and that rides
+  `si_render`'s **`uncropped` flag**, never a settings substitution:
+  widening the render must not widen the METER (deleting `cropRect` from
+  the JSON did both, so entering Crop re-metered the whole frame —
+  rebate included — and the conversion shifted on entry and back on
+  Apply; ported from NegPy `19823af7`, 2026-09-12). The Mac has always
+  been right here because `uncropped:` is an `ImageSession.render`
+  parameter. So: the CROP tool renders uncropped, fine rotation live
+  (the drawn box IS the stored rect, straighten slider ±45°; the box
+  lives in the canvas until Apply, Cancel/Escape restores the entry
+  snapshot); the ANALYSIS tool renders uncropped AND substitutes
+  fineRotation 0 — a TRUE substitution, since its rect is normalized on
+  the orientation-only frame and the meter ignores fine rotation by
+  invariant (analysisRectFineRotation written as 0). Known gap, both
+  platforms: with Contrast Mask on, a tool's widened render still
+  rebuilds the plane from the uncropped frame (the kernels map the plane
+  over the frame they render, so a crop-sized plane would stretch) —
+  UPSTREAM.md's 2026-09-12 item 2 fixes it by giving the plane its own
+  coverage rect.
 - Zoom/pan on the canvas (wheel to cursor, drag pan, double-click
   fit↔100%); rotate L/R (Ctrl+[/]) and flip (Ctrl+Shift+H) via toolbar.
 - Per-file session history (undo Ctrl+Z / redo / click-to-jump list at
