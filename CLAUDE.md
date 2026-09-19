@@ -301,8 +301,12 @@ source of truth).
   target that transitively imports it — explicit-modules builds rebuild
   the CLibRaw clang module per importer) and `-L$HOMEBREW_PREFIX/lib`; the
   modulemap's `link "raw_r"` picks the library. The prefix comes from
-  `HOMEBREW_PREFIX`, else `/opt/homebrew` or `/usr/local`. Linux keeps
-  `pkgConfig: "libraw_r"` (apt's `.pc` is clean).
+  `HOMEBREW_PREFIX`, else `/opt/homebrew` or `/usr/local`. Linux does NOT
+  consult pkg-config either (since 2026-09-18): apt's `libraw_r.pc` carries
+  a bare `-fopenmp` in its Libs line, which earned the same warning twice
+  per build; the shim's `<libraw/libraw.h>` resolves from `/usr/include`
+  and `libraw_r.so` carries its own lcms2/stdc++/gomp NEEDED entries, so
+  the modulemap's `link "raw_r"` alone is the whole link.
 - Deployment target is **macOS 26** (`platforms: [.macOS("26.0")]` — the
   string form because `.v26` needs tools-version 6.2, which the Linux
   toolchain may lack; `Packaging/Info.plist` mirrors it). It was 14, but

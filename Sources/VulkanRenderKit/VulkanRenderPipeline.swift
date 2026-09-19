@@ -142,7 +142,7 @@ final class VulkanContext {
         deviceName = name
         vkGetPhysicalDeviceMemoryProperties(dev, &memoryProperties)
 
-        var priority: Float = 1.0
+        let priority: Float = 1.0
         var queueInfo = VkDeviceQueueCreateInfo()
         queueInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO
         queueInfo.queueFamilyIndex = family
@@ -293,7 +293,7 @@ public final class VulkanRenderPipeline: @unchecked Sendable {
 
     private func makeLayouts() throws {
         func layout(types: [VkDescriptorType]) throws -> VkDescriptorSetLayout? {
-            var bindings = types.enumerated().map { i, t -> VkDescriptorSetLayoutBinding in
+            let bindings = types.enumerated().map { i, t -> VkDescriptorSetLayoutBinding in
                 var b = VkDescriptorSetLayoutBinding()
                 b.binding = UInt32(i)
                 b.descriptorType = t
@@ -336,7 +336,7 @@ public final class VulkanRenderPipeline: @unchecked Sendable {
             info.setLayoutCount = 1
             info.pushConstantRangeCount = 1
             var result: VkPipelineLayout?
-            var layoutVar = setLayout
+            let layoutVar = setLayout
             try withUnsafePointer(to: layoutVar) { lPtr in
                 info.pSetLayouts = lPtr
                 try withUnsafePointer(to: push) { pPtr in
@@ -346,7 +346,6 @@ public final class VulkanRenderPipeline: @unchecked Sendable {
                         "vkCreatePipelineLayout")
                 }
             }
-            _ = layoutVar
             return result
         }
         pipeLayoutUBO = try pipeLayout(layoutUBO)
@@ -420,7 +419,7 @@ public final class VulkanRenderPipeline: @unchecked Sendable {
     }
 
     private func makePools() throws {
-        var poolSizes = [
+        let poolSizes = [
             VkDescriptorPoolSize(type: VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, descriptorCount: 24),
             VkDescriptorPoolSize(type: VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, descriptorCount: 8),
         ]
@@ -537,7 +536,7 @@ public final class VulkanRenderPipeline: @unchecked Sendable {
     private func writeDescriptorSet(
         layout: VkDescriptorSetLayout?, buffers: [(DeviceBuffer, VkDescriptorType)]
     ) throws -> VkDescriptorSet? {
-        var setLayout = layout
+        let setLayout = layout
         var allocInfo = VkDescriptorSetAllocateInfo()
         allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO
         allocInfo.descriptorPool = descriptorPool
@@ -549,13 +548,12 @@ public final class VulkanRenderPipeline: @unchecked Sendable {
                 vkAllocateDescriptorSets(context.device, &allocInfo, &set),
                 "vkAllocateDescriptorSets")
         }
-        _ = setLayout
 
-        var infos = buffers.map { b, _ in
+        let infos = buffers.map { b, _ in
             VkDescriptorBufferInfo(buffer: b.buffer, offset: 0, range: VK_WHOLE_SIZE)
         }
         infos.withUnsafeBufferPointer { infoBuf in
-            var writes = buffers.enumerated().map { i, pair -> VkWriteDescriptorSet in
+            let writes = buffers.enumerated().map { i, pair -> VkWriteDescriptorSet in
                 var w = VkWriteDescriptorSet()
                 w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET
                 w.dstSet = set
@@ -578,12 +576,11 @@ public final class VulkanRenderPipeline: @unchecked Sendable {
     ) {
         let pipeLayout = pipeLayout(for: layout)
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelines[kernel])
-        var setVar = set
+        let setVar = set
         withUnsafePointer(to: setVar) { sPtr in
             vkCmdBindDescriptorSets(
                 cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeLayout, 0, 1, sPtr, 0, nil)
         }
-        _ = setVar
         var push: (UInt32, UInt32) = (n, flags)
         vkCmdPushConstants(
             cmd, pipeLayout, VkShaderStageFlags(VK_SHADER_STAGE_COMPUTE_BIT.rawValue), 0, 8, &push)
@@ -722,20 +719,18 @@ public final class VulkanRenderPipeline: @unchecked Sendable {
         var submit = VkSubmitInfo()
         submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO
         submit.commandBufferCount = 1
-        var cmdVar = commandBuffer
+        let cmdVar = commandBuffer
         try withUnsafePointer(to: cmdVar) { cPtr in
             submit.pCommandBuffers = cPtr
             try vkCheck(vkQueueSubmit(context.queue, 1, &submit, fence), "vkQueueSubmit")
         }
-        _ = cmdVar
-        var fenceVar = fence
+        let fenceVar = fence
         try withUnsafePointer(to: fenceVar) { fPtr in
             try vkCheck(
                 vkWaitForFences(context.device, 1, fPtr, VK_TRUE, 10_000_000_000),
                 "vkWaitForFences")
             _ = vkResetFences(context.device, 1, fPtr)
         }
-        _ = fenceVar
         return content
     }
 
