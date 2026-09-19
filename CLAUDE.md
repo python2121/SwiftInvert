@@ -267,12 +267,55 @@ source of truth).
 **Toolchain constraints (this machine has Command Line Tools, no Xcode):**
 - No XCTest and Testing.framework lives outside default search paths → tests
   use Swift Testing with the framework/rpath flags encoded in the `Makefile`.
-  Bare `swift test` fails with "no such module 'Testing'".
+  Bare `swift test` fails with "no such module 'Testing'". Since CLT 27.0
+  (Swift 6.4, `swiftbuild` backend) the Makefile also passes
+  `-plugin-path …/plugins/testing`: without it the `@Test`/`@Suite` macro
+  plugin resolves only intermittently ("plugin for module 'TestingMacros'
+  not found" on a random test target).
+- **Never use `@State`; use `@ViewState`**
+  (`Sources/SwiftInvert/ViewState.swift`). Since the macOS 27 SDK, `@State`
+  is a macro backed by `libSwiftUIMacros.dylib`, which ships only inside
+  Xcode — under the CLT it fails with "plugin for module 'SwiftUIMacros'
+  not found" plus a cascade of "'self' is immutable" / "cannot find '$foo'"
+  noise. `@ViewState` wraps the still-present `State<Value>` struct and
+  behaves like the classic wrapper (`$binding` works; in a custom `init`
+  write `_field = ViewState(wrappedValue:)` instead of
+  `State(initialValue:)`). The Makefile's `check-state` target (a
+  prerequisite of build/test/run/release) rejects any `@State` in
+  `Sources/`, so a machine that happens to have Xcode can't reintroduce
+  it. `@Binding`, `@Bindable`, `@Environment`, `@AppStorage` etc. are
+  unchanged. Do NOT pin `SDKROOT` to the 26.5 SDK instead — it works until
+  a CLT update prunes the old SDK. Also `import Combine` explicitly where
+  `onReceive`/`Timer.publish` are used; Swift 6.4 warns when Combine is
+  only reached through SwiftUI. Reference implementation:
+  `~/Documents/code/claude-status`.
 - No build-time `metal` compiler → shaders are compiled **at runtime** from
   `Sources/MetalRenderKit/Shaders/NegPipeline.metal` (a bundled `.copy`
   resource) via `MTLDevice.makeLibrary(source:)`.
 - LibRaw comes from Homebrew (`brew install libraw`), linked dynamically via
-  the `CLibRaw` systemLibrary target (`pkgConfig: "libraw_r"`). LGPL-2.1.
+  the `CLibRaw` systemLibrary target. LGPL-2.1. **On macOS the manifest
+  does NOT consult pkg-config**: Homebrew's `libraw_r.pc` carries
+  `-Xpreprocessor -fopenmp`, which SwiftPM refuses to forward and warns
+  about on every build ("prohibited flag(s)"). `Package.swift` instead
+  passes `-Xcc -I$HOMEBREW_PREFIX/include` (on RawDecodeKit AND every
+  target that transitively imports it — explicit-modules builds rebuild
+  the CLibRaw clang module per importer) and `-L$HOMEBREW_PREFIX/lib`; the
+  modulemap's `link "raw_r"` picks the library. The prefix comes from
+  `HOMEBREW_PREFIX`, else `/opt/homebrew` or `/usr/local`. Linux keeps
+  `pkgConfig: "libraw_r"` (apt's `.pc` is clean).
+- Deployment target is **macOS 26** (`platforms: [.macOS("26.0")]` — the
+  string form because `.v26` needs tools-version 6.2, which the Linux
+  toolchain may lack; `Packaging/Info.plist` mirrors it). It was 14, but
+  the Homebrew dylibs the bundle ships are built for 26, so the lower
+  number only bought ld's "built for newer version" warning per link.
+- The swiftbuild backend (SwiftPM default since Swift 6.4) hands ld two
+  Xcode-shaped paths that don't exist under the CLT —
+  `/Library/Developer/CommandLineTools/Developer/Library/Frameworks` and
+  `…/CommandLineTools/Developer/usr/lib` — producing "search path … not
+  found" per link. Harmless; silenced once by creating them (root-owned
+  tree): `sudo mkdir -p /Library/Developer/CommandLineTools/Developer/Library/Frameworks /Library/Developer/CommandLineTools/Developer/usr/lib`.
+  Re-run after a CLT reinstall if the warnings return. The deprecated
+  `--build-system native` doesn't emit them but is going away.
 - If the repo directory is ever moved/renamed: `rm -rf .build` (the module
   cache embeds absolute paths).
 

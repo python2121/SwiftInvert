@@ -1186,7 +1186,7 @@ final class AppModel {
             guard let sample = try? await session.sampleZonePin(settings: snapshot, u: u, v: v)
             else { return }
             guard let self, self.zonePlacementGeneration == generation,
-                var st = self.zonePlacement, st.pins.indices.contains(index)
+                let st = self.zonePlacement, st.pins.indices.contains(index)
             else { return }
             var pin = st.pins[index]
             pin.nx = u

@@ -9,17 +9,17 @@ struct DetailView: View {
     @AppStorage("gridLineType") private var gridLineType = GridLineType.thirds.rawValue
     @AppStorage("showZoneOverlay") private var showZoneOverlay = false
 
-    @State private var zoom: CGFloat = 1
+    @ViewState private var zoom: CGFloat = 1
     /// Desired crop box while in Crop & Straighten mode (rotated-space px;
     /// nil = follow the committed crop). Committed back on mode exit.
-    @State private var cropBox: CropBoxValue?
-    @State private var baseZoom: CGFloat = 1
-    @State private var pan: CGSize = .zero
-    @State private var basePan: CGSize = .zero
+    @ViewState private var cropBox: CropBoxValue?
+    @ViewState private var baseZoom: CGFloat = 1
+    @ViewState private var pan: CGSize = .zero
+    @ViewState private var basePan: CGSize = .zero
     /// Spot-densitometer hover state. Held here but never READ from this
     /// body — only `DensitometerReadout` reads it, so metering the pointer
     /// doesn't re-render the canvas.
-    @State private var densitometer = DensitometerState()
+    @ViewState private var densitometer = DensitometerState()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -567,8 +567,8 @@ struct SelectionOverlay: View {
     let existing: NormalizedRect?
     let onCommit: (NormalizedRect) -> Void
 
-    @State private var dragStart: CGPoint?
-    @State private var dragCurrent: CGPoint?
+    @ViewState private var dragStart: CGPoint?
+    @ViewState private var dragCurrent: CGPoint?
 
     var body: some View {
         ZStack {

@@ -21,7 +21,7 @@ struct ColorGradingSection: View {
         }
     }
 
-    @State private var band: Band = .mids
+    @ViewState private var band: Band = .mids
 
     static let tempColors = [Color(red: 0.25, green: 0.35, blue: 0.85), Color(white: 0.4), Color(red: 0.75, green: 0.7, blue: 0.15)]
     static let tintColors = [Color(red: 0.2, green: 0.75, blue: 0.25), Color(white: 0.4), Color(red: 0.7, green: 0.2, blue: 0.75)]
@@ -84,7 +84,7 @@ struct GradientSlider: View {
     /// Hover tooltip describing what the control does.
     var help: String = ""
     @Environment(\.controlEditingChanged) private var controlEditingChanged
-    @State private var isDragging = false
+    @ViewState private var isDragging = false
 
     private var isChanged: Bool { abs(value - defaultValue) > 1e-9 }
 

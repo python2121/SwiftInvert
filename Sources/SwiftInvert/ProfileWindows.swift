@@ -64,7 +64,7 @@ struct ProfileEditRequest: Codable, Hashable {
 struct ProfilePickerView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openWindow) private var openWindow
-    @State private var selectedID: UUID = ProfileStore.shared.activeID
+    @ViewState private var selectedID: UUID = ProfileStore.shared.activeID
 
     private var store: ProfileStore { ProfileStore.shared }
     private var selectionIsBuiltIn: Bool { ProfileStore.reservedIDs.contains(selectedID) }
@@ -123,9 +123,9 @@ struct ProfilePickerView: View {
 /// Accept saves the profile; Cancel discards.
 struct ProfileEditorView: View {
     let request: ProfileEditRequest
-    @State private var model: AppModel
-    @State private var name: String
-    @State private var showingClosePrompt = false
+    @ViewState private var model: AppModel
+    @ViewState private var name: String
+    @ViewState private var showingClosePrompt = false
     @Environment(\.dismiss) private var dismiss
 
     /// What the editor opened with — Escape closes silently when nothing
@@ -139,8 +139,8 @@ struct ProfileEditorView: View {
             ?? ProfileStore.builtIn
         seedAdjustments = seed.settings.adjustmentsOnly
         seedName = request.editID != nil ? seed.name : "\(seed.name) Copy"
-        _model = State(initialValue: AppModel(profileEditor: true, profileSeed: seed.settings))
-        _name = State(initialValue: request.editID != nil ? seed.name : "\(seed.name) Copy")
+        _model = ViewState(wrappedValue: AppModel(profileEditor: true, profileSeed: seed.settings))
+        _name = ViewState(wrappedValue: request.editID != nil ? seed.name : "\(seed.name) Copy")
     }
 
     private var hasChanges: Bool {

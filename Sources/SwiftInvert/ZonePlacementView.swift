@@ -12,7 +12,7 @@ struct ZonePlacementLayer: View {
 
     /// Live drag position per pin (content-normalized), so the marker tracks
     /// the pointer while the re-sample rounds through the actor.
-    @State private var dragPosition: [Int: CGPoint] = [:]
+    @ViewState private var dragPosition: [Int: CGPoint] = [:]
 
     var body: some View {
         GeometryReader { geo in

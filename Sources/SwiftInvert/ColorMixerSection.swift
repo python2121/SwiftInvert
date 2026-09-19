@@ -69,7 +69,7 @@ struct ColorMixerSection: View {
         var saturationColors: [Color] { [Color(white: 0.4), hueColors[1]] }
     }
 
-    @State private var band: Band = .red
+    @ViewState private var band: Band = .red
 
     var body: some View {
         GroupBox("Color Mixer") {

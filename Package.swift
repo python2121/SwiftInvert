@@ -1,18 +1,38 @@
 // swift-tools-version: 6.0
+import Foundation
 import PackageDescription
 
 let v5 = [SwiftSetting.swiftLanguageMode(.v5)]
 
+#if os(macOS)
+// Homebrew's libraw .pc files put `-Xpreprocessor -fopenmp` in their Libs
+// line; SwiftPM refuses to forward those ("prohibited flag(s)" on every
+// build) and they do nothing for us anyway — OpenMP is internal to the
+// dylib. So on macOS the .pc is not consulted: the Homebrew include/lib
+// dirs are passed directly and the modulemap's `link "raw_r"` picks the
+// library. Every target that (transitively) imports RawDecodeKit rebuilds
+// the CLibRaw clang module under explicit-modules builds, so the include
+// flag rides all of them (what pkg-config would have propagated). Linux
+// keeps pkg-config (apt's .pc is clean).
+let brewPrefix = ProcessInfo.processInfo.environment["HOMEBREW_PREFIX"]
+    ?? (FileManager.default.fileExists(atPath: "/opt/homebrew/include/libraw") ? "/opt/homebrew" : "/usr/local")
+let libRaw: Target = .systemLibrary(name: "CLibRaw", providers: [.brew(["libraw"])])
+let libRawSwift: [SwiftSetting] = [.unsafeFlags(["-Xcc", "-I\(brewPrefix)/include"])]
+let libRawLinker: [LinkerSetting] = [.unsafeFlags(["-L\(brewPrefix)/lib"])]
+#else
+let libRaw: Target = .systemLibrary(name: "CLibRaw", pkgConfig: "libraw_r", providers: [.apt(["libraw-dev"])])
+let libRawSwift: [SwiftSetting] = []
+let libRawLinker: [LinkerSetting] = []
+#endif
+
 // Portable core: builds on macOS and Linux (the Qt frontend consumes these).
 var targets: [Target] = [
-    .systemLibrary(
-        name: "CLibRaw",
-        pkgConfig: "libraw_r",
-        providers: [.brew(["libraw"]), .apt(["libraw-dev"])]
-    ),
+    libRaw,
     // Pure conversion kernel: analysis, metering, curve parameters. No UI, no Metal.
     .target(name: "NegativeKit", swiftSettings: v5),
-    .target(name: "RawDecodeKit", dependencies: ["CLibRaw", "NegativeKit"], swiftSettings: v5),
+    .target(
+        name: "RawDecodeKit", dependencies: ["CLibRaw", "NegativeKit"],
+        swiftSettings: v5 + libRawSwift, linkerSettings: libRawLinker),
     .testTarget(
         name: "NegativeKitTests",
         dependencies: ["NegativeKit"],
@@ -86,13 +106,13 @@ targets += [
     .executableTarget(
         name: "negcli",
         dependencies: ["RawDecodeKit", "NegativeKit", "MetalRenderKit"],
-        swiftSettings: v5
+        swiftSettings: v5 + libRawSwift
     ),
     .executableTarget(
         name: "SwiftInvert",
         dependencies: ["RawDecodeKit", "NegativeKit", "MetalRenderKit"],
         resources: [.copy("Resources")],
-        swiftSettings: v5
+        swiftSettings: v5 + libRawSwift
     ),
     .testTarget(
         name: "MetalRenderKitTests",
@@ -104,14 +124,18 @@ targets += [
     .testTarget(
         name: "SwiftInvertTests",
         dependencies: ["SwiftInvert", "NegativeKit"],
-        swiftSettings: v5
+        swiftSettings: v5 + libRawSwift
     ),
 ]
 #endif
 
 let package = Package(
     name: "SwiftInvert",
-    platforms: [.macOS(.v14)],
+    // The Homebrew dylibs the .app bundles are built for macOS 26, so an
+    // older declared target only earns ld's "built for newer version"
+    // warning on every link. Packaging/Info.plist's LSMinimumSystemVersion
+    // mirrors this.
+    platforms: [.macOS("26.0")],  // string form: `.v26` needs tools-version 6.2
     products: products,
     targets: targets
 )

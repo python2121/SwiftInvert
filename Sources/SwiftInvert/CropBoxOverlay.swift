@@ -25,7 +25,7 @@ struct CropBoxOverlay: View {
     let committed: NormalizedRect?
     let committedRadians: Double
 
-    @State private var dragStart: CropBoxValue?
+    @ViewState private var dragStart: CropBoxValue?
 
     static func defaultBox(
         committed: NormalizedRect?, committedRadians: Double, frame: SIMD2<Double>,

@@ -5,12 +5,12 @@ import SwiftUI
 struct ExportSheet: View {
     let request: AppModel.ExportRequest
     @Bindable var model: AppModel
-    @State private var options: ExportOptions
+    @ViewState private var options: ExportOptions
 
     init(request: AppModel.ExportRequest, model: AppModel) {
         self.request = request
         self.model = model
-        _options = State(initialValue: model.exportOptions)
+        _options = ViewState(wrappedValue: model.exportOptions)
     }
 
     var body: some View {

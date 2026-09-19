@@ -9,7 +9,7 @@ struct SectionResizeHandle: View {
     @Binding var height: Double
     var range: ClosedRange<Double>
     var sectionIsBelow: Bool = true
-    @State private var dragStartHeight: Double?
+    @ViewState private var dragStartHeight: Double?
 
     var body: some View {
         ZStack {

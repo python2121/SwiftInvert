@@ -19,11 +19,11 @@ struct InteractiveHistogramView: View {
     }
 
     let fallback: AppModel
-    @State private var target = WeakModel(nil)
-    @State private var channel: Channel = .red
+    @ViewState private var target = WeakModel(nil)
+    @ViewState private var channel: Channel = .red
     /// Index (into the channel's sorted anchors) of the anchor being
     /// dragged; nil while idle.
-    @State private var dragIndex: Int?
+    @ViewState private var dragIndex: Int?
 
     /// Minimum normalized gap kept between neighbouring anchors on both axes.
     private static let gap = 0.01

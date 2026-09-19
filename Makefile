@@ -1,23 +1,42 @@
 # Command Line Tools ship Testing.framework outside the default search paths
 # (and its lib_TestingInterop.dylib in a second directory), so tests need
 # explicit framework + rpath flags. `swift build` / `swift run` need nothing.
+# Since CLT 27.0 (Swift 6.4, swiftbuild backend) the `@Test`/`@Suite` macro
+# plugin (plugins/testing/libTestingMacros.dylib) is also resolved
+# unreliably — roughly two runs in three fail with "plugin for module
+# 'TestingMacros' not found" on a random test target — so its directory is
+# passed explicitly with -plugin-path.
 CLT_FW := /Library/Developer/CommandLineTools/Library/Developer/Frameworks
 CLT_LIB := /Library/Developer/CommandLineTools/Library/Developer/usr/lib
+CLT_TESTING_PLUGINS := /Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing
 TEST_FLAGS := -Xswiftc -F$(CLT_FW) -Xlinker -F$(CLT_FW) \
-	-Xlinker -rpath -Xlinker $(CLT_FW) -Xlinker -rpath -Xlinker $(CLT_LIB)
+	-Xlinker -rpath -Xlinker $(CLT_FW) -Xlinker -rpath -Xlinker $(CLT_LIB) \
+	-Xswiftc -plugin-path -Xswiftc $(CLT_TESTING_PLUGINS)
 
-.PHONY: build test run release app install
+.PHONY: build test run release app install check-state
 
-build:
+# The Command Line Tools cannot compile SwiftUI's `@State` (a macro whose
+# plugin ships only in Xcode, as of the macOS 27 SDK). Use `@ViewState` from
+# Sources/SwiftInvert/ViewState.swift instead. This check keeps a machine
+# that happens to have Xcode from reintroducing it.
+STATE_PATTERN := '^[^/]*@State([^A-Za-z0-9_]|$$)'
+check-state:
+	@if grep -rnE $(STATE_PATTERN) Sources/ >/dev/null; then \
+	  echo "error: '@State' does not build with the Command Line Tools; use '@ViewState' (see Sources/SwiftInvert/ViewState.swift):" >&2; \
+	  grep -rnE $(STATE_PATTERN) Sources/ >&2; \
+	  exit 1; \
+	fi
+
+build: check-state
 	swift build
 
-test:
+test: check-state
 	swift test $(TEST_FLAGS)
 
-run:
+run: check-state
 	swift run SwiftInvert
 
-release:
+release: check-state
 	swift build -c release
 
 # Package the release binary as a real .app so LaunchServices owns the icon

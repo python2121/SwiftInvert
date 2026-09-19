@@ -14,9 +14,9 @@ import SwiftUI
 struct HistogramView: View {
     @Bindable var model: AppModel
 
-    @State private var logScale = true
+    @ViewState private var logScale = true
     // Offset value at drag start (handles accumulate from there).
-    @State private var dragStartOffset: Double?
+    @ViewState private var dragStartOffset: Double?
 
     private let handleZone: CGFloat = 0.35  // fraction of width each handle can travel
     private let offsetFullScale = 0.3  // D at full handle travel (Tone slider range)
@@ -271,7 +271,7 @@ struct HistogramView: View {
 private struct HistogramHoverLayer: View {
     let bins: [UInt32]
     let width: CGFloat
-    @State private var hoverBin: Int?
+    @ViewState private var hoverBin: Int?
 
     var body: some View {
         Color.clear

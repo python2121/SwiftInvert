@@ -3,7 +3,7 @@ import SwiftUI
 
 @main
 struct SwiftInvertApp: App {
-    @State private var model = AppModel()
+    @ViewState private var model = AppModel()
     // Same keys the in-window controls use, so menu toggles stay in sync.
     @AppStorage("libraryVisible") private var libraryVisible = true
     @AppStorage("showGridLines") private var showGridLines = false
@@ -175,11 +175,11 @@ struct ContentView: View {
     @AppStorage("libraryWidth") private var libraryWidth = 320.0
     @AppStorage("libraryVisible") private var libraryVisible = true
     @AppStorage("showZoneOverlay") private var showZoneOverlay = false
-    @State private var dragStartWidth: Double?
+    @ViewState private var dragStartWidth: Double?
     /// Local keyDown monitor: Escape/Return for the tool modes, ↑/↓ for frame
     /// navigation (menu items hold the ←/→ equivalents; an item takes only
     /// one shortcut, so the vertical pair lives here).
-    @State private var keyMonitor: Any?
+    @ViewState private var keyMonitor: Any?
 
     var body: some View {
         // Plain three-pane layout: the library is a solid panel like the
@@ -223,13 +223,17 @@ struct ContentView: View {
         // onExitCommand needs focus; a local monitor catches Escape anywhere
         // in the window. Pass-through unless a tool mode is active, so sheets
         // and text fields keep their own Escape behavior.
-        .onAppear {
+        // `model` is captured weakly HERE, not on the monitor closure: the
+        // monitor must not pin the model (see onDisappear), and a weak
+        // capture on the inner closure alone would be undercut by this
+        // closure's implicit strong capture through self (Swift 6.4 warns).
+        .onAppear { [weak model] in
             guard keyMonitor == nil else { return }
             // Escape CANCELS a tool mode (crop: angle + box restored to
             // mode-entry values); Return/Enter accepts. ↑/↓ walk the film
             // strip like the ←/→ menu equivalents (↑ = previous, ↓ = next —
             // the strip is a vertical column, so both axes should read).
-            keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak model] event in
+            keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
                 guard let model else { return event }
                 let isEscape = event.keyCode == 53
                 let isAccept = event.keyCode == 36 || event.keyCode == 76

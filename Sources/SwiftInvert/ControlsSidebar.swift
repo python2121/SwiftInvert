@@ -1,3 +1,4 @@
+import Combine
 import NegativeKit
 import SwiftUI
 
@@ -19,7 +20,7 @@ struct ControlsSidebar: View {
             ? NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy)
             : 0
     }
-    @State private var scrollerGutter = ControlsSidebar.currentScrollerGutter()
+    @ViewState private var scrollerGutter = ControlsSidebar.currentScrollerGutter()
 
     @AppStorage("adjustmentsCollapsed") private var adjustmentsCollapsed = false
     @AppStorage("cropRotationCollapsed") private var cropRotationCollapsed = false

@@ -12,7 +12,7 @@ struct TestStripLayer: View {
     let strip: AppModel.TestStripState
     let model: AppModel
 
-    @State private var hovered: (row: Int, col: Int)?
+    @ViewState private var hovered: (row: Int, col: Int)?
 
     var body: some View {
         GeometryReader { geo in

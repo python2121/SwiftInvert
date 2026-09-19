@@ -158,7 +158,7 @@ struct FolderSection: View {
 struct LibraryCell: View {
     var model: AppModel
     let url: URL
-    @State private var image: CGImage?
+    @ViewState private var image: CGImage?
 
     private var isSelected: Bool { model.multiSelection.contains(url) }
     private var isCurrent: Bool { model.selection == url }
