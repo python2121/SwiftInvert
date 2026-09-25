@@ -9,9 +9,8 @@ and appending a history entry.
 ## Last reviewed
 
 ```
-commit:   0755c340 ("UI consistency pass 6: feedback, dialogs, sections, tokens,
-                     controls, copy, keys")
-reviewed: 2026-09-12
+commit:   7ac9b17c ("docs(readme): refresh features and trim install notes")
+reviewed: 2026-09-24
 fixtures: Tests/Fixtures/ re-dumped WHOLE from dc8ac65f (2026-09-07, with
           the 8532dd92 port — contrast_mask included; lab_color's vibrance
           leg remains the reference formula frozen in dump_fixtures.py,
@@ -41,6 +40,225 @@ updates this file. The manual procedure, for reference:
 6. Update the **Last reviewed** marker and append to the history below.
 
 ## Review history
+
+### 2026-09-24 — through `7ac9b17c` (0.58.0 → **0.60.0**, 55 commits)
+
+**No kernel or analysis semantics moved on the C-41 print path — but
+TWO fresh-frame defaults did, and one of them is upstream's deliberate
+call: `cast_removal_strength` 0.5 → 1.0 (`6ce27a99`), the one changed
+line in `models.py`.** Goldens unmoved (empty diff on both
+characterization tests — they pin explicit configs, which is why a
+default move never shows there), `EXPOSURE_CONSTANTS` untouched, no
+renames in the tracked trees. Twelve commits hit the pipeline paths;
+every substantive hunk is roll/scene pooling, the E-6/Positive transfer
+path, or tone-limited Dodge & Burn masks (gated off at the defaults —
+`exposure.wgsl`'s hunk runs only when `key_meta.x > 0`; `normalization
+.wgsl` renames `normalize_flag` to a host-decided `transfer_flag`,
+E-6 only). The third item of substance, `c238aee6`, sits OUTSIDE the
+tracked paths (services/rendering + infrastructure/capture) and was
+found through the changelog: every RAW decode now pins its scale to the
+camera's calibrated linearity limit.
+
+**To port (proposed, not yet implemented):**
+
+1. **Cast Removal default 1.0** (`6ce27a99`, third movement: "Cast
+   Removal now starts at 1.0 instead of 0.5 on Color Negative … the
+   applied strength is still confidence × slider, so frames with few
+   clean grays stay gentle. Existing edits keep their saved strength").
+   The 0.5 predates the 127bcd7 two-pass estimator whose confidence
+   product now does the hedging the half-strength used to. Ours mirrors
+   0.5 in three places — `ExposureSettings.castRemovalStrength`, the
+   decoder fallback (`d(.castRemovalStrength, 0.5)`), and the "Cast
+   strength" `LabeledSlider`'s reset-⨯ literal in ControlsSidebar — and
+   the house profile (`DefaultProfile.builtIn`) does NOT set it, so the
+   stock default flows into "SwiftInvert Default" too. Sidecar impact is
+   upstream's rule for free: our encoder is synthesized (every key
+   written), so every existing sidecar carries an explicit 0.5 and keeps
+   it; only fresh frames move. Effort: trivial (three literals +
+   `DefaultProfileTests` if it pins the field). **Fixture re-dump: yes,
+   with it** — `dump_fixtures.py`'s `default` config is bare
+   `ExposureConfig()`, so a re-dump from `7ac9b17c` dumps it at 1.0
+   (curve params and chain outputs of that config move; the manifest
+   records the strength and both parity harnesses read it, so parity
+   holds either way — the re-dump is what keeps "default" meaning
+   default on both sides, and advances the `fixtures:` line to a 0.60.0
+   tip). **A/B on the user's scans first** (negcli render at 0.5 vs 1.0
+   on a few frames with mid confidence): the bar for a default-look
+   change here is visible improvement on real scans, not upstream's
+   say-so.
+2. **Pin the decode scale to the calibrated linearity limit**
+   (`c238aee6`). Their `_decode_sensor_rgb`, preview, detection and
+   thumbnail decodes all scaled against LibRaw's generic `maximum` (the
+   format's ADC ceiling); the capture decode alone passed
+   `user_sat = min(camera_white_level_per_channel) − black`, the body's
+   own calibration of where the sensor stops responding linearly, often
+   lower (their example: a D800 at 15311 vs a generic 16383). Trusting
+   the generic number "lets already non-linear or clipped photosites
+   read as clean". **We have exactly the pre-fix shape**: `RawDecoder`
+   sets `adjust_maximum_thr = 0` (the 2a6cb22 pin) but never
+   `params.user_sat`, so `C.maximum` is `color.maximum` and a body whose
+   `color.linear_max` sits below it decodes its non-linear band as
+   values < 1.0. Effect on our chain: a uniform gain (unity WB, one
+   scalar across channels) is a log offset the offset-independent bounds
+   and meters never see — EXCEPT that the top of the range now clips at
+   1.0 → log 0, i.e. the non-linear band collapses onto the dense-end
+   floor (film base = print white), which is where the 0.01 %/1 % floor
+   percentiles and the same-pixel colour-floor refs read. Small but
+   real, and preview/export stay consistent since both share the one
+   recipe. Port: after `libraw_unpack`, read `color.linear_max[0..3]`
+   (min of the non-zero entries, clamped ≤ `color.maximum`), subtract
+   the black level, set `params.user_sat`; skip when `linear_max` is
+   all zero (LibRaw 0.22.1 exposes both fields — verified in the
+   Homebrew header). **Verify on port, in this order:** (a) a negcli
+   probe printing `maximum`/`linear_max`/`black`/`cblack` for the
+   user's own bodies — if they report `linear_max == maximum` or 0 the
+   change is a no-op for them; (b) which scale LibRaw compares
+   `user_sat` on under OUR parameter set: upstream's docstring says
+   post-black-subtraction, but `dcraw_process` orders the `user_sat`
+   override against black subtraction differently depending on whether
+   `raw2image_ex` subtracted inline, so confirm on a real clipped region
+   (decoded max before/after) rather than by reading; (c) the CLAUDE.md
+   decode sentence ("a rawpy comparison must now pass
+   `adjust_maximum_thr=0`") gains `user_sat=_user_sat(raw)`. No
+   fixtures touched (they are synthetic arrays). Effort: small.
+
+**Flagged, NOT proposed as a port — upstream's fresh-frame Grade moved
+115 → 100 as a side effect of `7900dbaa`.** Every "no edits" config of
+theirs (fresh open, Reset, section resets, modified-dots) now resolves
+through `DEFAULT_WORKSPACE_CONFIG` instead of bare dataclass defaults;
+that config carries `grade=2.5` on the LEGACY 0–5 ladder, which
+`__post_init__` migrates as `150 − 20·G` = **ISO-R 100**, where bare
+`ExposureConfig()` is 115 — our stock, and the fixtures' `default`.
+Their commit calls 100 "calibrated so the print/transfer curves are an
+identity at this exact config (transfer_grade_ref)", but
+`transfer_grade_ref` (100) is the E-6 transfer curve's identity point;
+nothing on the C-41 print path calls 100 calibrated, and the 8532dd92
+print-tone retune was tuned on-scan while their fresh frames still
+opened at 115 (the very bug this commit fixed). So fresh negatives
+upstream now print ~15 % steeper (`k = 2.9·range·100/R`: 2.52 →
+2.9·range) — a look shift they may not have fully intended, and one to
+watch for a retune or revert next review. Our stock `ExposureSettings()`
+stays 115 (parity-neutral, matches bare `ExposureConfig()` and the
+fixtures); if an A/B on real scans likes 100, it belongs in
+`DefaultProfile.builtIn` (the house look), not the stock struct. Batch
+that A/B with item 1's.
+
+**Deliberately skipped:**
+
+- **Roll/scene pooling** (`b2229d6e` whole-frame baseline pooling,
+  `de1ff6ce` Scene Analysis, `6ce27a99` movements 1–2 pooled Cast
+  Removal) — no roll analysis here (one file per frame, bounds per
+  render from the analysis cache; recorded N/A 2026-08-27 for batch
+  bounds). Recorded as the SPEC should roll-wide normalization ever be
+  built: `pool_frame_bounds` compares frames on luma-free colour (6-D
+  over both bounds), flags whole frames > 0.3 log D from the median
+  (N ≥ 3), pools luma as the inliers' median and colour as their mean —
+  outliers keep their OWN bounds ("taking the baseline's luma alone
+  rendered washed out on every real outlier, since the colour offset
+  also shifts luma through G"; on three rolls the outliers were strip
+  ends scanned against bare light). `pool_neutral_axis` is a
+  confidence-weighted median per band/channel (highlight band only when
+  ≥ half the frames have one); `blend_neutral_axis` keeps the roll's
+  R/B-vs-G SHAPE and moves the frame's midtone level by weight ×
+  confidence, weight = 1 − noise/spread (a 500T roll: 0.22 within a
+  one-light scene, 0.81 across mixed light). Their measurements are a
+  useful yardstick for our own per-frame estimator: within one scene
+  the axis varies 0.01–0.04 normalized, and the tungsten/daylight
+  ~0.3 log D B−R shift is absorbed by per-scene bounds.
+- **Tone Limit for Dodge & Burn masks** (`cc1df74a`) — no D&B masks
+  here. Kernel side: `tone_key_weight` (a hand-written smoothstep, since
+  WGSL's is undefined for e0 > e1) on the UNBURNED luma, local grade
+  summed in ISO-R space and clamped once to the ladder; all behind
+  `use_key`/`key_meta.x`, shared kernel otherwise unchanged. `key_edges`
+  is the inverse of `predicted_zone` — convergent with our
+  `ZonePlacement.encoded(ofZone:)`; `placement.py`'s `_zones_of`
+  vectorization leaves `predicted_zone`'s semantics intact, so our
+  zone-placement model is unaffected.
+- **Mode-aware reset defaults** (`59b8cc08`, `7900dbaa`) — one process
+  mode here, and Reset All / Start from Scratch / batch export all
+  resolve through the one `DefaultProfile.settings` → stock chain. The
+  bug class survives in miniature, though: the per-control reset-⨯ takes
+  a `defaultValue` LITERAL in ControlsSidebar (115, 0.5, …), a second
+  source of truth beside `ExposureSettings()` — which is why item 1
+  lists the slider literal explicitly. Worth folding into the control
+  checklist if a fourth default ever moves.
+- **E-6 / slide / Positive** — `108ffeba` highlight reconstruction
+  (LibRaw `highlight_mode` + a `bright` gain of max(wb)/min(wb), since
+  LibRaw normalizes WB gains against min(pre_mul) at mode 0 and
+  max(pre_mul) otherwise — moot at our unity WB), `64739ced`
+  Shadows/Highlights WB on the transfer path, `de31692f` Dye Separation
+  on the transfer curve (`separation_damping_gain_np`), `cc3ba5f0` stale
+  Narrowband flag inert on slides, White/Black Point on the transfer
+  window, Auto Density/Grade restated on the transfer curve
+  (`transfer_auto_terms`, `transfer_assumed_anchor` — the
+  `measure_anchor_from_log(assumed=)` kwarg exists for it). All of
+  `transfer.py`/`transfer.wgsl`; no transparency mode here.
+- **`dbe5a0cc` Peek Embedded Preview** — the camera's own JPEG as an
+  outside reference for the decode, with badge + Esc. We already extract
+  it (RawDecodeKit thumbnails / `si_thumbnail`), so a canvas peek would
+  be cheap; attached to the Peek Negative candidate.
+- **`9d711ebb` exported files' filesystem dates** — shared-bug glance:
+  our Mac `Exporter` writes a fresh file, so mtime/birthtime are the
+  export time while the EXIF dates carry (their exact finding). Trivial
+  on macOS (`FileManager.setAttributes` with `.modificationDate` /
+  `.creationDate`, best-effort, never failing an export). Attached to
+  the `2cd687b` export-EXIF-hygiene port as one more line.
+- **`b91c76c9` 0th-IFD tags above GPSTag** — a piexif serialization
+  bug (pointer entries appended after the sorted run, so
+  PrintImageMatching 0xC4A5 breaks IFD0 order and the offsets after
+  it). Structurally absent: ImageIO serializes IFDs itself, and the
+  Linux exports carry no EXIF yet (metadata-parity candidate).
+- **`2025f74f` stats rows always shown** — their six-row read-out
+  panel; ours is the one negative-character row plus the probe.
+- **`e7b3157c` Linear Output demosaic stamp** — Linear Output is a
+  recorded N/A.
+
+**Not applicable (rest, one line each):** `cc197a5b`/`1a7a2e9d`/
+`8861f0e8`/`dbe37fd8`/`2a17b6ea` rolls, Roll tab, Reset to Roll and
+roll-through-reset (their library model); `2526d8a9` Film Strip by
+scene; `fa5c7bde` embedded lens correction for ARW/DNG (camera-rig
+optics); `6fd83663`/`b71a9001`/`648e1ffe`/`d0c28eee` retouch and
+Optical Removal exclusions, threshold to 48σ, per-mask enable;
+`7bd381c7`/`e81e6be9`/`13cdd414`/`876dd000`/`37adb23e`/`f501d0f7`/
+`f7f2351f`/`e4ae7fd3` thumbnail streaming, prefetch and GPU memory
+bounds (our tiers already budget); `c51f7159` half-frame dims + IR
+defects; `dde5ac5a` Coolscan strip registration, mono TIFF, DNG output
+retired; `8498c2fe` Analysis Buffer overlay while held (we have no
+buffer slider); `2aaa7cec` reload spinner; `e3a1bc58` Film Strip
+multi-select; `b61cf1ab` batch rotate/flip over a selection (mildly
+interesting — we rotate one frame; Copy/Paste Adjustments never carries
+geometry by design); `6870a118` fullscreen restore; `643aeed2`/
+`61cd4168`/`86ce5147` panel/screenshot/dialog copy; `2911b5e0`
+migrations move; `1cb2ef98`/`acf0e658`/`afd87cab`/`7ac9b17c` docs
+(PIPELINE.md was rewritten wholesale — a 594-line plain-language
+rewrite, no semantic content beyond the commits above); `02f4ec54`/
+`da40874d`/`393c3196`/`58a9be08` changelogs.
+
+**dump_fixtures.py:** compatible — every imported name survives
+(`predicted_zone` was removed and re-added with the same signature in
+one diff; `is_transparency_transfer` → `is_transfer_path` is not
+imported), every added kwarg is defaulted (`measure_anchor_from_log
+(assumed=)`, `apply_characteristic_curve`'s key kwargs), and
+`PhotometricProcessor(exposure)` still constructs (`local_config` is
+optional). **But a re-dump is NOT byte-identical**: the `default` config
+is bare `ExposureConfig()`, whose cast strength is now 1.0 — re-dump
+only together with port item 1, and the local checkout (`108ffeba`,
+mid-range) must be pulled to `7ac9b17c` first.
+
+**Still open (carried over):** the tool-mode Contrast Mask plane
+scoping (2026-09-12 item 2, both platforms — needs a plane coverage-rect
+uniform in all three mirrors); **the `swiftdev` distrobox pass** owed
+since the `8532dd92` port (`VulkanParityTests` against the re-dumped
+fixtures) and the 2026-09-12 Qt crop-tool build + GUI check; the
+`2cd687b` export-EXIF-hygiene port (now also carrying `9d711ebb`'s
+filesystem dates); colour ring-around; `91a1b78` tunable Auto targets
+(seven upstream); the on-scan Color Mixer band re-tune; the two
+2026-08-13 design calls; Peek Negative (candidate — now also the
+embedded-preview peek); Before/After split; Linux export-metadata
+parity; batch-export pipelining; in-repo ICC-tag regression test.
+**New this range:** ports 1–2 above (Cast Removal 1.0 with re-dump +
+A/B; `user_sat` decode pin with probe), the grade-100 watch item, and
+the roll-pooling spec as a candidate design note.
 
 ### 2026-09-12 — through `0755c340` (0.58.0, no release tagged, 11 commits)
 
