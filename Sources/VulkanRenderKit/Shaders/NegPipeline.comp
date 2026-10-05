@@ -312,6 +312,16 @@ float contrast_mask_sample(float x, float y) {
     return top + (bot - top) * f.y;
 }
 
+// Per-channel quadratic core, held at its vertex on the side where it would
+// fold back (NegPy d4dc3e49) — mirrors ReferenceCurve.quadraticCore.
+float quadratic_core(float k, float pivot, float curv, float u) {
+    if (curv != 0.0) {
+        float vertex = -k / (2.0 * curv);
+        if ((curv > 0.0 && u < vertex) || (curv < 0.0 && u > vertex)) { u = vertex; }
+    }
+    return k * (u - pivot) + curv * u * u;
+}
+
 // Asymmetric H&D print curve → LINEAR reflectance (mirrors printCurve).
 void main() {
     uint gid = gl_GlobalInvocationID.x;
@@ -352,7 +362,7 @@ void main() {
     vec3 dens;
     for (int ch = 0; ch < 3; ch++) {
         float val = color[ch] + p.cmyOffsets[ch] + maskAdd[ch];
-        float v = p.slopes[ch] * (val - p.pivots[ch]) + p.curvatures[ch] * val * val;
+        float v = quadratic_core(p.slopes[ch], p.pivots[ch], p.curvatures[ch], val);
 
         if (p.midtoneGamma != 0.0) {
             v = v + p.midtoneGamma * p.gammaWidth * tanh((v - p.vStar) / p.gammaWidth);

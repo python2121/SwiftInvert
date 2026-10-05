@@ -32,6 +32,25 @@ public enum ReferenceCurve {
         return out
     }
 
+    /// The per-channel quadratic core `k(u − pivot) + curv·u²`, held at its
+    /// vertex on the side where it would fold back (NegPy d4dc3e49,
+    /// `quadratic_core`). The cast-removal clamp bounds the curvature only
+    /// near the frame's range; input far outside it — holder edges and dust
+    /// (u ≪ 0), bare light (u > 1) — would otherwise reverse direction in
+    /// R/B alone and print coloured instead of paper white/black. Mirrored as
+    /// `quadratic_core` in NegPipeline.metal and NegPipeline.comp.
+    @inline(__always)
+    public static func quadraticCore(
+        slope k: Double, pivot: Double, curvature curv: Double, _ uIn: Double
+    ) -> Double {
+        var u = uIn
+        if curv != 0 {
+            let vertex = -k / (2 * curv)
+            if (curv > 0 && u < vertex) || (curv < 0 && u > vertex) { u = vertex }
+        }
+        return k * (u - pivot) + curv * u * u
+    }
+
     /// _apply_print_curve_kernel (C-41 path: no B&W collapse, no dye mix, no EV
     /// map; NegPy's 2-band regional CMY generalized to the 3-band tone-mask
     /// color balance). Input normalized log; output linear reflectance in [0, 1].
@@ -116,7 +135,9 @@ public enum ReferenceCurve {
                 var dens = SIMD3<Double>()
                 for ch in 0..<3 {
                     let val = Double(buf[i + ch]) + params.cmyOffsets[ch] + maskAdd[ch]
-                    var v = params.slopes[ch] * (val - params.pivots[ch]) + params.curvatures[ch] * val * val
+                    var v = quadraticCore(
+                        slope: params.slopes[ch], pivot: params.pivots[ch],
+                        curvature: params.curvatures[ch], val)
                     if midtoneGamma != 0 {
                         v += midtoneGamma * gammaWidth * tanh((v - params.vStar) / gammaWidth)
                     }

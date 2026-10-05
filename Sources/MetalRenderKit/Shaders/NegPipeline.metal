@@ -299,6 +299,16 @@ kernel void normalizeLog(
     output.write(float4(res, 1.0f), gid);
 }
 
+// Per-channel quadratic core, held at its vertex on the side where it would
+// fold back (NegPy d4dc3e49) — mirrors ReferenceCurve.quadraticCore.
+static inline float quadratic_core(float k, float pivot, float curv, float u) {
+    if (curv != 0.0f) {
+        float vtx = -k / (2.0f * curv);  // `vertex` is an MSL keyword
+        if ((curv > 0.0f && u < vtx) || (curv < 0.0f && u > vtx)) { u = vtx; }
+    }
+    return k * (u - pivot) + curv * u * u;
+}
+
 // ── Pass 2: asymmetric H&D print curve → LINEAR reflectance (exposure.wgsl,
 //    minus its trailing oetf_encode — SwiftInvert keeps the linear/encoded split
 //    at the same boundary as NegPy's CPU engine) ─────────────────────────────
@@ -350,7 +360,7 @@ kernel void printCurve(
     float3 dens;
     for (int ch = 0; ch < 3; ch++) {
         float val = color[ch] + p.cmyOffsets[ch] + maskAdd[ch];
-        float v = p.slopes[ch] * (val - p.pivots[ch]) + p.curvatures[ch] * val * val;
+        float v = quadratic_core(p.slopes[ch], p.pivots[ch], p.curvatures[ch], val);
 
         if (p.midtoneGamma != 0.0f) {
             v = v + p.midtoneGamma * p.gammaWidth * tanh((v - p.vStar) / p.gammaWidth);

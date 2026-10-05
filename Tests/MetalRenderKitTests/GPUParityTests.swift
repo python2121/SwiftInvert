@@ -164,6 +164,37 @@ enum Fixtures2 {
         #expect(mean < 0.01 && maxV < 0.04, "tone controls GPU/CPU: mean \(mean), max \(maxV)")
     }
 
+    /// Cast-removal curvature at its clamp over input far outside the frame
+    /// (u from -4 to 2): the kernel's vertex hold (NegPy d4dc3e49) must match
+    /// the CPU reference, which QuadraticCoreTests pins by property.
+    @Test func quadraticVertexHoldParityWithCPU() throws {
+        let pipeline = try #require(GPU.pipeline, "Metal unavailable")
+        let pixels = try Fixtures2.floats("synthetic64/input.bin")
+        let analysis = ExposureKernel.analyze(
+            linearImage: RGBImage(pixels: pixels, width: 64, height: 64), analysisBuffer: 0.05)
+        var params = ExposureKernel.deriveRenderParams(ExposureSettings(), analysis)
+        // floors -1, ceils 0: a pixel of 10^(u-1) normalizes to exactly u.
+        params.finalBounds = LogNegativeBounds(floors: SIMD3(repeating: -1), ceils: .zero)
+        let k = params.slopes.y
+        params.curvatures = SIMD3(K.neutralAxisCurvMaxRatio * k, 0, -K.neutralAxisCurvMaxRatio * k)
+
+        let w = 256, h = 4
+        var input = RGBImage(width: w, height: h)
+        for y in 0..<h {
+            for x in 0..<w {
+                let u = -4.0 + 6.0 * Double(x) / Double(w - 1)
+                for ch in 0..<3 { input[y, x, ch] = Float(pow(10.0, u - 1.0)) }
+            }
+        }
+        let cpu = ReferenceCurve.encodeOutput(
+            ReferenceCurve.applyPrintCurve(
+                ReferenceCurve.normalize(input, bounds: params.finalBounds), params: params))
+        let gpu = try pipeline.render(source: try pipeline.upload(input), params: params).encoded
+
+        let (mean, maxV) = Self.diffStats(gpu.pixels, cpu.pixels)
+        #expect(mean < 0.01 && maxV < 0.04, "vertex hold GPU/CPU: mean \(mean), max \(maxV)")
+    }
+
     /// Contrast Mask active: the GPU's hand-rolled bilinear plane sample +
     /// uniform scale must match the CPU reference (which the contrast_mask
     /// fixture pins against NegPy). Tight gate like hue trim's — the mask is

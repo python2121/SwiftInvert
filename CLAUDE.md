@@ -624,7 +624,11 @@ One command buffer, passes in order (`RenderPipeline.render` /
       default slider 1.15, kernel identity at 1.0).
    b. Per channel: `val += cmyOffsets` (+ the Contrast Mask's bilinear
       plane sample × `maskValScale`, uniform-gated — see below) → quadratic core
-      `v = slope(val − pivot) + curv·val²` → midtone paper-S
+      `v = slope(val − pivot) + curv·val²`, with `val` held at the vertex
+      `−slope/(2·curv)` on the side where the quadratic would fold back
+      (`quadraticCore`, NegPy d4dc3e49: the curvature clamp only bounds
+      it near the frame's range, and holder edges / dust / bare light
+      reach far outside it) → midtone paper-S
       `v += 0.05·0.6·tanh((v − v*)/0.6)` (0.15 → 0.05 in the 8532dd92
       retune) → **tone controls** (masks
       `wS = σ(3.5(v−1.40))`, `wH = σ(3.5(0.30−v))` on the incoming v,
@@ -802,7 +806,8 @@ For "what changed in NegPy?" requests, run the **`/negpy-review` skill**
 around the inversion pipeline, and maintains UPSTREAM.md.
 
 Analysis semantics and kernel constants are synced with **NegPy 0.58.0**
-(`dc8ac65f` tip; the print-tone + auto-helpers retune landed in `8532dd92`,
+(`dc8ac65f` tip, plus the `d4dc3e49` quadratic vertex hold from 0.62.0,
+ported 2026-10-05 with no fixture impact; the print-tone + auto-helpers retune landed in `8532dd92`,
 ported 2026-09-07: toe sharpness 6.0 / paper midtone gamma 0.05, textured-
 cell metering, the Alkofer Auto Grade, Shadow Reach and Highlight Hold —
 on top of the earlier syncs: 127bcd7 two-pass estimator + same-pixel colour

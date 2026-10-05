@@ -191,6 +191,34 @@ struct VulkanParityTests {
         #expect(dBig.pass, "contrast mask 3x: mean \(dBig.mean) max \(dBig.max)")
     }
 
+    /// Cast-removal curvature at its clamp over input far outside the frame
+    /// (u from -4 to 2): the kernel's vertex hold (NegPy d4dc3e49) must match
+    /// the CPU reference, which QuadraticCoreTests pins by property.
+    @Test func quadraticVertexHoldMatchesCPU() throws {
+        let pipeline = try requirePipeline()
+        var params = ExposureKernel.deriveRenderParams(ExposureSettings(), Self.analysis)
+        // floors -1, ceils 0: a pixel of 10^(u-1) normalizes to exactly u.
+        params.finalBounds = LogNegativeBounds(floors: SIMD3(repeating: -1), ceils: .zero)
+        let k = params.slopes.y
+        params.curvatures = SIMD3(K.neutralAxisCurvMaxRatio * k, 0, -K.neutralAxisCurvMaxRatio * k)
+
+        let w = 256, h = 4
+        let input = RGBImage(width: w, height: h) { buf in
+            for y in 0..<h {
+                for x in 0..<w {
+                    let u = -4.0 + 6.0 * Double(x) / Double(w - 1)
+                    for ch in 0..<3 { buf[(y * w + x) * 3 + ch] = Float(pow(10.0, u - 1.0)) }
+                }
+            }
+        }
+        let cpu = ReferenceCurve.encodeOutput(
+            ReferenceCurve.applyPrintCurve(
+                ReferenceCurve.normalize(input, bounds: params.finalBounds), params: params))
+        let gpu = try pipeline.render(image: input, params: params, computeHistogram: false)
+        let d = compare(cpu, gpu.encoded)
+        #expect(d.pass, "vertex hold: mean \(d.mean) max \(d.max)")
+    }
+
     @Test func levelsRemapMatchesCPU() throws {
         var s = ExposureSettings()
         s.levelsRed = [SIMD2(0.3, 0.22), SIMD2(0.7, 0.8)]

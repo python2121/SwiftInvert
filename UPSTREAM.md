@@ -9,8 +9,8 @@ and appending a history entry.
 ## Last reviewed
 
 ```
-commit:   7ac9b17c ("docs(readme): refresh features and trim install notes")
-reviewed: 2026-09-24
+commit:   5b6d8975 ("fix(test): read source files as UTF-8 in the newer source-scanning tests (#1282)")
+reviewed: 2026-10-05
 fixtures: Tests/Fixtures/ re-dumped WHOLE from dc8ac65f (2026-09-07, with
           the 8532dd92 port — contrast_mask included; lab_color's vibrance
           leg remains the reference formula frozen in dump_fixtures.py,
@@ -40,6 +40,156 @@ updates this file. The manual procedure, for reference:
 6. Update the **Last reviewed** marker and append to the history below.
 
 ## Review history
+
+### 2026-10-05 — through `5b6d8975` (0.60.0 → **0.63.0**, 90 commits)
+
+**One kernel bug fix in code we ported (ported the same day), one new
+print-curve control (passed), and the grade-100 watch item closed in our
+favour.** Goldens unmoved (empty
+diff on both characterization tests), `EXPOSURE_CONSTANTS` gains only
+`preflash_threshold_density`, analysis semantics untouched. Five commits
+hit the tracked paths; the bulk of the line count is `625e7c8a` moving
+the slide/E-6 transfer path out of `exposure/` into
+`negpy/features/transparency/` (renames: `exposure/transfer.py` →
+`transparency/logic.py`, `exposure/shaders/transfer.wgsl` →
+`transparency/shaders/transfer.wgsl`) and stripping the
+`process_mode`/`e6_normalize` parameters from the bounds functions — the
+C-41 branch of every touched function is line-for-line what it was.
+
+**Ported (2026-10-05, same day):**
+
+- **Hold the Cast Removal quadratic at its vertex** (`d4dc3e49`). The
+  per-channel core `k(u − pivot) + curv·u²` folds back past
+  `u = −k/(2·curv)`: the curvature clamp (±0.45·slope) bounds it only
+  near the frame's range, so far-out-of-bounds input reverses direction
+  in R/B alone. Upstream hit it on the Filed Carrier's rebate ramp
+  (u ≈ −3, vertex ≈ −0.7 at strength 1.0 → "intense red/blue rebates").
+  We had the unguarded form in all three mirrors, and `normalizeLog` has
+  no upper clamp and a 1e-6 lower one, so out-of-range `val` does reach
+  the core: holder/mask edges and dust shadows (u ≈ −3…−4) on the
+  curv > 0 side, bare light / sprocket holes (u > 1) on the curv < 0
+  side. Now `ReferenceCurve.quadraticCore` + `quadratic_core` in
+  `NegPipeline.metal` and `NegPipeline.comp` (identical form: clamp `u`
+  to the vertex on the fold-back side; the MSL local is `vtx` because
+  `vertex` is an MSL keyword — the first build failed on it), uniform
+  layout untouched, `print_curve.spv` recompiled on the Mac (the other
+  five came out byte-identical). **No fixture moved and none covers
+  it** — the dumped curve params put every vertex far outside the data
+  (nearest: −161) — so it is pinned by `QuadraticCoreTests` (closed
+  form + per-channel monotonicity over u ∈ [−4, 2] at the curvature
+  clamp), `quadraticVertexHoldParityWithCPU` (Metal) and
+  `quadraticVertexHoldMatchesCPU` (Vulkan). `make test` green on the
+  Mac; **the Vulkan test has not been run** — it joins the `swiftdev`
+  distrobox pass already owed. Consequence of the hold, same as
+  upstream: past the vertex a curved channel stops at the vertex's
+  density, so on the curv < 0 side bare light prints that channel's
+  vertex tone rather than running on to paper black.
+
+**Watch item CLOSED — fresh-frame Grade is 115 again** (`99e2f27e`):
+the 2026-09-24 reading was right, `DEFAULT_WORKSPACE_CONFIG`'s
+`grade=2.5` was a legacy-ladder spelling that migrated to R100 by
+accident; it is now spelled `115.0`, `transfer_grade_ref` follows to
+115, and the shipped config and bare dataclasses agree field-for-field
+(`test_shipped_defaults`). Our stock 115 stays; the "A/B grade 100"
+note attached to the cast-default A/B is dropped. Cast Removal stays
+1.0 upstream (confirmed in the commit body), so the carried Cast Removal item stands.
+
+**Deliberately skipped:**
+
+- **Preflash** (`bfd30ae5`, new control, default 0 = off, range 0–1) —
+  PASSED by the user 2026-10-05; do not re-propose unprompted. Recorded
+  as the spec should it ever be wanted: right after the quadratic core
+  and before the midtone paper-S,
+  `v = v_th + γ·log10(10^((v − v_th)/γ) + flash)` with
+  `v_th = reference_linear_value(d_min, target = d_min + 0.04)` (new
+  constant `preflash_threshold_density`) and
+  `γ = grade_contrast_scale / (R/100)` on the frame's GRADE SETTING, not
+  the auto-grade slope; Highlight Hold is measured AFTER it
+  (`highlight_hold_offset(preflash=, grade=)`). Upstream's own
+  redundancy figure: Highlights Density + Shoulder + Density fit the
+  flashed curve to within 0.025/0.048/0.078 D at flash 0.25/0.5/0.8 —
+  our Highlights slider + Highlight Hold cover the same ground.
+- **`8f7fc6d7` X-Trans previews always full-size** — bug we never had:
+  `RawDecoder` already decodes `filters == 9` full and downsamples, WB
+  or not (their gap was the camera-WB preview leg; ours is unity WB,
+  one path). Their failure mode is worth remembering as the reason the
+  rule exists: bounds metered on an aliased half-size preview are reused
+  by export, so the EXPORT gets the cast.
+- **`fe3d140f` / `2d8a8a3b` tiled-render metering + content rect** —
+  shared-bug glance: their tiled HQ/export path re-metered and reported
+  a preview-size rect. Ours has no second metering site (analysis always
+  on the proxy, `exportRender` shares `prepare()`; `contentWindow`
+  measures each tier against its own frame — `DisplayAspectTests`).
+- **`625e7c8a` slide pipeline separation, `141fa311` Dye Separation
+  reference cap** — transfer path only; no transparency mode here. One
+  line of `625e7c8a` is on our side of the fence: Zone placement is
+  refused on the transfer path because it inverts the PRINT curve —
+  consistent with ours being print-only.
+- **`d0d197dc` crop defaults (Free ratio, 0 offset)** — their autocrop;
+  we have neither autocrop nor a default ratio.
+- **`99e2f27e` crosstalk_strength 0** — no crosstalk stage.
+- **`ae007567` Filed Carrier rebate through the frame's curves** — no
+  carrier/border rendering; noted only as the feature that exposed
+  item 1.
+
+**Not applicable (rest, one line each):** `df089946`/`5965fe76`/
+`a5069cc6`/`096db0ff`/`2cb00531`/`edeeda7d`/`603b1c18`/`1245c373`
+library rolls, nested discovery, scopes, Scan as Roll; `7cce94ab`/
+`13f9dd5f`/`00ebb5cc`/`c9079ee4`/`4fa2bf91`/`38875ca6`/`f021fef9`/
+`6acbf89c`/`6a4079eb`/`3d44e559`/`4855eb43` scanner drivers, nkscan,
+Plustek, Pakon/Noritsu sizes, simulated hardware; `93b88f89`/
+`3968796d`/`424b60c5`/`2b116470`/`38dbac35`/`003d6f23` camera-scanning
+live view and sensor calibration (`2b116470`'s plateau detector is
+their capture-calibration clip guard, not the decode — unrelated to
+the carried `user_sat` item); `b7fa9d33`/`e8209064`/`f8e7e200`/
+`374b6418`/`6cb117f4`/`188b2390`/`bc830402`/`f8423104`/`d68b5e10`
+UX passes 7–8, Find, rails, Light Table, Reference view, dialog
+geometry; `e6978ff6`/`cc382c67`/`ce7aa049`/`10e82e50`/`98bf2b43`/
+`6fb5f2c7`/`e933c901`/`2bf8bb10` crop edge handles, auto-pan,
+space-drag pan, overlay zoom/profile, canvas menu resets (single-edge
+crop handles and space-drag pan are the two small canvas ideas worth
+a look if the crop tool is revisited); `66ffe39e`/`0e3dc848`/
+`f63f6d72`/`89531313`/`8716bec2` tilt/swing solver, Auto Skew, lens
+correction; `7764b50b`/`73a481cf` half-frame; `fffd758c`/`f3f04ff1`/
+`23e51d2e` retouch (Optical Removal hairs, heal perf, Clone);
+`67590e16`/`43ed6c71`/`482aeb22`/`213b0c3b`/`6492f86c` stitch seam,
+Merge to TIFF Negative, trichrome; `9306e8ae`/`7be94d92` Linear Output
+(recorded N/A); `87f32f48`/`70243538` darkroom contact sheet, strip
+preview; `0a5b6237`/`3c8c84c6`/`5bbc5274`/`3980e9b9`/`6317387b`
+thumbnails fingerprinting and prefetch ordering; `4e9efb77`/`4631fb6e`
+tour; `b56460d1` batch-export guards and `ad347331` `.negpy` sidecar
+restore (their sidecar/batch model; our sidecars decode missing keys to
+defaults and export overwrites by documented design); `7ddc9b34` crash
+log; `1eff4e3f` lock-roll guard; `261e8514`/`9eab1b1e`/`5b6d8975`
+tests/lint; `50f78794` comment trim (the only hunks in the tracked
+paths are comments); `80a4dfa5`/`bcaedac2`/`37d2dc53`/`a2bf172a`
+changelogs + screenshot.
+
+**dump_fixtures.py:** compatible with `5b6d8975` as written — every
+imported name survives; the removed `process_mode`/`e6_normalize`
+parameters are never passed (the script imports
+`analyze_log_exposure_bounds_from_log` but drives bounds through
+`NormalizationProcessor(process)`, whose one-arg form is now the ONLY
+form; `PipelineContext(process_mode=)` is unchanged);
+`PhotometricProcessor(exposure)` still constructs;
+`highlight_hold_offset`/`apply_characteristic_curve` gained defaulted
+kwargs only. Unchanged from last review: a re-dump is NOT
+byte-identical because bare `ExposureConfig()` has cast strength 1.0 —
+re-dump only with the carried Cast Removal 1.0 item — and the local checkout is still at
+`108ffeba` (132 behind), pull first.
+
+**Still open (carried over):** Cast Removal default 1.0 with re-dump
++ A/B on real scans (2026-09-24 item 1 — its prerequisite, the vertex
+hold, is now in); the `user_sat` decode pin with its negcli probe
+(2026-09-24 item 2); the tool-mode Contrast Mask plane scoping
+(2026-09-12 item 2); the `swiftdev` distrobox pass owed since the
+`8532dd92` port and the Qt crop-tool build + GUI check; the `2cd687b`
+export-EXIF-hygiene port (+ `9d711ebb` filesystem dates); colour
+ring-around; `91a1b78` tunable Auto targets; the on-scan Color Mixer
+band re-tune; the two 2026-08-13 design calls; Peek Negative /
+embedded-preview peek; Before/After split; Linux export-metadata
+parity; batch-export pipelining; in-repo ICC-tag regression test; the
+roll-pooling spec as a candidate design note.
 
 ### 2026-09-24 — through `7ac9b17c` (0.58.0 → **0.60.0**, 55 commits)
 
