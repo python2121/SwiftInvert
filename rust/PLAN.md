@@ -295,4 +295,13 @@ not installed there, report and stop — no installs on the Mac without the user
 
 | Wave | Item | Owner | State | Notes |
 |---|---|---|---|---|
-| 0 | skeleton | orchestrator | in progress | |
+| 0 | skeleton, contracts, plan | orchestrator | done | af70305 |
+| 0 | controls + session specs | spec agent | done | `rust/docs/*.md`, 8 Swift-vs-CLAUDE.md inconsistencies listed there |
+| 1 | A image/rect/stats/radix/prefilter | agent A | done | 43 tests; prefiltered grids 0 / 4.8e-7 vs 1e-5 gate |
+| 1 | C constants/settings/curve_logic/derive | agent C | done | 41 tests; curve params parity 3 configs @1e-4; lenient per-field sidecar decoder |
+| 1 | L lab | agent L | done | 27 tests; lab_color fixtures ≤ 3e-7 vs 1e-4 |
+| 1 | R negraw | agent R | done | lcraw default = LibRaw area + bit-depth white; **Mac parity vs LibRaw 0.22.1: per-sample max 6.3e-5, mean 2.7e-5, same dims** (EOS R100 CR3); `libraw` feature builds + tests on the Mac |
+| 1 | review (Opus) | reviewer | done | 1 BUG (pixel_roi debug overflow) + NaN-handling risks, all fixed in 54340ee |
+| 1 | Mac run | orchestrator | done | full default workspace builds, all tests pass on macOS (Rust 1.96) |
+| 2 | B bounds/meters/kernel | agent B | in progress | resumed after a usage-limit interruption |
+| 2 | D reference chain | agent D | in progress | resumed after a usage-limit interruption |
