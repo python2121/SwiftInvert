@@ -41,30 +41,9 @@ fn filled(width: usize, height: usize, f: impl Fn(usize, usize, usize) -> f32) -
     .expect("non-empty")
 }
 
-/// splitmix32-style avalanche, mirroring hash32() in dump_fixtures.py (duplicated from
-/// `grid_parity.rs`: integration tests don't share modules without a `common/`).
-fn hash32(i: u32) -> u32 {
-    let mut x = i.wrapping_add(0x9E37_79B9);
-    x ^= x >> 16;
-    x = x.wrapping_mul(0x21F0_AAAD);
-    x ^= x >> 15;
-    x = x.wrapping_mul(0x735A_2D97);
-    x ^= x >> 15;
-    x
-}
-
-/// The 1600×1066 synthetic_grid input (see `grid_parity.rs`).
+/// The shared bit-exact generator (`negkit::fixtures::synthetic_grid_input`).
 fn synthetic_grid_input() -> RgbImage {
-    let (w, h) = (1600usize, 1066usize);
-    let scales: [f32; 3] = [0.85, 0.45, 0.25];
-    let inv_dim = 1.0f32 / (w + h - 2) as f32;
-    filled(w, h, |y, x, c| {
-        let base: f32 = 0.08 + 0.75 * ((x + y) as f32 * inv_dim);
-        let idx = ((y * w + x) as u32).wrapping_mul(3);
-        let mut n = hash32(idx.wrapping_add(c as u32)) as f32 / 4294967296.0f32;
-        n = (n - 0.5) * 0.06;
-        ((base + n) * scales[c]).clamp(1e-4, 1.0)
-    })
+    fixtures::synthetic_grid_input().expect("generator")
 }
 
 fn synthetic64_input() -> RgbImage {

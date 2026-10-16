@@ -13,41 +13,9 @@ use negkit::RgbImage;
 use negkit::fixtures;
 use negkit::prefilter;
 
-const WIDTH: usize = 1600;
-const HEIGHT: usize = 1066;
-
-/// splitmix32-style avalanche, mirroring hash32() in dump_fixtures.py.
-fn hash32(i: u32) -> u32 {
-    let mut x = i.wrapping_add(0x9E37_79B9);
-    x ^= x >> 16;
-    x = x.wrapping_mul(0x21F0_AAAD);
-    x ^= x >> 15;
-    x = x.wrapping_mul(0x735A_2D97);
-    x ^= x >> 15;
-    x
-}
-
-/// The 1600×1066 synthetic_grid input, regenerated in `f32` with the Swift test's exact
-/// expression order (`base + n` then `* scale`, clamped to `[1e-4, 1]`).
+/// The shared bit-exact generator (`negkit::fixtures::synthetic_grid_input`).
 fn synthetic_grid_input() -> RgbImage {
-    let (w, h) = (WIDTH, HEIGHT);
-    let scales: [f32; 3] = [0.85, 0.45, 0.25];
-    let inv_dim = 1.0f32 / (w + h - 2) as f32;
-    RgbImage::new_with(w, h, |buf| {
-        for y in 0..h {
-            for x in 0..w {
-                let base: f32 = 0.08 + 0.75 * ((x + y) as f32 * inv_dim);
-                let idx = ((y * w + x) as u32).wrapping_mul(3);
-                for (c, scale) in scales.iter().enumerate() {
-                    let mut n = hash32(idx.wrapping_add(c as u32)) as f32 / 4294967296.0f32;
-                    n = (n - 0.5) * 0.06;
-                    let v = (base + n) * scale;
-                    buf[(y * w + x) * 3 + c] = v.clamp(1e-4, 1.0);
-                }
-            }
-        }
-    })
-    .expect("non-empty")
+    fixtures::synthetic_grid_input().expect("generator")
 }
 
 fn px(img: &RgbImage, y: usize, x: usize, c: usize) -> f32 {
@@ -108,7 +76,7 @@ fn block_median_general_path_matches_a_sorted_median() {
     let (w, h) = (2100usize, 9usize); // b = ceil(2100 / 1024) = 3
     let img = RgbImage::new_with(w, h, |buf| {
         for (i, v) in buf.iter_mut().enumerate() {
-            *v = (hash32(i as u32) as f32 / 4294967296.0f32).clamp(1e-4, 1.0);
+            *v = (fixtures::hash32(i as u32) as f32 / 4294967296.0f32).clamp(1e-4, 1.0);
         }
     })
     .expect("non-empty");

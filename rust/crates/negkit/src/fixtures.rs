@@ -59,3 +59,40 @@ pub fn max_mean_abs_diff(a: &[f32], b: &[f32]) -> (f64, f64) {
     }
     (max, sum / n)
 }
+
+/// splitmix32-style avalanche — `hash32()` in `scripts/dump_fixtures.py`.
+pub fn hash32(i: u32) -> u32 {
+    let mut x = i.wrapping_add(0x9E37_79B9);
+    x ^= x >> 16;
+    x = x.wrapping_mul(0x21F0_AAAD);
+    x ^= x >> 15;
+    x = x.wrapping_mul(0x735A_2D97);
+    x ^= x >> 15;
+    x
+}
+
+/// The `synthetic_grid` fixture's 1600×1066 input, regenerated bit-exactly in `f32` with the
+/// Swift test's expression order (`base + n` then `* scale`, clamped to `[1e-4, 1]`). Shared by
+/// every test that needs the image (the fixture only stores the prefiltered grid + analysis).
+pub fn synthetic_grid_input() -> Result<crate::RgbImage, String> {
+    let (w, h) = (1600usize, 1066usize);
+    let scales: [f32; 3] = [0.85, 0.45, 0.25];
+    let inv_dim = 1.0f32 / (w + h - 2) as f32;
+    crate::RgbImage::new_with(w, h, |buf| {
+        for y in 0..h {
+            for x in 0..w {
+                let base: f32 = 0.08 + 0.75 * ((x + y) as f32 * inv_dim);
+                let idx = ((y * w + x) as u32).wrapping_mul(3);
+                for (c, scale) in scales.iter().enumerate() {
+                    let mut n = hash32(idx.wrapping_add(c as u32)) as f32 / 4294967296.0f32;
+                    n = (n - 0.5) * 0.06;
+                    let v = (base + n) * scale;
+                    if let Some(slot) = buf.get_mut((y * w + x) * 3 + c) {
+                        *slot = v.clamp(1e-4, 1.0);
+                    }
+                }
+            }
+        }
+    })
+    .map_err(|e| format!("synthetic_grid_input: {e}"))
+}
