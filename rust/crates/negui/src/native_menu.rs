@@ -96,7 +96,7 @@ pub fn accelerator(s: &KeyboardShortcut) -> Option<Accelerator> {
     let m = s.modifiers;
     let mut mods = Modifiers::empty();
     if m.command || m.mac_cmd {
-        mods |= Modifiers::SUPER;
+        mods |= Modifiers::META;
     }
     if m.shift {
         mods |= Modifiers::SHIFT;
@@ -150,7 +150,7 @@ impl NativeMenu {
             QUIT_ID,
             "Quit SwiftInvert",
             true,
-            Some(Accelerator::new(Modifiers::SUPER, Code::KeyQ)),
+            Some(Accelerator::new(Modifiers::META, Code::KeyQ)),
         );
         for it in [
             &about as &dyn muda::IsMenuItem,
@@ -312,7 +312,7 @@ pub struct NativeMenuApp {
 impl NativeMenuApp {
     /// Install the native menu for `app`; hands the app back (with its in-window menu bar
     /// restored) when AppKit refuses.
-    pub fn new(mut app: NegApp, ctx: &egui::Context) -> Result<Self, NegApp> {
+    pub fn new(mut app: NegApp, ctx: &egui::Context) -> Result<Self, Box<NegApp>> {
         match NativeMenu::install(&app, ctx) {
             Some(menu) => {
                 app.set_native_menu(true);
@@ -320,7 +320,7 @@ impl NativeMenuApp {
             }
             None => {
                 app.set_native_menu(false);
-                Err(app)
+                Err(Box::new(app))
             }
         }
     }
@@ -357,9 +357,10 @@ mod tests {
     #[test]
     fn every_menu_shortcut_maps_to_a_command_accelerator() {
         for (s, cmd) in crate::app::SHORTCUTS {
-            let a = accelerator(s).unwrap_or_else(|| panic!("{cmd:?} has no accelerator"));
+            let a = accelerator(s);
+            assert!(a.is_some(), "{cmd:?} has no accelerator");
             assert!(
-                a.modifiers().contains(Modifiers::SUPER),
+                a.is_some_and(|a| a.modifiers().contains(Modifiers::META)),
                 "{cmd:?}: menu key equivalents must carry Cmd to reach the menu"
             );
         }

@@ -84,7 +84,7 @@ fn main() -> ExitCode {
                 return Ok(
                     match negui::native_menu::NativeMenuApp::new(app, &cc.egui_ctx) {
                         Ok(wrapped) => Box::new(wrapped) as Box<dyn eframe::App>,
-                        Err(app) => Box::new(app),
+                        Err(app) => app,
                     },
                 );
             }
