@@ -26,17 +26,19 @@ Linux: `/home/deck/.cache/swiftinvert-wt/scratch-U1/shell*.png`.
 
 All worktrees are under `/home/deck/.cache/swiftinvert-wt/` (NOT /tmp — it's a 7.7 GB tmpfs
 that filled once). Each agent was asked to commit a compiling state with a DONE/PARTIAL list in
-the commit message and to report in ≤ 20 lines. **S2 is MERGED (f4dc641, all 13 items done). Merge order now: U2, then U3**
+the commit message and to report in ≤ 20 lines. **S2 and U2's math scaffold are MERGED. Two OPUS agents are running now (cut over 2026-10-16): merge U2b, then U3b**
 (U2 and U3 both add `// --- U2 ---` / `// --- U3 ---` blocks to `negui/src/app.rs`, `loupe.rs`,
 `engine.rs`; expect a small manual merge there).
 
 1. ~~`wt/wave4-S2`~~ merged.
-2. `wt/wave4-U2` — tools & dialogs: Crop & Straighten, Crop for Analysis, Export dialog +
+2. `wt/wave4-U2b` (Opus) — tools & dialogs: Crop & Straighten, Crop for Analysis, Export dialog +
    batch, Choose Default Settings (profiles), GPU presenter (`presenter_gpu.rs`), selftest
-   `--crop/--export`. Worktree `wave4-U2`.
-3. `wt/wave4-U3` — darkroom UI: densitometer read-out + zone strip, zone overlay, test strip
+   `--crop/--export`. Worktree `wave4-U2b`. (The Fable U2 landed only `tools.rs` commit math.)
+3. `wt/wave4-U3b` (Opus) — darkroom UI: densitometer read-out + zone strip, zone overlay, test strip
    layer, zone placement, interactive histogram window, selftest `--teststrip/--zones`.
-   Worktree `wave4-U3`.
+   Worktree `wave4-U3b`. (The Fable U3 wrote no code.)
+Both add `// --- U2 ---` / `// --- U3 ---` blocks to `negui/src/app.rs`, `loupe.rs`, `engine.rs` and
+share a `CanvasOverlay` trait + overlays slot in `loupe::canvas` — expect a small manual merge.
 
 After merging each: `cd rust && cargo fmt --all -- --check && cargo clippy --workspace
 --all-targets -- -D warnings && NEG_RAW_SAMPLE=/home/deck/Pictures/IMG_0420.CR3 cargo test
