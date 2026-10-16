@@ -12,18 +12,37 @@
 //! ([`RenderPipeline::render_display_to_texture`], no CPU readback of pixels at all).
 //!
 //! Memory discipline (the Vulkan port's 3.9 s/frame lesson): the chain's buffers are
-//! device-local and never read by the CPU; only the staging buffers are mapped. Intermediates
-//! are cached per (width, height) up to [`CACHE_PIXEL_BUDGET`] pixels — export sizes are
-//! dropped after use. Bind groups are cached with the tier and rebuilt only when the source or
-//! mask buffer identity changes, uniforms are `write_buffer`s into persistent buffers, so the
-//! slider path allocates nothing on the host.
+//! device-local and never read by the CPU; only the staging buffers are mapped, and each map
+//! is held by a guard that unmaps on every exit path, so a buffer is never left mapped for the
+//! next submission to trip over. Uniforms are `write_buffer`s into persistent buffers; bind
+//! groups are cached with their tier, so the slider path allocates nothing on the host.
 //!
-//! Renders are serialized by an internal mutex (the Swift contract: intermediates are shared
-//! per size, so two renders at one size must not interleave).
+//! **Tier caches** (mirroring the Swift pipeline's `intermediates` / `display8` caps):
+//! - sizes up to [`CACHE_PIXEL_BUDGET`] pixels live in a small LRU of at most
+//!   [`SMALL_TIER_CAP`] sizes (a crop drag changes the size every tick; without the cap VRAM
+//!   grew without bound). One tier carries the float and the display targets for its size
+//!   — they share the normalized/linear intermediates, which are the bulk of it;
+//! - ONE larger size is retained for the DISPLAY paths (the medium/full HQ tiers: rebuilding
+//!   a 24 MP tier every slider tick cost 58 ms against a 60 ms budget) until a different
+//!   large size is displayed or [`RenderPipeline::release_cached`] runs;
+//! - large FLOAT renders (export) use scratch intermediates dropped as the render returns.
+//!
+//! **Retention of caller buffers.** A cached tier's bind groups hold the last `SourceBuffer`
+//! / `MaskBuffer` rendered at that size, so a dropped source's VRAM is not freed until the
+//! pipeline forgets it: every `SourceBuffer`/`MaskBuffer` reports its id on drop and the next
+//! `upload`, `upload_mask` or render on this pipeline drops the bind groups that referenced
+//! it (`release_cached` drops everything at once).
+//!
+//! **Errors.** Every upload and render runs under Validation + OutOfMemory error scopes and
+//! turns a captured error into `Err(GpuError::Validation / OutOfMemory)`; sizes past the
+//! device limits are refused before any GPU work ([`GpuError::TooLarge`]).
+//!
+//! Renders are serialized by an internal mutex held through `poll(Wait)` (the Swift
+//! contract; see the crate docs for why an app wants separate instances for display and
+//! export).
 
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use negkit::lab::ColorPop;
 use negkit::{RenderParams, RgbImage};
@@ -33,9 +52,11 @@ use crate::{GpuContext, GpuError};
 
 /// Kernel workgroup size (`@workgroup_size(256)` in the WGSL).
 const WORKGROUP: u32 = 256;
-/// Intermediates for renders up to this many pixels stay cached; larger (export) tiers are
-/// released after the render.
+/// Intermediates for renders up to this many pixels live in the small LRU cache; one larger
+/// DISPLAY size is retained besides, larger float (export) renders use scratch.
 pub const CACHE_PIXEL_BUDGET: u64 = 4_000_000;
+/// Most sizes retained in the small cache (least-recently-rendered evicted first).
+pub const SMALL_TIER_CAP: usize = 4;
 /// Bytes of the 4 × 256 `u32` histogram.
 const HIST_BYTES: u64 = 1024 * 4;
 /// The WGSL source, shipped in the binary.
@@ -50,6 +71,14 @@ fn next_id() -> u64 {
     NEXT_ID.fetch_add(1, Ordering::Relaxed)
 }
 
+/// Ids of dropped source/mask buffers, drained by the pipeline to release the bind groups
+/// that still reference them.
+type Retired = Arc<Mutex<Vec<u64>>>;
+
+fn retire(list: &Retired, id: u64) {
+    list.lock().unwrap_or_else(PoisonError::into_inner).push(id);
+}
+
 /// A linear RGB source image uploaded once and rendered many times (the session keeps one per
 /// tier; slider drags re-upload nothing).
 #[derive(Debug)]
@@ -58,6 +87,13 @@ pub struct SourceBuffer {
     width: u32,
     height: u32,
     id: u64,
+    retired: Retired,
+}
+
+impl Drop for SourceBuffer {
+    fn drop(&mut self) {
+        retire(&self.retired, self.id);
+    }
 }
 
 impl SourceBuffer {
@@ -77,6 +113,10 @@ impl SourceBuffer {
     pub fn rgba8_len(&self) -> usize {
         (self.pixel_count() * 4) as usize
     }
+    /// This buffer's pipeline-unique id (what [`CacheStats`] reports as retained).
+    pub fn id(&self) -> u64 {
+        self.id
+    }
 }
 
 /// An uploaded Contrast Mask plane (single-channel floats on the analysis grid).
@@ -86,6 +126,13 @@ pub struct MaskBuffer {
     width: u32,
     height: u32,
     id: u64,
+    retired: Retired,
+}
+
+impl Drop for MaskBuffer {
+    fn drop(&mut self) {
+        retire(&self.retired, self.id);
+    }
 }
 
 impl MaskBuffer {
@@ -97,6 +144,23 @@ impl MaskBuffer {
     pub fn height(&self) -> u32 {
         self.height
     }
+    /// This buffer's pipeline-unique id.
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+}
+
+/// What the pipeline currently retains (for tests, status bars and leak hunting).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CacheStats {
+    /// Sizes in the small LRU cache, least recent first.
+    pub small_sizes: Vec<(u32, u32)>,
+    /// The retained large display size, if any.
+    pub large_display: Option<(u32, u32)>,
+    /// Source buffer ids still referenced by cached bind groups.
+    pub retained_sources: Vec<u64>,
+    /// Mask buffer ids still referenced by cached bind groups.
+    pub retained_masks: Vec<u64>,
 }
 
 /// Per-render options.
@@ -187,10 +251,38 @@ struct Tier {
     bg_encode_padded: [Option<wgpu::BindGroup>; 2],
 }
 
+/// The tier caches (see the module docs).
+#[derive(Default)]
+struct Tiers {
+    /// Small sizes, least-recently-rendered FIRST, at most [`SMALL_TIER_CAP`].
+    small: Vec<Tier>,
+    /// The one retained large display tier.
+    large_display: Option<Tier>,
+}
+
+impl Tiers {
+    fn for_each_mut(&mut self, mut f: impl FnMut(&mut Tier)) {
+        self.small.iter_mut().for_each(&mut f);
+        if let Some(t) = self.large_display.as_mut() {
+            f(t);
+        }
+    }
+
+    fn for_each(&self, mut f: impl FnMut(&Tier)) {
+        self.small.iter().for_each(&mut f);
+        if let Some(t) = self.large_display.as_ref() {
+            f(t);
+        }
+    }
+}
+
 struct State {
     kernels: Kernels,
     shared: Shared,
-    tiers: HashMap<(u32, u32), Tier>,
+    tiers: Tiers,
+    /// Scratch tier for large float renders; always `None` between renders.
+    scratch: Option<Tier>,
+    retired: Retired,
 }
 
 /// The GPU render chain. Create once per device; `Sync` — renders serialize internally.
@@ -293,19 +385,48 @@ fn new_buffer(
     })
 }
 
-/// Wait for `index` and confirm every `map_async` issued on `slices` resolved.
-fn map_sync(
+/// A staging buffer with a `map_async` in flight or complete; unmaps on drop, so no exit
+/// path — early `?`, a failed poll, a failed sibling map — can leave it mapped for the next
+/// submission's copy to trip over. (Unmapping an idle buffer is itself a validation error,
+/// which is why the guard exists only once `map_async` was issued.)
+struct Mapped<'a> {
+    buffer: &'a wgpu::Buffer,
+    len: u64,
+}
+
+impl Drop for Mapped<'_> {
+    fn drop(&mut self) {
+        self.buffer.unmap();
+    }
+}
+
+impl Mapped<'_> {
+    fn view(&self) -> Result<wgpu::BufferView, GpuError> {
+        self.buffer
+            .slice(..self.len)
+            .get_mapped_range()
+            .map_err(|e| GpuError::Readback(e.to_string()))
+    }
+}
+
+/// Issue `map_async` on every (buffer, len), wait for `index`, and confirm each map resolved.
+/// The guards come back mapped on success; on failure they are dropped (unmapped) here.
+fn map_sync<'a>(
     device: &wgpu::Device,
     index: wgpu::SubmissionIndex,
-    slices: &[wgpu::BufferSlice<'_>],
-) -> Result<(), GpuError> {
+    targets: &[(&'a wgpu::Buffer, u64)],
+) -> Result<Vec<Mapped<'a>>, GpuError> {
     let (tx, rx) = std::sync::mpsc::channel();
-    for slice in slices {
+    let mut guards = Vec::with_capacity(targets.len());
+    for &(buffer, len) in targets {
         let tx = tx.clone();
-        slice.map_async(wgpu::MapMode::Read, move |result| {
-            // A closed receiver only means the caller already gave up.
-            let _ = tx.send(result);
-        });
+        buffer
+            .slice(..len)
+            .map_async(wgpu::MapMode::Read, move |result| {
+                // A closed receiver only means the caller already gave up.
+                let _ = tx.send(result);
+            });
+        guards.push(Mapped { buffer, len });
     }
     drop(tx);
     device
@@ -314,7 +435,7 @@ fn map_sync(
             timeout: None,
         })
         .map_err(|e| GpuError::Readback(e.to_string()))?;
-    for _ in slices {
+    for _ in targets {
         match rx.try_recv() {
             Ok(Ok(())) => {}
             Ok(Err(e)) => return Err(GpuError::Readback(e.to_string())),
@@ -325,19 +446,34 @@ fn map_sync(
             }
         }
     }
-    Ok(())
+    Ok(guards)
 }
 
-fn read_histogram(staging: &wgpu::Buffer) -> Result<Histogram, GpuError> {
-    let view = staging
-        .slice(..HIST_BYTES)
-        .get_mapped_range()
-        .map_err(|e| GpuError::Readback(e.to_string()))?;
+fn read_histogram(mapped: &Mapped<'_>) -> Result<Histogram, GpuError> {
+    let view = mapped.view()?;
     let mut bins = [0u32; 1024];
     bytemuck::cast_slice_mut::<u32, u8>(&mut bins).copy_from_slice(&view[..HIST_BYTES as usize]);
-    drop(view);
-    staging.unmap();
     Ok(bins)
+}
+
+/// Run `body` under Validation + OutOfMemory error scopes; a captured error wins over the
+/// body's own result (it is the root cause).
+fn scoped<T>(
+    device: &wgpu::Device,
+    body: impl FnOnce() -> Result<T, GpuError>,
+) -> Result<T, GpuError> {
+    let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let oom = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+    let result = body();
+    let oom_err = pollster::block_on(oom.pop());
+    let val_err = pollster::block_on(validation.pop());
+    if let Some(e) = oom_err {
+        return Err(GpuError::OutOfMemory(e.to_string()));
+    }
+    if let Some(e) = val_err {
+        return Err(GpuError::Validation(e.to_string()));
+    }
+    result
 }
 
 impl RenderPipeline {
@@ -453,7 +589,9 @@ impl RenderPipeline {
             state: Mutex::new(State {
                 kernels,
                 shared,
-                tiers: HashMap::new(),
+                tiers: Tiers::default(),
+                scratch: None,
+                retired: Arc::new(Mutex::new(Vec::new())),
             }),
         })
     }
@@ -464,35 +602,97 @@ impl RenderPipeline {
     }
 
     fn check_size(&self, bytes: u64) -> Result<(), GpuError> {
-        let limits = self.ctx.limits();
-        let limit = limits
-            .max_buffer_size
-            .min(limits.max_storage_buffer_binding_size);
-        if bytes > limit {
-            return Err(GpuError::TooLarge { bytes, limit });
+        self.ctx.check_buffer_size(bytes)
+    }
+
+    /// Whether a `width × height` render fits this device's limits (the float intermediates
+    /// are 12 bytes per pixel): `Err(TooLarge)` naming the binding limit otherwise. Checked
+    /// again inside every upload/render, so callers may simply try and match the error.
+    pub fn fits_render(&self, width: u32, height: u32) -> Result<(), GpuError> {
+        self.check_size(u64::from(width) * u64::from(height) * 12)
+    }
+
+    /// What the pipeline currently retains.
+    pub fn cache_stats(&self) -> CacheStats {
+        let state = self.lock();
+        let mut stats = CacheStats {
+            small_sizes: state
+                .tiers
+                .small
+                .iter()
+                .map(|t| (t.width, t.height))
+                .collect(),
+            large_display: state
+                .tiers
+                .large_display
+                .as_ref()
+                .map(|t| (t.width, t.height)),
+            ..CacheStats::default()
+        };
+        state.tiers.for_each(|t| {
+            if let Some((id, _)) = &t.bg_normalize {
+                stats.retained_sources.push(*id);
+            }
+            if let Some((id, _)) = &t.bg_curve
+                && *id != 0
+            {
+                stats.retained_masks.push(*id);
+            }
+        });
+        stats
+    }
+
+    /// Forget the bind groups that referenced dropped source/mask buffers.
+    fn purge_retired(state: &mut State) {
+        let retired: Vec<u64> =
+            std::mem::take(&mut *state.retired.lock().unwrap_or_else(PoisonError::into_inner));
+        if retired.is_empty() {
+            return;
         }
-        Ok(())
+        state.tiers.for_each_mut(|t| {
+            if t.bg_normalize
+                .as_ref()
+                .is_some_and(|(id, _)| retired.contains(id))
+            {
+                t.bg_normalize = None;
+            }
+            if t.bg_curve
+                .as_ref()
+                .is_some_and(|(id, _)| retired.contains(id))
+            {
+                t.bg_curve = None;
+            }
+        });
     }
 
     /// One memcpy into a device buffer created mapped (no intermediate staging).
     fn upload_floats(&self, label: &str, data: &[f32]) -> Result<wgpu::Buffer, GpuError> {
         let bytes = (data.len() * 4) as u64;
         self.check_size(bytes)?;
-        let buffer = self.ctx.device().create_buffer(&wgpu::BufferDescriptor {
-            label: Some(label),
-            size: bytes,
-            usage: wgpu::BufferUsages::STORAGE,
-            mapped_at_creation: true,
-        });
-        {
-            let mut view = buffer
-                .slice(..)
-                .get_mapped_range_mut()
-                .map_err(|e| GpuError::Readback(e.to_string()))?;
-            view.copy_from_slice(bytemuck::cast_slice(data));
-        }
-        buffer.unmap();
-        Ok(buffer)
+        // Dropped buffers release their bind groups before new VRAM is taken.
+        Self::purge_retired(&mut self.lock());
+        let device = self.ctx.device();
+        scoped(device, || {
+            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: bytes,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: true,
+            });
+            {
+                let mut view = buffer
+                    .slice(..)
+                    .get_mapped_range_mut()
+                    .map_err(|e| GpuError::Readback(e.to_string()))?;
+                view.copy_from_slice(bytemuck::cast_slice(data));
+            }
+            buffer.unmap();
+            Ok(buffer)
+        })
+    }
+
+    fn retired(&self) -> Retired {
+        Arc::clone(&self.lock().retired)
     }
 
     /// Upload a linear RGB image (interleaved f32 — a straight memcpy).
@@ -515,6 +715,7 @@ impl RenderPipeline {
             width,
             height,
             id: next_id(),
+            retired: self.retired(),
         })
     }
 
@@ -538,16 +739,124 @@ impl RenderPipeline {
             width,
             height,
             id: next_id(),
+            retired: self.retired(),
         })
     }
 
-    /// Drop every cached intermediate (e.g. when the app loses focus or a session closes).
+    /// Drop every cached intermediate and bind group (e.g. when the app loses focus or a
+    /// session closes) — releases any retained source/mask buffers immediately.
     pub fn release_cached(&self) {
-        self.lock().tiers.clear();
+        let mut state = self.lock();
+        state.tiers = Tiers::default();
+        state.scratch = None;
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// A fresh tier (base intermediates + the bind groups that depend only on them).
+    fn new_tier(
+        &self,
+        kernels: &Kernels,
+        shared: &Shared,
+        width: u32,
+        height: u32,
+    ) -> Result<Tier, GpuError> {
+        let device = self.ctx.device();
+        let float_bytes = u64::from(width) * u64::from(height) * 12;
+        self.check_size(float_bytes)?;
+        let storage = wgpu::BufferUsages::STORAGE;
+        let normalized = new_buffer(device, "normalized", float_bytes, storage);
+        let linear = new_buffer(device, "linear", float_bytes, storage);
+        let bg_pop = bind_group(
+            device,
+            "color_pop",
+            &kernels.color_pop.layout,
+            &[
+                (0, &linear),
+                (1, &normalized),
+                (3, &shared.curve_u),
+                (4, &shared.push),
+            ],
+        );
+        let bg_hist = [&linear, &normalized].map(|content| {
+            bind_group(
+                device,
+                "histogram",
+                &kernels.histogram.layout,
+                &[
+                    (0, content),
+                    (4, &shared.push),
+                    (5, &shared.levels),
+                    (7, &shared.hist),
+                ],
+            )
+        });
+        Ok(Tier {
+            width,
+            height,
+            normalized,
+            linear,
+            encoded_f: None,
+            encoded_u8: None,
+            padded_u8: None,
+            bg_normalize: None,
+            bg_curve: None,
+            bg_pop,
+            bg_hist,
+            bg_encode_f: [None, None],
+            bg_encode_u8: [None, None],
+            bg_encode_padded: [None, None],
+        })
+    }
+
+    /// Pick (or create) the tier slot for this render: the small LRU for sizes within the
+    /// budget, the one retained large slot for large DISPLAY renders, scratch for large
+    /// float renders.
+    fn slot<'s>(
+        &self,
+        kernels: &Kernels,
+        shared: &Shared,
+        tiers: &'s mut Tiers,
+        scratch: &'s mut Option<Tier>,
+        source: &SourceBuffer,
+        target: Target,
+    ) -> Result<&'s mut Tier, GpuError> {
+        let (w, h) = (source.width, source.height);
+        let same = |t: &Tier| t.width == w && t.height == h;
+        if source.pixel_count() <= CACHE_PIXEL_BUDGET {
+            if let Some(pos) = tiers.small.iter().position(same) {
+                // Touch: most recently rendered goes last.
+                let tier = tiers.small.remove(pos);
+                tiers.small.push(tier);
+            } else {
+                if tiers.small.len() >= SMALL_TIER_CAP {
+                    tiers.small.remove(0);
+                }
+                let tier = self.new_tier(kernels, shared, w, h)?;
+                tiers.small.push(tier);
+            }
+            return tiers
+                .small
+                .last_mut()
+                .ok_or(GpuError::Invalid("small tier cache empty"));
+        }
+        if matches!(target, Target::Float) {
+            *scratch = Some(self.new_tier(kernels, shared, w, h)?);
+            return scratch
+                .as_mut()
+                .ok_or(GpuError::Invalid("scratch tier missing"));
+        }
+        if !tiers.large_display.as_ref().is_some_and(same) {
+            // Free the previous large tier BEFORE allocating the next (hundreds of MB each).
+            tiers.large_display = None;
+            tiers.large_display = Some(self.new_tier(kernels, shared, w, h)?);
+        }
+        tiers
+            .large_display
+            .as_mut()
+            .ok_or(GpuError::Invalid("large tier missing"))
     }
 
     /// Ensure the tier for `source`'s size exists with the buffers and bind groups `target`
@@ -556,61 +865,16 @@ impl RenderPipeline {
         &self,
         kernels: &Kernels,
         shared: &Shared,
-        tiers: &'s mut HashMap<(u32, u32), Tier>,
+        tiers: &'s mut Tiers,
+        scratch: &'s mut Option<Tier>,
         source: &SourceBuffer,
         mask: Option<&MaskBuffer>,
         target: Target,
     ) -> Result<&'s mut Tier, GpuError> {
         let device = self.ctx.device();
-        let key = (source.width, source.height);
         let n = source.pixel_count();
         let float_bytes = n * 12;
-        if let std::collections::hash_map::Entry::Vacant(slot) = tiers.entry(key) {
-            self.check_size(float_bytes)?;
-            let storage = wgpu::BufferUsages::STORAGE;
-            let normalized = new_buffer(device, "normalized", float_bytes, storage);
-            let linear = new_buffer(device, "linear", float_bytes, storage);
-            let k = kernels;
-            let sh = shared;
-            let bg_pop = bind_group(
-                device,
-                "color_pop",
-                &k.color_pop.layout,
-                &[
-                    (0, &linear),
-                    (1, &normalized),
-                    (3, &sh.curve_u),
-                    (4, &sh.push),
-                ],
-            );
-            let bg_hist = [&linear, &normalized].map(|content| {
-                bind_group(
-                    device,
-                    "histogram",
-                    &k.histogram.layout,
-                    &[(0, content), (4, &sh.push), (5, &sh.levels), (7, &sh.hist)],
-                )
-            });
-            slot.insert(Tier {
-                width: source.width,
-                height: source.height,
-                normalized,
-                linear,
-                encoded_f: None,
-                encoded_u8: None,
-                padded_u8: None,
-                bg_normalize: None,
-                bg_curve: None,
-                bg_pop,
-                bg_hist,
-                bg_encode_f: [None, None],
-                bg_encode_u8: [None, None],
-                bg_encode_padded: [None, None],
-            });
-        }
-        let Some(tier) = tiers.get_mut(&key) else {
-            return Err(GpuError::Invalid("render tier vanished"));
-        };
+        let tier = self.slot(kernels, shared, tiers, scratch, source, target)?;
 
         if tier.bg_normalize.as_ref().map(|(id, _)| *id) != Some(source.id) {
             let bg = bind_group(
@@ -683,6 +947,7 @@ impl RenderPipeline {
             Target::U8Padded(pitch) => {
                 if tier.padded_u8.as_ref().map(|(p, _)| *p) != Some(pitch) {
                     let bytes = u64::from(pitch) * u64::from(source.height) * 4;
+                    self.check_size(bytes)?;
                     let padded = new_buffer(device, "padded_u8", bytes, src_storage);
                     tier.bg_encode_padded = encode_bgs(&kernels.encode_u8.layout, 8, &padded);
                     tier.padded_u8 = Some((pitch, padded));
@@ -738,12 +1003,15 @@ impl RenderPipeline {
             queue.write_buffer(&sh.push, 0, bytemuck::bytes_of(&push));
         }
 
+        Self::purge_retired(state);
         let State {
             kernels,
             shared,
             tiers,
+            scratch,
+            ..
         } = state;
-        let tier = self.prepare_tier(kernels, shared, tiers, source, mask, target)?;
+        let tier = self.prepare_tier(kernels, shared, tiers, scratch, source, mask, target)?;
         let pop_index = usize::from(pop_active);
         let (Some((_, bg_normalize)), Some((_, bg_curve))) = (&tier.bg_normalize, &tier.bg_curve)
         else {
@@ -815,11 +1083,20 @@ impl RenderPipeline {
         Ok((encoder, pop_active))
     }
 
-    /// Release the tier after an over-budget (export) render.
-    fn trim(state: &mut State, source: &SourceBuffer) {
-        if source.pixel_count() > CACHE_PIXEL_BUDGET {
-            state.tiers.remove(&(source.width, source.height));
+    /// The tier `encode_chain` just rendered into.
+    fn rendered_tier<'s>(state: &'s State, source: &SourceBuffer) -> Result<&'s Tier, GpuError> {
+        if let Some(t) = state.scratch.as_ref() {
+            return Ok(t);
         }
+        let same = |t: &&Tier| t.width == source.width && t.height == source.height;
+        state
+            .tiers
+            .small
+            .iter()
+            .rev()
+            .find(same)
+            .or_else(|| state.tiers.large_display.as_ref().filter(same))
+            .ok_or(GpuError::Invalid("render tier missing"))
     }
 
     /// Float path: encoded output as an `RgbImage` plus the histogram (export, parity).
@@ -829,38 +1106,38 @@ impl RenderPipeline {
         params: &RenderParams,
         opts: RenderOptions<'_>,
     ) -> Result<RenderResult, GpuError> {
+        self.fits_render(source.width, source.height)?;
         let mut state = self.lock();
-        let (encoder, _) = self.encode_chain(&mut state, source, params, opts, Target::Float)?;
-        let index = self.ctx.queue().submit(Some(encoder.finish()));
-        let result = (|| {
-            let tier = state
-                .tiers
-                .get(&(source.width, source.height))
-                .ok_or(GpuError::Invalid("render tier missing"))?;
+        let device = self.ctx.device();
+        let result = scoped(device, || {
+            let (encoder, _) =
+                self.encode_chain(&mut state, source, params, opts, Target::Float)?;
+            let index = self.ctx.queue().submit(Some(encoder.finish()));
+            let tier = Self::rendered_tier(&state, source)?;
             let Some((_, staging)) = tier.encoded_f.as_ref() else {
                 return Err(GpuError::Invalid("float staging missing"));
             };
             let bytes = source.pixel_count() * 12;
-            map_sync(
-                self.ctx.device(),
+            let mapped = map_sync(
+                device,
                 index,
-                &[staging.slice(..bytes), state.shared.hist_staging.slice(..)],
+                &[(staging, bytes), (&state.shared.hist_staging, HIST_BYTES)],
             )?;
+            let (Some(pixels), Some(hist)) = (mapped.first(), mapped.get(1)) else {
+                return Err(GpuError::Invalid("staging maps missing"));
+            };
             let image = {
-                let view = staging
-                    .slice(..bytes)
-                    .get_mapped_range()
-                    .map_err(|e| GpuError::Readback(e.to_string()))?;
+                let view = pixels.view()?;
                 RgbImage::new_with(tier.width as usize, tier.height as usize, |buf| {
                     bytemuck::cast_slice_mut::<f32, u8>(buf)
                         .copy_from_slice(&view[..bytes as usize]);
                 })?
             };
-            staging.unmap();
-            let histogram = read_histogram(&state.shared.hist_staging)?;
+            let histogram = read_histogram(hist)?;
             Ok(RenderResult { image, histogram })
-        })();
-        Self::trim(&mut state, source);
+        });
+        // Large float renders never retain their intermediates.
+        state.scratch = None;
         result
     }
 
@@ -910,40 +1187,36 @@ impl RenderPipeline {
         opts: RenderOptions<'_>,
         sink: impl FnOnce(&[u8]),
     ) -> Result<Histogram, GpuError> {
+        self.fits_render(source.width, source.height)?;
         let mut state = self.lock();
-        let (encoder, _) = self.encode_chain(&mut state, source, params, opts, Target::U8)?;
-        let index = self.ctx.queue().submit(Some(encoder.finish()));
-        let result = (|| {
-            let tier = state
-                .tiers
-                .get(&(source.width, source.height))
-                .ok_or(GpuError::Invalid("render tier missing"))?;
+        let device = self.ctx.device();
+        scoped(device, || {
+            let (encoder, _) = self.encode_chain(&mut state, source, params, opts, Target::U8)?;
+            let index = self.ctx.queue().submit(Some(encoder.finish()));
+            let tier = Self::rendered_tier(&state, source)?;
             let Some((_, staging)) = tier.encoded_u8.as_ref() else {
                 return Err(GpuError::Invalid("display staging missing"));
             };
             let bytes = source.pixel_count() * 4;
-            map_sync(
-                self.ctx.device(),
+            let mapped = map_sync(
+                device,
                 index,
-                &[staging.slice(..bytes), state.shared.hist_staging.slice(..)],
+                &[(staging, bytes), (&state.shared.hist_staging, HIST_BYTES)],
             )?;
-            {
-                let view = staging
-                    .slice(..bytes)
-                    .get_mapped_range()
-                    .map_err(|e| GpuError::Readback(e.to_string()))?;
-                sink(&view[..bytes as usize]);
-            }
-            staging.unmap();
-            read_histogram(&state.shared.hist_staging)
-        })();
-        Self::trim(&mut state, source);
-        result
+            let (Some(pixels), Some(hist)) = (mapped.first(), mapped.get(1)) else {
+                return Err(GpuError::Invalid("staging maps missing"));
+            };
+            sink(&pixels.view()?[..bytes as usize]);
+            read_histogram(hist)
+        })
     }
 
     /// Display path with no pixel readback: the packed RGBA8 frame is copied on the GPU into
-    /// `texture` (an `Rgba8Unorm`/`Rgba8UnormSrgb` texture of exactly the source's size with
-    /// `COPY_DST` usage — e.g. one registered with egui-wgpu). The kernel writes rows at the
+    /// `texture` — an **`Rgba8Unorm`** texture (not `*Srgb`: the bytes are already
+    /// display-encoded by the chain, Adobe-RGB or, with `srgb_encode`, sRGB, and the caller
+    /// samples them as-is; an sRGB view would decode them a second time) of exactly the
+    /// source's size with `COPY_DST` usage — e.g. one registered with egui-wgpu. Any other
+    /// format is refused with [`GpuError::TextureFormat`]. The kernel writes rows at the
     /// 256-byte-aligned pitch `copy_buffer_to_texture` requires, so no repack happens
     /// anywhere. Returns the histogram (its 4 KB readback is the only CPU wait).
     pub fn render_display_to_texture(
@@ -956,13 +1229,8 @@ impl RenderPipeline {
         if texture.width() != source.width || texture.height() != source.height {
             return Err(GpuError::Invalid("texture size must equal the source size"));
         }
-        if !matches!(
-            texture.format(),
-            wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba8UnormSrgb
-        ) {
-            return Err(GpuError::Invalid(
-                "texture must be Rgba8Unorm or Rgba8UnormSrgb",
-            ));
+        if texture.format() != wgpu::TextureFormat::Rgba8Unorm {
+            return Err(GpuError::TextureFormat(texture.format()));
         }
         if !texture.usage().contains(wgpu::TextureUsages::COPY_DST) {
             return Err(GpuError::Invalid("texture needs COPY_DST usage"));
@@ -970,15 +1238,15 @@ impl RenderPipeline {
         let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
         let bytes_per_row = (source.width * 4).div_ceil(align) * align;
         let pitch = bytes_per_row / 4;
+        self.fits_render(source.width, source.height)?;
+        self.check_size(u64::from(bytes_per_row) * u64::from(source.height))?;
 
         let mut state = self.lock();
-        let (mut encoder, _) =
-            self.encode_chain(&mut state, source, params, opts, Target::U8Padded(pitch))?;
-        let result = (|| {
-            let tier = state
-                .tiers
-                .get(&(source.width, source.height))
-                .ok_or(GpuError::Invalid("render tier missing"))?;
+        let device = self.ctx.device();
+        scoped(device, || {
+            let (mut encoder, _) =
+                self.encode_chain(&mut state, source, params, opts, Target::U8Padded(pitch))?;
+            let tier = Self::rendered_tier(&state, source)?;
             let Some((_, padded)) = tier.padded_u8.as_ref() else {
                 return Err(GpuError::Invalid("padded buffer missing"));
             };
@@ -999,15 +1267,12 @@ impl RenderPipeline {
                 },
             );
             let index = self.ctx.queue().submit(Some(encoder.finish()));
-            map_sync(
-                self.ctx.device(),
-                index,
-                &[state.shared.hist_staging.slice(..)],
-            )?;
-            read_histogram(&state.shared.hist_staging)
-        })();
-        Self::trim(&mut state, source);
-        result
+            let mapped = map_sync(device, index, &[(&state.shared.hist_staging, HIST_BYTES)])?;
+            let Some(hist) = mapped.first() else {
+                return Err(GpuError::Invalid("histogram map missing"));
+            };
+            read_histogram(hist)
+        })
     }
 }
 
