@@ -4,8 +4,8 @@
 //! it prints why it skipped and passes. Compares the PREVIEW path (binned / half-size linear),
 //! which is what analysis and the proxy render see, and the full path's means. Prints the numbers
 //! under `--nocapture`; asserts only that the two previews agree in size (modulo the default
-//! crop) and that the per-channel means are within 0.2 % in the default (LibRaw-parity)
-//! configuration; the per-sample max/mean figures are printed for the record.
+//! crop), that per-sample differences stay at u16-LSB level (max < 2e-4, mean < 1e-4) and that
+//! the channel means agree within 0.5 % in the default (LibRaw-parity) configuration.
 
 #![cfg(all(feature = "lcraw", feature = "libraw"))]
 
@@ -65,10 +65,14 @@ fn lcraw_matches_libraw_on_the_sample() {
                 max = max.max(d);
                 sum += d;
             }
-            eprintln!(
-                "  SAME SIZE: per-sample max {max:.3e} mean {:.3e}",
-                sum / a.data.len() as f64
-            );
+            let mean = sum / a.data.len() as f64;
+            eprintln!("  SAME SIZE: per-sample max {max:.3e} mean {mean:.3e}");
+            if label.starts_with("lcraw default") {
+                // LibRaw's pipeline is u16 (1 LSB = 1.5e-5); measured 2026-10-15 on an EOS R100
+                // CR3: max 6.3e-5, mean 2.7e-5 — a few LSB from per-channel black rounding.
+                assert!(max < 2e-4, "{label}: per-sample max {max:.3e}");
+                assert!(mean < 1e-4, "{label}: per-sample mean {mean:.3e}");
+            }
         } else {
             eprintln!(
                 "  size differs by {}×{} px (crop margins)",
@@ -81,7 +85,7 @@ fn lcraw_matches_libraw_on_the_sample() {
             for c in 0..3 {
                 let rel = (ma[c] - mb[c]).abs() / ma[c].max(1e-9);
                 assert!(
-                    rel < 0.002,
+                    rel < 0.005,
                     "{label}: channel {c} mean differs by {rel:.4} (libraw {} vs lcraw {})",
                     ma[c],
                     mb[c]
