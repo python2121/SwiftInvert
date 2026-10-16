@@ -908,3 +908,41 @@ fn prepare_and_finalize_timing() {
         );
     }
 }
+
+/// ColorGradingTests.castStrengthBeyondOneStaysBounded: strength 2 overcorrects harder than
+/// 0.5 but the kernel clamps keep the per-channel curve sane (slope range, finite pivots and
+/// curvatures). Confidence scaling is always on (NegPy 0.36); both settings share the frame's
+/// confidence, so the comparison is deterministic.
+#[test]
+fn cast_strength_beyond_one_stays_bounded() {
+    let analysis = kernel::analyze(&synthetic_grid_input(), None, None, 0.05).expect("analysis");
+    let strong = ExposureSettings {
+        cast_removal_strength: 2.0,
+        ..ExposureSettings::default()
+    };
+    let mild = ExposureSettings {
+        cast_removal_strength: 0.5,
+        ..ExposureSettings::default()
+    };
+    let p_strong = derive_render_params(&strong, &analysis);
+    let p_mild = derive_render_params(&mild, &analysis);
+    let mut stronger_somewhere = false;
+    for ch in [0usize, 2] {
+        assert!(
+            p_strong.slopes[ch] >= negkit::constants::K::SLOPE_MIN
+                && p_strong.slopes[ch] <= negkit::constants::K::SLOPE_MAX,
+            "slope {ch} out of range: {}",
+            p_strong.slopes[ch]
+        );
+        assert!(p_strong.pivots[ch].is_finite() && p_strong.curvatures[ch].is_finite());
+        if (p_strong.slopes[ch] - p_strong.slopes[1]).abs()
+            > (p_mild.slopes[ch] - p_mild.slopes[1]).abs() + 1e-9
+        {
+            stronger_somewhere = true;
+        }
+    }
+    assert!(
+        stronger_somewhere,
+        "strength 2 should tilt R/B harder than 0.5"
+    );
+}

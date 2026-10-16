@@ -585,7 +585,8 @@ mod derive_props {
         s.tint = -0.1;
         let p = derive_render_params(&s, &analysis);
         let yellow = (0.5 + 0.2) * K::CMY_MAX_DENSITY / range;
-        let magenta = (-0.1 + 0.2 * derive::PLANCKIAN_RATIO) * K::CMY_MAX_DENSITY / range;
+        // The literal, not derive::PLANCKIAN_RATIO: the Swift test pins NegPy's mired slopes km/ky.
+        let magenta = (-0.1 + 0.2 * (0.0029 / 0.0057)) * K::CMY_MAX_DENSITY / range;
         expect_close(p.cmy_offsets[0], -K::LOG10_TWO / range, 1e-12, &"cyan");
         expect_close(
             p.cmy_offsets[1],
