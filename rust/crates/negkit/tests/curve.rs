@@ -633,6 +633,27 @@ mod derive_props {
             &"shadow contrast floor",
         );
         expect_close(p.hue_trim, 30.0_f64.to_radians(), 1e-15, &"hue trim");
+        // HueTrimTests.deriveConvertsDegreesToRadiansAndClamps: in-range values pass through
+        // (both signs), out-of-range clamp to ±30°.
+        let trim = |deg: f64| {
+            let mut s2 = s.clone();
+            s2.hue_trim = deg;
+            derive_render_params(&s2, &analysis).hue_trim
+        };
+        expect_close(trim(30.0), 30.0_f64.to_radians(), 1e-15, &"trim 30");
+        expect_close(trim(-12.5), (-12.5_f64).to_radians(), 1e-15, &"trim -12.5");
+        expect_close(
+            trim(400.0),
+            30.0_f64.to_radians(),
+            1e-15,
+            &"trim 400 clamps",
+        );
+        expect_close(
+            trim(-400.0),
+            (-30.0_f64).to_radians(),
+            1e-15,
+            &"trim -400 clamps",
+        );
         assert_eq!(p.skin_protection, 1.0);
         assert_eq!(p.print_saturation, K::PRINT_SATURATION_MAX);
         assert_eq!(p.separation_damping, 0.0);

@@ -106,7 +106,8 @@ pub fn sanitize_levels(points: &[V2]) -> Vec<V2> {
     let (mut last_x, mut last_y) = (-1.0, 0.0);
     for p in sorted {
         let x = p[0].clamp(lo, hi);
-        if x <= last_x + 1e-4 {
+        // A NaN input must be DROPPED (Swift's `guard x > lastX + 1e-4 else { continue }`).
+        if x.is_nan() || x <= last_x + 1e-4 {
             continue;
         }
         let y = p[1].clamp(lo.max(last_y), hi);

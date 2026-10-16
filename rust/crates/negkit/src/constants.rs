@@ -234,13 +234,13 @@ impl WorkingOetf {
     #[inline]
     pub fn encode(x: f32) -> f32 {
         // Boundary cast: the exponent is exact in f32 (2.19921875 = 563/256 is dyadic).
-        x.max(0.0).powf(1.0 / Self::GAMMA_F32)
+        (if x < 0.0 { 0.0 } else { x }).powf(1.0 / Self::GAMMA_F32)
     }
 
     /// Encoded → linear, `f32` pixel path.
     #[inline]
     pub fn decode(e: f32) -> f32 {
-        e.max(0.0).powf(Self::GAMMA_F32)
+        (if e < 0.0 { 0.0 } else { e }).powf(Self::GAMMA_F32)
     }
 
     /// Linear → encoded in `f64`.

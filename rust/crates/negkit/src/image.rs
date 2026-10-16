@@ -474,7 +474,7 @@ impl RgbImage {
         let y0 = roi.y0;
         let x1 = roi.x1.min(self.width);
         let y1 = roi.y1.min(self.height);
-        if x1 < x0 + 2 || y1 < y0 + 2 {
+        if x1.saturating_sub(x0) < 2 || y1.saturating_sub(y0) < 2 {
             return Cow::Borrowed(self);
         }
         let (w, h) = (x1 - x0, y1 - y0);

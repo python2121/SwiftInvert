@@ -68,13 +68,18 @@ mod libraw {
             found = true;
         }
         if !found && std::env::var_os("LIBRAW_NO_PKG_CONFIG").is_none() {
-            // `cargo_metadata(true)` emits the link-search lines; we add `-lraw_r` ourselves below so the
-            // same line is printed whichever way the library was found.
+            // `cargo_metadata(false)`: Homebrew's `libraw_r.pc` lists `-lstdc++ -llcms2` (and a
+            // `-fopenmp` cflag) that must NOT be forwarded — macOS has no libstdc++ (the link
+            // failed with "library 'stdc++' not found" on the Mac, 2026-10-15) and the dylib already
+            // records its own dependencies. We emit the search paths only and `-lraw_r` below.
             let probe = pkg_config::Config::new()
-                .cargo_metadata(true)
+                .cargo_metadata(false)
                 .print_system_libs(false)
                 .probe("libraw_r");
             if let Ok(lib) = probe {
+                for dir in &lib.link_paths {
+                    println!("cargo:rustc-link-search=native={}", dir.display());
+                }
                 includes.extend(lib.include_paths);
                 found = true;
             }

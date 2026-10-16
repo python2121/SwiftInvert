@@ -15,12 +15,8 @@ use crate::image::for_each_row_mut;
 use crate::rect::NormalizedRect;
 use crate::stats;
 
-/// The analysis grid's target long edge (`K.analysisGrid`, NegPy `analysis_grid = 1024`): the
-/// block side is `b = ceil(maxDim / ANALYSIS_GRID)`.
-///
-/// Lives here rather than in `constants` (agent C's module) so this module is self-contained;
-/// re-export from `constants::K` if the other analysis modules want one home for it.
-pub const ANALYSIS_GRID: usize = 1024;
+/// The analysis grid's long edge (`K::ANALYSIS_GRID`, re-exported for callers of this module).
+pub const ANALYSIS_GRID: usize = crate::constants::K::ANALYSIS_GRID;
 
 /// Default centered inset: 10 % per side = the middle 80 % of the frame (SwiftInvert default;
 /// NegPy ships 5 %). `ExposureKernel.defaultAnalysisBuffer`.

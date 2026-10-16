@@ -39,9 +39,16 @@ pub struct KneeShape {
     pub shoulder: f64,
 }
 
+/// Swift's `min(max(x, lo), hi)`: a NaN stays NaN (Rust's `f64::max` would swallow it).
 #[inline]
 fn clamp(x: f64, lo: f64, hi: f64) -> f64 {
-    x.max(lo).min(hi)
+    if x < lo {
+        lo
+    } else if x > hi {
+        hi
+    } else {
+        x
+    }
 }
 
 /// Separation Damping's per-pixel effective k (NegPy `separation_damping_gain`): the

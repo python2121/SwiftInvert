@@ -87,7 +87,9 @@ impl NormalizedRect {
         let y0 = ((self.y * h as f64) as i64).max(0);
         let x1 = (((self.x + self.width) * w as f64) as i64).min(w);
         let y1 = (((self.y + self.height) * h as f64) as i64).min(h);
-        if x1 - x0 < 2 || y1 - y0 < 2 {
+        // Saturating: a huge negative width/height saturates `x1` to i64::MIN above, and a plain
+        // subtraction would overflow (a debug-build panic on a hostile sidecar).
+        if x1.saturating_sub(x0) < 2 || y1.saturating_sub(y0) < 2 {
             return None;
         }
         Some(PixelRoi {

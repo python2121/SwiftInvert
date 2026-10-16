@@ -287,6 +287,19 @@ impl Fields<'_> {
         self.get(key).unwrap_or(default)
     }
 
+    /// Swift's `Int` decode: a JSON integer, or a float that is exactly integral (`90.0`),
+    /// within `i32`; anything else is the default.
+    fn int(&self, key: &str, default: i32) -> i32 {
+        match self.0.get(key) {
+            Some(Value::Number(n)) => n
+                .as_i64()
+                .or_else(|| n.as_f64().filter(|f| f.fract() == 0.0).map(|f| f as i64))
+                .and_then(|i| i32::try_from(i).ok())
+                .unwrap_or(default),
+            _ => default,
+        }
+    }
+
     fn v3(&self, key: &str) -> V3 {
         self.get(key).unwrap_or([0.0; 3])
     }
@@ -358,7 +371,7 @@ impl<'de> Deserialize<'de> for ExposureSettings {
             levels_red: c.levels("levelsRed"),
             levels_green: c.levels("levelsGreen"),
             levels_blue: c.levels("levelsBlue"),
-            rotation: c.get("rotation").unwrap_or(d.rotation),
+            rotation: c.int("rotation", d.rotation),
             flip_horizontal: c.b("flipHorizontal", d.flip_horizontal),
             fine_rotation: c.f("fineRotation", d.fine_rotation),
             analysis_rect: c.get("analysisRect"),
