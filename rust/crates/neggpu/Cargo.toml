@@ -1,0 +1,20 @@
+[package]
+name = "neggpu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "wgpu compute twin of negkit's CPU reference chain: one WGSL module for Metal / Vulkan / DX12 (L3)"
+
+[lints]
+workspace = true
+
+[dependencies]
+negkit = { workspace = true }
+wgpu = { workspace = true }
+bytemuck = { workspace = true }
+pollster = { workspace = true }
+thiserror = { workspace = true }
+log = { workspace = true }
+
+[dev-dependencies]

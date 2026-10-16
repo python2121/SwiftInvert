@@ -1,0 +1,26 @@
+[package]
+name = "negui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "egui front end (eframe): library tree, loupe, controls, histogram, tools, dialogs (L5)"
+
+[lints]
+workspace = true
+
+[dependencies]
+negkit = { workspace = true }
+negsession = { workspace = true }
+neggpu = { workspace = true }
+egui = { workspace = true }
+eframe = { workspace = true, features = ["wgpu"] }
+egui_extras = { workspace = true }
+craft-ui = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }
+wgpu = { workspace = true }
+
+[dev-dependencies]
+egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }

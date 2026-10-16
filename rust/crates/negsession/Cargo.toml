@@ -1,0 +1,22 @@
+[package]
+name = "negsession"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "The engine: per-image cache tower (decode → orient → analyze → derive → render tiers), sidecars, profiles, history model, export, library scan. No UI (L4)"
+
+[lints]
+workspace = true
+
+[dependencies]
+negkit = { workspace = true }
+negraw = { workspace = true }
+neggpu = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+log = { workspace = true }
+image = { workspace = true }
+tiff = { workspace = true }
+craft-cms = { workspace = true }

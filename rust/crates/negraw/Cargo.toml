@@ -1,0 +1,23 @@
+[package]
+name = "negraw"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "RAW decode to scene-linear sensor-native RgbImage under the LibRaw contract; pure-Rust backend by default, LibRaw FFI behind a feature (L2)"
+
+[lints]
+workspace = true
+
+[dependencies]
+negkit = { workspace = true }
+thiserror = { workspace = true }
+log = { workspace = true }
+lightcraft-raw = { workspace = true, optional = true }
+
+[features]
+default = ["lcraw"]
+## Pure-Rust decoder (lightcraft-raw).
+lcraw = ["dep:lightcraft-raw"]
+## LibRaw via FFI (needs libraw_r + pkg-config on the build host; byte-exact vs NegPy's rawpy decode).
+libraw = []

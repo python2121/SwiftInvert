@@ -1,0 +1,23 @@
+[package]
+name = "negkit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Pure-math film-negative conversion kernel (port of SwiftInvert's NegativeKit / NegPy): analysis, parameter derivation, CPU reference chain (L1)"
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+rayon = { workspace = true, optional = true }
+
+[features]
+default = ["rayon"]
+## Parallel rows in the CPU reference chain and analysis sorts. Off for wasm32.
+rayon = ["dep:rayon"]
+
+[dev-dependencies]
