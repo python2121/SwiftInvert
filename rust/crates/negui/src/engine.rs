@@ -18,6 +18,10 @@ use std::time::{Duration, Instant};
 use negkit::ExposureSettings;
 use negsession::renderer::Renderer;
 use negsession::{RawBackend, RenderOutput, RenderRequest, Session, SessionInfo, ToolMode};
+// --- U3: darkroom ---
+use negkit::zone_placement::{Pin, Solution};
+use negsession::{TestStripOutput, TestStripRequest};
+// --- end U3 ---
 
 // --- U2: tools & dialogs ---
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -67,6 +71,16 @@ pub enum Cmd {
     },
     /// Drop every session (folder change).
     ClearSessions,
+    // --- U3: darkroom ---
+    /// Test strip / patch preview / zone placement work against `path`'s session with
+    /// `settings` committed first (the darkroom layers always run on the proxy tier).
+    Darkroom {
+        path: PathBuf,
+        settings: ExposureSettings,
+        cmd: DarkroomCmd,
+        generation: u64,
+    },
+    // --- end U3 ---
     Shutdown,
     // --- U2: tools & dialogs ---
     /// Batch export (`AppModel.performExport`) on its own thread so the canvas keeps rendering:
@@ -86,6 +100,75 @@ pub enum Cmd {
     UseTextureTarget(TextureSink),
     // --- end U2 ---
 }
+
+// --- U3: darkroom ---
+/// The darkroom layers' worker requests (`ImageSession.renderTestStrip`, `render(settings:)`,
+/// `sampleZonePin` + `predictedZone`, `solveZonePlacement`).
+#[derive(Debug)]
+pub enum DarkroomCmd {
+    /// Build the 5×5 strip with this ladder orientation.
+    TestStrip { orientation: i32 },
+    /// One full-frame proxy render of `settings` (a strip patch preview).
+    Preview,
+    /// Sample a pin at content-normalized `(u, v)`; `armed` = the target zone picked on the
+    /// strip, else the metered zone snapped to thirds.
+    ZoneSample {
+        u: f64,
+        v: f64,
+        armed: Option<f64>,
+        op: PinOp,
+    },
+    /// Labels + solve + solved-look preview for these pins.
+    ZoneSolve { pins: Vec<Pin> },
+}
+
+/// What a zone sample is for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PinOp {
+    Add,
+    Move { index: usize, last: bool },
+}
+
+impl DarkroomCmd {
+    /// Coalescing key: a request superseded by a later one of the same key is skipped
+    /// (latest-wins, like renders). Adds and final moves are never dropped.
+    fn coalesce_key(&self) -> Option<u8> {
+        match self {
+            DarkroomCmd::TestStrip { .. } => Some(0),
+            DarkroomCmd::Preview => Some(1),
+            DarkroomCmd::ZoneSample {
+                op: PinOp::Move { last: false, .. },
+                ..
+            } => Some(2),
+            DarkroomCmd::ZoneSample { .. } => None,
+            DarkroomCmd::ZoneSolve { .. } => Some(3),
+        }
+    }
+}
+
+/// The darkroom worker results.
+#[derive(Debug)]
+pub enum DarkroomEvt {
+    TestStrip {
+        result: Result<Box<TestStripOutput>, String>,
+        build_time: Duration,
+    },
+    Preview {
+        result: Result<Box<RenderOutput>, String>,
+    },
+    /// The pin carries its frozen sample and its target (armed, else the snapped meter).
+    ZoneSampled {
+        op: PinOp,
+        result: Result<Pin, String>,
+    },
+    ZoneSolved {
+        /// What each pin prints at under the CURRENT settings (roman), pin order.
+        labels: Vec<String>,
+        solution: Option<Box<Solution>>,
+        preview: Option<Box<RenderOutput>>,
+    },
+}
+// --- end U3 ---
 
 /// Worker → UI.
 #[derive(Debug)]
@@ -122,6 +205,14 @@ pub enum Evt {
         total: usize,
         current: PathBuf,
     },
+    /// The densitometer's bytes for a zero-copy (texture) frame: a proxy-tier RGBA8 render of
+    /// the same snapshot, emitted just BEFORE that frame's [`Evt::Rendered`] (whose own RGBA8
+    /// frame is empty).
+    ProbeFrame {
+        path: PathBuf,
+        generation: u64,
+        output: Box<RenderOutput>,
+    },
     /// The batch ended (finished or cancelled).
     ExportFinished {
         generation: u64,
@@ -131,6 +222,13 @@ pub enum Evt {
         cancelled: bool,
     },
     // --- end U2 ---
+    // --- U3: darkroom ---
+    Darkroom {
+        path: PathBuf,
+        generation: u64,
+        event: DarkroomEvt,
+    },
+    // --- end U3 ---
 }
 
 /// The UI's handle: a sender, a receiver and the thread.
@@ -244,6 +342,22 @@ impl Worker {
                     superseding_after = true;
                 }
             }
+            // --- U3: darkroom --- same rule for darkroom requests, per coalescing key.
+            let mut seen_keys: Vec<u8> = Vec::new();
+            for (i, c) in queue.iter().enumerate().rev() {
+                if let Cmd::Darkroom { cmd, .. } = c
+                    && let Some(key) = cmd.coalesce_key()
+                {
+                    if seen_keys.contains(&key) {
+                        if let Some(k) = keep.get_mut(i) {
+                            *k = false;
+                        }
+                    } else {
+                        seen_keys.push(key);
+                    }
+                }
+            }
+            // --- end U3 ---
             for (cmd, keep) in queue.into_iter().zip(keep) {
                 if keep && !self.handle(cmd) {
                     return;
@@ -284,6 +398,21 @@ impl Worker {
                     result,
                 });
             }
+            // --- U3: darkroom ---
+            Cmd::Darkroom {
+                path,
+                settings,
+                cmd,
+                generation,
+            } => {
+                let event = self.darkroom(&path, settings, cmd);
+                self.emit(Evt::Darkroom {
+                    path,
+                    generation,
+                    event,
+                });
+            }
+            // --- end U3 ---
             Cmd::Render {
                 path,
                 settings,
@@ -377,7 +506,7 @@ impl Worker {
             });
         }
         // --- U2: tools & dialogs ---
-        if let Some(out) = self.render_to_target(path, &variant, tool, request) {
+        if let Some(out) = self.render_to_target(path, &variant, tool, request, generation) {
             return out;
         }
         // --- end U2 ---
@@ -454,20 +583,27 @@ impl Worker {
         }
     }
 
-    /// The zero-readback display path: the frame lands in a texture of the ring (the one not on
-    /// screen) and the returned output carries an EMPTY RGBA8 frame; the presenter picks the
-    /// texture up from the sink. On a size change (the ring's textures are the wrong size) the
-    /// frame comes back through `render_into` once — bytes the presenter uploads — and the ring
-    /// is resized for the next render. `None` when the target is off.
+    /// The zero-readback display path for the ENHANCED tiers: the frame lands in a texture of
+    /// the ring (the one not on screen) and the returned output carries an EMPTY RGBA8 frame;
+    /// the presenter picks the texture up from the sink, and an [`Evt::ProbeFrame`] (a proxy
+    /// readback of the same snapshot, ~6 MB) feeds the densitometer / zone overlay, which read
+    /// displayed bytes. The proxy tier keeps the readback path: its bytes ARE the probe, so a
+    /// texture would only add a second render. On a size change (the ring's textures are the
+    /// wrong size) the frame comes back through `render_into` once — bytes the presenter
+    /// uploads — and the ring is resized for the next render. `None` = use the readback path.
     fn render_to_target(
         &mut self,
         path: &Path,
         variant: &Option<ExposureSettings>,
         tool: ToolMode,
         request: RenderRequest,
+        generation: u64,
     ) -> Option<Result<(RenderOutput, Option<SessionInfo>, Duration), String>> {
+        if request.tier == negsession::RenderTier::Proxy {
+            return None;
+        }
         let mut ring = self.texture.take()?;
-        let result = self.render_with_ring(&mut ring, path, variant, tool, request);
+        let result = self.render_with_ring(&mut ring, path, variant, tool, request, generation);
         if ring.is_usable() {
             self.texture = Some(ring);
         }
@@ -481,7 +617,9 @@ impl Worker {
         variant: &Option<ExposureSettings>,
         tool: ToolMode,
         mut request: RenderRequest,
+        generation: u64,
     ) -> Result<(RenderOutput, Option<SessionInfo>, Duration), String> {
+        let evt_tx = self.evt_tx.clone();
         let Some(s) = self.session_mut(path) else {
             return Err("session vanished".into());
         };
@@ -504,6 +642,27 @@ impl Worker {
                 Ok(meta) => {
                     let render_time = t0.elapsed();
                     ring.deliver(slot, &texture);
+                    // The densitometer's bytes: the same snapshot on the proxy, no histogram.
+                    let probe_request = RenderRequest {
+                        tier: negsession::RenderTier::Proxy,
+                        compute_histogram: false,
+                        ..request
+                    };
+                    let mut bytes = Vec::new();
+                    match s.render_into_with(&settings, probe_request, &mut bytes) {
+                        Ok(probe) => {
+                            // Delivered with the Rendered event that follows (same poll).
+                            let _ = evt_tx.send(Evt::ProbeFrame {
+                                path: path.to_path_buf(),
+                                generation,
+                                output: Box::new(RenderOutput {
+                                    frame: Frame::Rgba8(bytes),
+                                    meta: probe,
+                                }),
+                            });
+                        }
+                        Err(e) => log::debug!("engine: probe render failed: {e}"),
+                    }
                     let info = s.session_info().ok();
                     let output = RenderOutput {
                         frame: Frame::Rgba8(Vec::new()),
@@ -600,3 +759,116 @@ fn run_export(
     });
 }
 // --- end U2 ---
+// --- U3: darkroom ---
+/// The darkroom layers render on the proxy, cropped, sRGB (the canvas' encoding).
+fn darkroom_request() -> RenderRequest {
+    RenderRequest {
+        srgb: true,
+        compute_histogram: false,
+        ..RenderRequest::default()
+    }
+}
+
+impl Worker {
+    fn darkroom(
+        &mut self,
+        path: &Path,
+        settings: ExposureSettings,
+        cmd: DarkroomCmd,
+    ) -> DarkroomEvt {
+        let session: Result<&mut Session, String> = if self.position(path).is_none() {
+            self.open(path, settings.clone())
+        } else {
+            self.session_mut(path)
+                .ok_or_else(|| "session vanished".to_owned())
+        };
+        let session = match session {
+            Ok(s) => {
+                s.set_settings(settings.clone());
+                Ok(s)
+            }
+            Err(e) => Err(e),
+        };
+        match cmd {
+            DarkroomCmd::TestStrip { orientation } => {
+                let t0 = Instant::now();
+                let result = session.and_then(|s| {
+                    s.render_test_strip_with(
+                        &settings,
+                        TestStripRequest {
+                            orientation,
+                            srgb: true,
+                        },
+                    )
+                    .map(Box::new)
+                    .map_err(|e| e.to_string())
+                });
+                DarkroomEvt::TestStrip {
+                    result,
+                    build_time: t0.elapsed(),
+                }
+            }
+            DarkroomCmd::Preview => DarkroomEvt::Preview {
+                result: session.and_then(|s| {
+                    s.render_with(&settings, darkroom_request())
+                        .map(Box::new)
+                        .map_err(|e| e.to_string())
+                }),
+            },
+            DarkroomCmd::ZoneSample { u, v, armed, op } => DarkroomEvt::ZoneSampled {
+                op,
+                result: session.and_then(|s| {
+                    let sample = s.sample_zone_pin(u, v, 2).map_err(|e| e.to_string())?;
+                    let target = match armed {
+                        Some(z) => z,
+                        None => {
+                            let z = s
+                                .predicted_zone(&settings, sample.val_luma, sample.mask_val)
+                                .map_err(|e| e.to_string())?;
+                            (z * 3.0).round() / 3.0
+                        }
+                    };
+                    let mut pin = negkit::zone_placement::Pin::new(
+                        u,
+                        v,
+                        sample.val_rgb,
+                        sample.val_luma,
+                        target,
+                    );
+                    pin.retargeted = armed.is_some();
+                    pin.mask_val = sample.mask_val;
+                    Ok(pin)
+                }),
+            },
+            DarkroomCmd::ZoneSolve { pins } => match session {
+                Err(_) => DarkroomEvt::ZoneSolved {
+                    labels: Vec::new(),
+                    solution: None,
+                    preview: None,
+                },
+                Ok(s) => {
+                    let labels = pins
+                        .iter()
+                        .map(|p| {
+                            s.predicted_zone(&settings, p.val_luma, 0.0)
+                                .map(negsession::densitometer::zone_roman)
+                                .unwrap_or_else(|_| "–".to_owned())
+                        })
+                        .collect();
+                    let solution = s.solve_zone_placement(&settings, &pins).ok().flatten();
+                    let preview = solution.as_ref().and_then(|sol| {
+                        s.render_with(&sol.settings, darkroom_request())
+                            .ok()
+                            .map(Box::new)
+                    });
+                    DarkroomEvt::ZoneSolved {
+                        labels,
+                        solution: solution.map(Box::new),
+                        preview,
+                    }
+                }
+            },
+        }
+    }
+}
+// --- end U3 ---

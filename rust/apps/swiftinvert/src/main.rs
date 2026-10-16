@@ -22,7 +22,7 @@ const APP_NAME: &str = "SwiftInvert";
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage: swiftinvert [folder]\n       swiftinvert --selftest <out.png> [folder] [--crop] [--dialogs] [--export <dir>] [--latency]"
+        "usage: swiftinvert [folder]\n       swiftinvert --selftest <out.png> [folder] [--crop] [--dialogs] [--export <dir>] [--latency] [--teststrip] [--zones]"
     );
     ExitCode::from(2)
 }
@@ -41,12 +41,25 @@ fn device_descriptor()
 fn main() -> ExitCode {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // --- U3: darkroom --- `--teststrip` / `--zones` add darkroom captures to `--selftest`
+    let darkroom = negui::selftest::DarkroomCaptures {
+        test_strip: args.iter().any(|a| a == "--teststrip"),
+        zones: args.iter().any(|a| a == "--zones"),
+    };
+    let args: Vec<String> = args
+        .into_iter()
+        .filter(|a| a != "--teststrip" && a != "--zones")
+        .collect();
+    // --- end U3 ---
     if args.first().map(String::as_str) == Some("--selftest") {
         let Some(out) = args.get(1) else {
             return usage();
         };
         // --- U2: tools & dialogs --- `[folder]` then flags
-        let mut extra = negui::selftest::SelftestOptions::default();
+        let mut extra = negui::selftest::SelftestOptions {
+            darkroom,
+            ..Default::default()
+        };
         let mut folder: Option<PathBuf> = None;
         let mut rest = args.iter().skip(2);
         while let Some(a) = rest.next() {

@@ -668,6 +668,7 @@ fn selftest_crop_and_export_smoke() {
         export_dir: Some(exports.clone()),
         latency: false,
         wgpu_setup: Some(eframe::egui_wgpu::WgpuSetup::CreateNew(setup)),
+        darkroom: Default::default(),
     };
     negui::selftest::run_selftest_with(
         &out,

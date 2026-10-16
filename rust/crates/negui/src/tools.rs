@@ -28,7 +28,7 @@ use negkit::crop_geometry::{
 use negkit::{ExposureSettings, V2};
 use negsession::history::labels;
 
-use crate::loupe::{CanvasOverlay, OverlayView, pill};
+use crate::loupe::{CANVAS_INSET, CanvasOverlay, LoupeState, pill};
 use crate::theme::Tokens;
 
 /// Minimum box side in screen points while dragging a corner (CropBoxOverlay.swift).
@@ -414,6 +414,10 @@ impl CropTool {
     /// Follow the settings (a sidebar ⨯ while the tool is up) and the rendered frame dims.
     pub fn sync(&mut self, settings: &ExposureSettings, frame: V2) {
         self.committed = (settings.fine_rotation, settings.crop_rect);
+        self.sync_frame(frame);
+    }
+
+    fn sync_frame(&mut self, frame: V2) {
         if frame != self.frame && frame[0] > 0.0 && frame[1] > 0.0 {
             // A rotation/flip changed the frame: a drawn box no longer means anything.
             self.desired = None;
@@ -462,17 +466,17 @@ impl CropTool {
         changed
     }
 
-    fn layout(&mut self, view: &OverlayView) -> CropView {
-        let frame = [view.frame_size.0 as f64, view.frame_size.1 as f64];
-        if frame[0] > 0.0 && frame[1] > 0.0 && frame != self.frame {
-            self.desired = None;
-            self.frame = frame;
-        }
-        CropView::for_area(view.inset_area, self.frame, self.angle.to_radians())
+    /// The screen mapping over the canvas `area` (the inset fit minus the bar).
+    pub fn layout(&self, area: Rect) -> CropView {
+        CropView::for_area(
+            area.shrink(CANVAS_INSET),
+            self.frame,
+            self.angle.to_radians(),
+        )
     }
 
-    fn paint_bar(&mut self, ui: &mut egui::Ui, view: &OverlayView, t: &Tokens) {
-        let area = view.inset_area;
+    fn paint_bar(&mut self, ui: &mut egui::Ui, canvas: Rect, t: &Tokens) {
+        let area = canvas.shrink(CANVAS_INSET);
         let w = area.width().min(620.0);
         let bar = Rect::from_min_size(
             pos2(
@@ -535,8 +539,8 @@ impl CanvasOverlay for CropTool {
         true
     }
 
-    fn handle(&mut self, response: &egui::Response, view: &OverlayView) -> bool {
-        let cv = self.layout(view);
+    fn handle(&mut self, response: &egui::Response, _frame_rect: Rect) -> bool {
+        let cv = self.layout(response.rect);
         let current = self.current_box();
         let min_side = MIN_BOX_POINTS / cv.scale.max(1e-9);
         let radians = self.angle.to_radians();
@@ -592,14 +596,20 @@ impl CanvasOverlay for CropTool {
         true
     }
 
-    fn paint(&mut self, ui: &mut egui::Ui, view: &OverlayView) {
+    fn paint(&mut self, ui: &mut egui::Ui, _frame_rect: Rect, zoom_state: &LoupeState) {
         let t = Tokens::get(ui.ctx());
-        let cv = self.layout(view);
+        let area = ui.max_rect();
+        let (fw, fh) = zoom_state.frame_size;
+        self.sync_frame([fw as f64, fh as f64]);
+        let Some(presented) = zoom_state.frame else {
+            return;
+        };
+        let cv = self.layout(area);
         let radians = self.angle.to_radians();
-        let painter = ui.painter_at(view.area);
+        let painter = ui.painter_at(area);
         // the frame, rotated about the canvas centre
         let (hw, hh) = (self.frame[0] / 2.0, self.frame[1] / 2.0);
-        let mut mesh = egui::Mesh::with_texture(view.frame.texture);
+        let mut mesh = egui::Mesh::with_texture(presented.texture);
         for (c, uv) in [
             ([-hw, -hh], pos2(0.0, 0.0)),
             ([hw, -hh], pos2(1.0, 0.0)),
@@ -619,7 +629,7 @@ impl CanvasOverlay for CropTool {
         // dim surround, box, thirds, handles
         let b = cv.box_rect(&self.current_box());
         let dim = Color32::from_black_alpha(150);
-        let a = view.area;
+        let a = area;
         for r in [
             Rect::from_min_max(a.min, pos2(a.right(), b.top())),
             Rect::from_min_max(pos2(a.left(), b.bottom()), a.max),
@@ -661,7 +671,7 @@ impl CanvasOverlay for CropTool {
             "Crop & Straighten — drag the corners or the box · Return applies · Esc cancels",
             &t,
         );
-        self.paint_bar(ui, view, &t);
+        self.paint_bar(ui, area, &t);
     }
 }
 
@@ -719,11 +729,8 @@ impl AnalysisTool {
 }
 
 impl CanvasOverlay for AnalysisTool {
-    fn handle(&mut self, response: &egui::Response, view: &OverlayView) -> bool {
-        if response
-            .hover_pos()
-            .is_some_and(|p| view.frame_rect.contains(p))
-        {
+    fn handle(&mut self, response: &egui::Response, frame_rect: Rect) -> bool {
+        if response.hover_pos().is_some_and(|p| frame_rect.contains(p)) {
             response.ctx.set_cursor_icon(CursorIcon::Crosshair);
         }
         if response.drag_started() {
@@ -731,8 +738,8 @@ impl CanvasOverlay for AnalysisTool {
                 .ctx
                 .input(|i| i.pointer.press_origin())
                 .or(response.interact_pointer_pos());
-            if let Some(o) = origin.filter(|o| view.frame_rect.contains(*o)) {
-                let n = normalize_in(view.frame_rect, o);
+            if let Some(o) = origin.filter(|o| frame_rect.contains(*o)) {
+                let n = normalize_in(frame_rect, o);
                 self.drag = Some((n, n));
             }
         }
@@ -741,7 +748,7 @@ impl CanvasOverlay for AnalysisTool {
             && response.dragged()
             && let Some(p) = response.interact_pointer_pos()
         {
-            self.drag = Some((a, normalize_in(view.frame_rect, p)));
+            self.drag = Some((a, normalize_in(frame_rect, p)));
         }
         if response.drag_stopped()
             && let Some(rect) = self.drawing()
@@ -755,11 +762,12 @@ impl CanvasOverlay for AnalysisTool {
         active
     }
 
-    fn paint(&mut self, ui: &mut egui::Ui, view: &OverlayView) {
+    fn paint(&mut self, ui: &mut egui::Ui, frame_rect: Rect, _zoom_state: &LoupeState) {
         let t = Tokens::get(ui.ctx());
-        let painter = ui.painter_at(view.area);
+        let area = ui.max_rect();
+        let painter = ui.painter_at(area);
         if let Some(r) = self.drawing().or(self.existing) {
-            let fr = view.frame_rect;
+            let fr = frame_rect;
             let s = rect_on(fr, &r);
             let dim = Color32::from_black_alpha(120);
             for d in [
@@ -776,7 +784,7 @@ impl CanvasOverlay for AnalysisTool {
         }
         pill(
             &painter,
-            pos2(view.area.center().x, view.area.top() + 10.0),
+            pos2(area.center().x, area.top() + 10.0),
             egui::Align2::CENTER_TOP,
             "Crop for Analysis — drag on the image to select the area · Esc leaves",
             &t,
@@ -1087,6 +1095,20 @@ pub mod selftest {
         let mut full = Vec::new();
         for _ in 0..5 {
             full.push(nudge_latency(h)?.as_secs_f32() * 1000.0);
+        }
+        // The zero-copy full tier still feeds the densitometer (its proxy probe frame).
+        if let Some(r) = h.state().canvas_frame_rect() {
+            h.hover_at(r.center());
+            settle(h, 4);
+            let readout = h.state().densitometer_readout();
+            h.remove_cursor();
+            if readout.reading.is_none() {
+                return Err("selftest: no densitometer reading on the full tier".into());
+            }
+            log::info!(
+                "selftest: full-tier densitometer read-out \"{}\"",
+                readout.text()
+            );
         }
         let med = |v: &mut Vec<f32>| {
             v.sort_by(f32::total_cmp);

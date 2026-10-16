@@ -28,6 +28,12 @@ pub mod presenter_gpu;
 pub mod selftest;
 pub mod theme;
 pub mod tools;
+// --- U3: darkroom ---
+pub mod interactive_histogram;
+pub mod teststrip;
+pub mod zone_placement;
+pub mod zones;
+// --- end U3 ---
 
 pub use app::{AppOptions, AppPrefs, NegApp};
 pub use loupe::{CpuPresenter, FramePresenter, PresentedFrame};

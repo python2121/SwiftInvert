@@ -213,6 +213,26 @@ pub fn clamp_pan(pan: Vec2, frame_size: Vec2, area: Rect) -> Vec2 {
     vec2(pan.x.clamp(-over.x, over.x), pan.y.clamp(-over.y, over.y))
 }
 
+// --- U3: darkroom (the `CanvasOverlay` slot — the same shape the tools wave ships) ---
+/// A canvas layer drawn over the bitmap (zone overlay, test strip, zone placement; the tools'
+/// crop box). `frame_rect` is the ideal frame rect in screen points (the bitmap sits at its
+/// `content_window` inside it).
+pub trait CanvasOverlay {
+    /// Paint over the bitmap (the ui is clipped to the canvas area).
+    fn paint(&mut self, ui: &mut egui::Ui, frame_rect: Rect, zoom_state: &LoupeState);
+    /// Pointer input on the canvas response (with the PREVIOUS frame's `frame_rect`); true =
+    /// consumed, so the canvas skips its own drag-pan and double-click zoom.
+    fn handle(&mut self, response: &egui::Response, frame_rect: Rect) -> bool;
+    // --- U2: tools & dialogs ---
+    /// Take the canvas over: zoom/pan pinned to fit, the loupe's gestures off and its own bitmap
+    /// paint skipped (the crop tool paints the frame itself, rotated behind the box).
+    fn takes_over(&self) -> bool {
+        false
+    }
+    // --- end U2 ---
+}
+// --- end U3 ---
+
 /// What the canvas needs to draw besides the loupe state.
 pub struct CanvasInput<'a> {
     pub has_selection: bool,
@@ -235,44 +255,6 @@ pub enum CanvasAction {
     /// Pointer over the image at content-normalized (u, v); `None` when it left.
     Hover(Option<(f32, f32)>),
 }
-
-// --- U2: tools & dialogs ---
-/// Where the canvas laid the frame out this pass — what a [`CanvasOverlay`] draws against.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct OverlayView {
-    /// The whole canvas rect.
-    pub area: Rect,
-    /// The canvas rect minus [`CANVAS_INSET`] (what "fit" fits into).
-    pub inset_area: Rect,
-    /// The ideal display rect of the frame (zoom and pan applied).
-    pub frame_rect: Rect,
-    /// Where the bitmap is painted inside `frame_rect` (its content window).
-    pub bitmap_rect: Rect,
-    /// 1 = fit.
-    pub zoom: f32,
-    pub pan: Vec2,
-    /// The presented bitmap.
-    pub frame: PresentedFrame,
-    /// Orientation-only frame dims of the proxy (the crop-geometry base).
-    pub frame_size: (usize, usize),
-}
-
-/// A tool layer over the canvas (crop box, analysis rect, test strip, zone pins …). The canvas
-/// asks every overlay, in order, to [`CanvasOverlay::handle`] the canvas response before its own
-/// pan/zoom gestures (the first that returns `true` consumes it), then paints them in order over
-/// the bitmap. An overlay that [`CanvasOverlay::takes_over`] pins the canvas to fit, disables
-/// its gestures and paints the bitmap itself (the crop tool rotates it behind the box).
-pub trait CanvasOverlay {
-    /// Pin zoom/pan and skip the loupe's own bitmap paint.
-    fn takes_over(&self) -> bool {
-        false
-    }
-    /// Pointer input on the canvas; `true` = consumed (no pan / double-click zoom).
-    fn handle(&mut self, response: &egui::Response, view: &OverlayView) -> bool;
-    /// Paint (and lay out any in-canvas widgets) over the bitmap.
-    fn paint(&mut self, ui: &mut egui::Ui, view: &OverlayView);
-}
-// --- end U2 ---
 
 /// Draw the canvas into `area`.
 pub fn canvas(
@@ -332,32 +314,20 @@ pub fn canvas(
     let mut zoom = state.zoom.clamp(ZOOM_MIN, ZOOM_MAX);
     let mut pan = state.pan;
     let hover = resp.hover_pos();
+    // --- U3: darkroom --- overlays see the pointer first.
+    let mut consumed = false;
+    if let Some(prev) = state.last_frame_rect {
+        for o in overlays.iter_mut() {
+            consumed |= o.handle(&resp, prev);
+        }
+    }
+    // --- end U3 ---
 
-    // --- U2: tools & dialogs --- overlays see the input first; a take-over pins the fit.
+    // --- U2: tools & dialogs --- a take-over (the crop tool) pins the fit.
     let takeover = overlays.iter().any(|o| o.takes_over());
     if takeover {
         zoom = 1.0;
         pan = Vec2::ZERO;
-    }
-    let mut consumed = false;
-    {
-        let frame_rect = Rect::from_center_size(area.center() + pan, fit.size() * zoom);
-        let view = OverlayView {
-            area,
-            inset_area: area.shrink(CANVAS_INSET),
-            frame_rect,
-            bitmap_rect: content_rect(frame_rect, &state.content_window),
-            zoom,
-            pan,
-            frame,
-            frame_size: state.frame_size,
-        };
-        for o in overlays.iter_mut() {
-            if o.handle(&resp, &view) {
-                consumed = true;
-                break;
-            }
-        }
     }
     // --- end U2 ---
 
@@ -462,21 +432,15 @@ pub fn canvas(
             grid_lines(&painter, frame_rect, input.grid);
         }
     }
-    // --- U2: tools & dialogs ---
-    let view = OverlayView {
-        area,
-        inset_area: area.shrink(CANVAS_INSET),
-        frame_rect,
-        bitmap_rect,
-        zoom,
-        pan,
-        frame,
-        frame_size: state.frame_size,
-    };
-    for o in overlays.iter_mut() {
-        o.paint(ui, &view);
+    // --- U3: darkroom ---
+    if !overlays.is_empty() {
+        let mut oui = ui.new_child(egui::UiBuilder::new().max_rect(area));
+        oui.set_clip_rect(area.intersect(ui.clip_rect()));
+        for o in overlays.iter_mut() {
+            o.paint(&mut oui, frame_rect, state);
+        }
     }
-    // --- end U2 ---
+    // --- end U3 ---
 
     // hover → content-normalized point (plain presentation only)
     let hover_uv = if input.tool_mode == ToolMode::None && !input.baseline {
@@ -598,6 +562,10 @@ pub enum BarAction {
     CycleHq,
     ToggleZones,
     CanvasColor(CanvasColor),
+    // --- U3: darkroom ---
+    /// A zone-strip cell was clicked: arm (or disarm) that zone for placement.
+    ArmZone(f64),
+    // --- end U3 ---
 }
 
 /// Control-bar inputs.
@@ -607,8 +575,10 @@ pub struct BarInput<'a> {
     pub hq_active: bool,
     pub zones_on: bool,
     pub canvas_color: CanvasColor,
-    /// Densitometer read-out text (slot for the later wave).
-    pub readout: &'a str,
+    // --- U3: darkroom ---
+    /// The spot densitometer read-out + zone strip.
+    pub readout: &'a crate::zones::Readout,
+    // --- end U3 ---
 }
 
 /// The under-canvas control bar (DetailView.swift:102-191).
@@ -652,9 +622,11 @@ pub fn control_bar(ui: &mut egui::Ui, input: &BarInput<'_>) -> Vec<BarAction> {
             {
                 actions.push(BarAction::CycleHq);
             }
-            let zones = badge(ui, "Zones", input.zones_on, false, &t);
+            let zones = badge(ui, "Zones", input.zones_on, true, &t);
             if zones
-                .on_disabled_hover_text("Zone overlay arrives in a later wave (⇧Z)")
+                .on_hover_text(
+                    "Zone system overlay (⇧Z): Adams zones over the preview, same ruler as the densitometer",
+                )
                 .clicked()
             {
                 actions.push(BarAction::ToggleZones);
@@ -668,12 +640,10 @@ pub fn control_bar(ui: &mut egui::Ui, input: &BarInput<'_>) -> Vec<BarAction> {
             vec2(centre_w, 24.0),
             egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
             |ui| {
-                if input.has_selection {
-                    ui.label(
-                        egui::RichText::new(input.readout)
-                            .font(t.mono(10.0))
-                            .color(t.text_secondary),
-                    );
+                if input.has_selection
+                    && let Some(z) = crate::zones::readout_ui(ui, input.readout)
+                {
+                    actions.push(BarAction::ArmZone(z));
                 }
             },
         );

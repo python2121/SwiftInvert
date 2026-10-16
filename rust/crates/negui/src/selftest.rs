@@ -11,6 +11,19 @@ use crate::app::{AppOptions, NegApp};
 /// Offscreen window size (points) and scale.
 pub const SELFTEST_SIZE: [f32; 2] = [1440.0, 900.0];
 
+// --- U3: darkroom ---
+/// Optional darkroom captures (`--teststrip`, `--zones`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DarkroomCaptures {
+    /// `<out>_teststrip.png` (hovered patch) and `<out>_teststrip_preview.png` (one patch
+    /// previewed full-frame).
+    pub test_strip: bool,
+    /// `<out>_zones.png` (overlay + a densitometer reading), `<out>_placement.png` (two pins
+    /// solved) and `<out>_levels.png` (the Interactive Histogram with a planted anchor).
+    pub zones: bool,
+}
+// --- end U3 ---
+
 /// Run the selftest: returns the written PNG's pixel size.
 pub fn run_selftest(out: &Path, folder: PathBuf, timeout: Duration) -> Result<[u32; 2], String> {
     run_selftest_with(out, folder, timeout, SelftestOptions::default())
@@ -27,6 +40,8 @@ pub struct SelftestOptions {
     pub dialogs: bool,
     pub latency: bool,
     pub wgpu_setup: Option<eframe::egui_wgpu::WgpuSetup>,
+    /// The darkroom captures (`--teststrip`, `--zones`; U3).
+    pub darkroom: DarkroomCaptures,
 }
 // --- end U2 ---
 
@@ -58,6 +73,7 @@ pub fn run_selftest_with(
         dialogs,
         latency,
         wgpu_setup,
+        darkroom,
     } = extra;
     if let Some(setup) = wgpu_setup {
         builder = builder.renderer(egui_kittest::wgpu::WgpuTestRenderer::from_setup(setup));
@@ -158,8 +174,162 @@ pub fn run_selftest_with(
     };
     crate::tools::selftest::run(&mut harness, out, &passes)?;
     // --- end U2 ---
+    // --- U3: darkroom ---
+    if darkroom.zones {
+        darkroom_zones(&mut harness, out)?;
+    }
+    if darkroom.test_strip {
+        darkroom_test_strip(&mut harness, out)?;
+    }
+    // --- end U3 ---
     Ok(size)
 }
+
+// --- U3: darkroom ---
+type AppHarness<'a> = egui_kittest::Harness<'a, NegApp>;
+
+/// Step until `done` holds (or `limit` elapses).
+fn step_until(
+    harness: &mut AppHarness<'_>,
+    limit: Duration,
+    done: impl Fn(&NegApp) -> bool,
+) -> Result<(), String> {
+    let t0 = Instant::now();
+    while !done(harness.state()) {
+        if t0.elapsed() > limit {
+            return Err("darkroom selftest: timed out waiting for the layer".into());
+        }
+        harness.step();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    Ok(())
+}
+
+fn settle(harness: &mut AppHarness<'_>, frames: usize) {
+    for _ in 0..frames {
+        harness.step();
+        std::thread::sleep(Duration::from_millis(4));
+    }
+}
+
+fn capture(harness: &mut AppHarness<'_>, out: &Path, suffix: &str) -> Result<(), String> {
+    let image = harness.render()?;
+    let path = sibling(out, suffix);
+    image
+        .save(&path)
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    log::info!("selftest: wrote {}", path.display());
+    Ok(())
+}
+
+fn click(harness: &mut AppHarness<'_>, at: egui::Pos2) {
+    harness.hover_at(at);
+    harness.drag_at(at);
+    harness.event(egui::Event::PointerButton {
+        pos: at,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    harness.step();
+}
+
+fn frame_point(harness: &AppHarness<'_>, u: f32, v: f32) -> Result<egui::Pos2, String> {
+    let r = harness
+        .state()
+        .canvas_frame_rect()
+        .ok_or("darkroom selftest: no frame on the canvas")?;
+    Ok(egui::pos2(
+        r.left() + u * r.width(),
+        r.top() + v * r.height(),
+    ))
+}
+
+/// Zone overlay + densitometer, then a two-pin zone placement, then the Interactive Histogram.
+fn darkroom_zones(harness: &mut AppHarness<'_>, out: &Path) -> Result<(), String> {
+    let limit = Duration::from_secs(30);
+    harness.state_mut().run(crate::app::Command::ToggleZones);
+    step_until(harness, limit, |a| a.zone_grid_ready())?;
+    let probe = frame_point(harness, 0.5, 0.5)?;
+    harness.hover_at(probe);
+    settle(harness, 6);
+    log::info!(
+        "selftest: zone overlay computed in {:.1} ms; read-out \"{}\"",
+        harness.state().zone_grid_ms(),
+        harness.state().densitometer_readout().text()
+    );
+    capture(harness, out, "_zones")?;
+    harness.state_mut().run(crate::app::Command::ToggleZones);
+
+    // Zone placement: Zone V at the centre, Zone VII at a third of the frame.
+    for (zone, (u, v)) in [(5.0, (0.5, 0.5)), (7.0, (0.3, 0.35))] {
+        harness.state_mut().arm_placement_zone(zone);
+        settle(harness, 2);
+        let p = frame_point(harness, u, v)?;
+        click(harness, p);
+        let want = if zone > 5.0 { 2 } else { 1 };
+        step_until(harness, limit, |a| {
+            a.placement_status()
+                .is_some_and(|(n, solved, solving)| n == want && solved && !solving)
+        })?;
+    }
+    harness.remove_cursor();
+    settle(harness, 6);
+    capture(harness, out, "_placement")?;
+    harness.state_mut().run(crate::app::Command::Escape);
+    settle(harness, 2);
+
+    // Interactive Histogram: open it and plant one anchor by dragging in the plot.
+    harness
+        .state_mut()
+        .run(crate::app::Command::InteractiveHistogram);
+    settle(harness, 4);
+    let window = harness
+        .ctx
+        .memory(|m| m.area_rect(egui::Id::new("interactive-histogram")))
+        .ok_or("darkroom selftest: the Interactive Histogram window has no rect")?;
+    let start = egui::pos2(window.center().x - 40.0, window.center().y);
+    let end = start + egui::vec2(60.0, 0.0);
+    harness.hover_at(start);
+    harness.drag_at(start);
+    for i in 1..=6 {
+        harness.hover_at(start + (end - start) * (i as f32 / 6.0));
+    }
+    harness.drop_at(end);
+    settle(harness, 10);
+    step_until(harness, limit, |a| !a.settings().levels_red.is_empty())?;
+    settle(harness, 30);
+    capture(harness, out, "_levels")?;
+    harness.state_mut().close_interactive_histogram();
+    settle(harness, 2);
+    Ok(())
+}
+
+/// The test strip with a hovered patch, then one patch previewed.
+fn darkroom_test_strip(harness: &mut AppHarness<'_>, out: &Path) -> Result<(), String> {
+    let limit = Duration::from_secs(60);
+    harness.state_mut().run(crate::app::Command::TestStrip);
+    step_until(harness, limit, |a| a.test_strip_up())?;
+    log::info!(
+        "selftest: test strip built in {:.0} ms",
+        harness.state().test_strip_build_ms()
+    );
+    // hover the patch at row 1, col 3
+    let p = frame_point(harness, 0.7, 0.3)?;
+    harness.hover_at(p);
+    settle(harness, 6);
+    capture(harness, out, "_teststrip")?;
+    // single click → held for the double-click interval → preview
+    click(harness, p);
+    settle(harness, 40);
+    harness.remove_cursor();
+    settle(harness, 20);
+    capture(harness, out, "_teststrip_preview")?;
+    harness.state_mut().run(crate::app::Command::Escape);
+    settle(harness, 2);
+    Ok(())
+}
+// --- end U3 ---
 
 /// `<stem><suffix>.<ext>` next to `path`.
 pub fn sibling(path: &Path, suffix: &str) -> PathBuf {

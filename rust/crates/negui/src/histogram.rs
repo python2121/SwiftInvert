@@ -74,7 +74,7 @@ pub struct HistogramOut {
     pub changed: bool,
     pub drag_begin: bool,
     pub drag_end: bool,
-    /// The chart was double-clicked (the interactive histogram window — later wave).
+    /// The chart was double-clicked (opens the Interactive Histogram window).
     pub double_clicked: bool,
 }
 
