@@ -517,18 +517,42 @@ fn session_info_zone_pin_and_detached_render() {
     assert_eq!(s.stats().orients, stats.orients);
 }
 
-/// With the mask on, the key plumbing runs (and renders) even though the plane builder is the
-/// TODO(mask) hook: no plane → unmasked render, no crash, no spurious analysis.
+/// With the mask on, the REAL plane builder runs from the proxy (`negkit::contrast_mask`):
+/// one build per key state, gamma drags rebuild nothing, a spacer change re-blurs, the masked
+/// render differs from the unmasked one, and the pin freezes a real plane sample.
 #[test]
-fn contrast_mask_on_renders_through_the_hook() {
+fn contrast_mask_builds_one_plane_from_the_proxy() {
     let mut s = session();
-    s.render(proxy()).unwrap();
+    let plain = s.render(proxy()).unwrap();
     s.update_settings(|st| st.contrast_mask = 0.3);
-    let out = s.render(proxy()).unwrap();
-    assert_eq!(out.width, 1536);
-    assert_eq!(s.stats().prepares, 1);
-    let pin = s.sample_zone_pin(0.5, 0.5, 2).unwrap();
-    assert_eq!(pin.mask_val, 0.0);
+    let masked = s.render(proxy()).unwrap();
+    assert_eq!(masked.width, 1536);
+    assert_eq!(s.stats().prepares, 1, "the mask never re-meters");
+    assert_eq!(s.stats().mask_builds, 1);
+    assert_ne!(
+        plain.frame.rgba8().unwrap(),
+        masked.frame.rgba8().unwrap(),
+        "the plane reached the kernels"
+    );
+    // Gamma is uniform-only; the spacer re-blurs.
+    s.update_settings(|st| st.contrast_mask = -0.4);
+    s.render(proxy()).unwrap();
+    assert_eq!(s.stats().mask_builds, 1);
+    s.update_settings(|st| st.mask_spacer = 5.5);
+    s.render(proxy()).unwrap();
+    assert_eq!(s.stats().mask_builds, 2);
+    // The plane is zero-mean, so some pin sees a non-zero sample; every sample is finite.
+    let samples: Vec<f64> = [(0.1, 0.1), (0.5, 0.5), (0.9, 0.9)]
+        .into_iter()
+        .map(|(u, v)| s.sample_zone_pin(u, v, 2).unwrap().mask_val)
+        .collect();
+    assert!(samples.iter().all(|m| m.is_finite()));
+    assert!(samples.iter().any(|&m| m != 0.0), "{samples:?}");
+    // Off again: the cache is freed and the render is the plain one.
+    s.update_settings(|st| st.contrast_mask = 0.0);
+    let again = s.render(proxy()).unwrap();
+    assert_eq!(again.frame.rgba8().unwrap(), plain.frame.rgba8().unwrap());
+    assert_eq!(s.sample_zone_pin(0.5, 0.5, 2).unwrap().mask_val, 0.0);
 }
 
 #[test]
