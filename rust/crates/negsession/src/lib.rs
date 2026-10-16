@@ -17,8 +17,11 @@
 //! where that document flags Mac-vs-bridge differences this crate follows the Mac.
 //!
 //! Rendering goes through the [`renderer::Renderer`] trait: [`renderer::CpuRenderer`] runs
-//! `negkit::reference` (the numerical oracle every GPU is pinned against); a GPU renderer
-//! plugs in behind the same trait from the app layer, so nothing here knows about wgpu or
+//! `negkit::reference` (the numerical oracle every GPU is pinned against) and
+//! [`renderer::GpuRenderer`] runs `neggpu`'s wgpu chain; [`renderer::default_renderer`] picks
+//! the GPU when one comes up. The darkroom math — Contrast Mask plane, crop geometry,
+//! densitometry, zone grid, test strip, zone placement — is `negkit`'s; this crate wires it
+//! to the cache tower ([`session`]) and names it for the front ends. Nothing here knows about
 //! egui.
 
 pub mod densitometer;
@@ -33,16 +36,17 @@ pub mod renderer;
 pub mod session;
 pub mod sidecar;
 
+pub use densitometer::{DensitometerState, ZoneGrid, zone_grid};
 pub use export::{ExportColorSpace, ExportDestination, ExportFormat, ExportOptions, Exporter};
 pub use history::{History, HistoryEntry, history_label};
 pub use hq::HqMode;
 pub use library::{FolderNode, build_tree, flatten};
 pub use mask::MaskPlane;
 pub use profiles::{ProfileStore, SettingsGeometry, SettingsProfile};
-pub use renderer::{CpuRenderer, Renderer};
+pub use renderer::{CpuRenderer, GpuRenderer, Renderer, default_renderer};
 pub use session::{
     Frame, OutputKind, RenderOutput, RenderRequest, RenderTier, Session, SessionInfo, SessionStats,
-    ToolMode,
+    TestStripOutput, TestStripRequest, ToolMode, ZonePinSample,
 };
 pub use sidecar::SidecarStore;
 // FLAGGED (wave 4 / U1): the decoder seam `Session::open` takes, re-exported so a front end that
@@ -71,6 +75,9 @@ pub enum SessionError {
     /// The renderer failed (a GPU renderer's device loss, for instance).
     #[error("render failed: {0}")]
     Render(String),
+    /// The GPU chain refused or failed a render (device limits, out of memory, validation).
+    #[error(transparent)]
+    Gpu(neggpu::GpuError),
     /// An image encoder failed.
     #[error("encode failed: {0}")]
     Encode(String),

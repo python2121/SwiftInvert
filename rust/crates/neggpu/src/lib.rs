@@ -24,6 +24,23 @@
 //! [`available`] is false (no adapter, or `NEG_GPU=off`), the session crate renders through
 //! `negkit::reference::render`, which the GPU is pinned to at mean < 0.01 / max < 0.04
 //! (`tests/parity.rs`). The two are interchangeable at the gates; the CPU is the oracle.
+//! When the CPU fallback produces DISPLAY bytes it must quantize like the `encode_u8`
+//! kernel's `pack4x8unorm` — round-to-nearest, [`pack_unorm8`] = `floor(255·clamp(x) + 0.5)`
+//! — not `as u8` truncation, or densitometer / zone read-outs drift by 0.5/255 between the
+//! CPU and GPU paths.
+//!
+//! **Locking.** A [`RenderPipeline`] serializes its renders with an internal mutex that is
+//! held through `device.poll(Wait)` — a 24 MP export (~0.25 s) blocks every display render on
+//! the SAME instance for that long. An app should own two instances on one device (one for
+//! the interactive display, one for export); the device and queue are shared, the caches
+//! are per instance.
+//!
+//! **Errors never abort the process.** Every context installs an uncaptured-error handler
+//! (wgpu's default panics) that logs and records into [`GpuContext::take_last_error`], and
+//! every upload/render runs under Validation + OutOfMemory error scopes, so a failed
+//! allocation surfaces as [`GpuError::OutOfMemory`] / [`GpuError::Validation`]; sizes past
+//! the device limits are refused up front as [`GpuError::TooLarge`] (see
+//! [`context::required_limits`] for what the chain needs).
 
 pub mod context;
 pub mod pipeline;
@@ -31,10 +48,19 @@ pub mod uniforms;
 
 use std::sync::OnceLock;
 
-pub use context::GpuContext;
+pub use context::{GpuContext, required_limits};
 pub use pipeline::{
-    DisplayResult, Histogram, MaskBuffer, RenderOptions, RenderPipeline, RenderResult, SourceBuffer,
+    CACHE_PIXEL_BUDGET, CacheStats, DisplayResult, Histogram, MaskBuffer, RenderOptions,
+    RenderPipeline, RenderResult, SMALL_TIER_CAP, SourceBuffer,
 };
+
+/// The `encode_u8` kernel's quantization (`pack4x8unorm`): round-to-nearest on
+/// `clamp(x, 0, 1) × 255`. The CPU display path must use this, not truncation.
+#[inline]
+pub fn pack_unorm8(x: f32) -> u8 {
+    // Boundary cast: the value is already in [0, 255] and integral.
+    (255.0 * x.clamp(0.0, 1.0) + 0.5).floor() as u8
+}
 
 /// Everything that can go wrong on the GPU side. Pixel math is total; errors come from the
 /// environment (no adapter, a refused device), shapes and limits (a buffer past the device
@@ -50,9 +76,22 @@ pub enum GpuError {
     /// Shader compilation or pipeline creation failed validation.
     #[error("GPU pipeline validation failed: {0}")]
     Validation(String),
-    /// A buffer would exceed what the device can allocate or bind.
-    #[error("GPU buffer of {bytes} bytes exceeds the device limit of {limit} bytes")]
-    TooLarge { bytes: u64, limit: u64 },
+    /// A buffer would exceed what the device can allocate or bind (refused before any GPU
+    /// work; `limit_name` is the wgpu limit that binds — see [`required_limits`]).
+    #[error(
+        "GPU buffer of {bytes} bytes exceeds the device's {limit_name} of {limit} bytes (create the device with neggpu::required_limits)"
+    )]
+    TooLarge {
+        bytes: u64,
+        limit: u64,
+        limit_name: &'static str,
+    },
+    /// The device ran out of memory inside an upload or render (caught by the error scope).
+    #[error("GPU out of memory: {0}")]
+    OutOfMemory(String),
+    /// `render_display_to_texture` was handed a texture that is not `Rgba8Unorm`.
+    #[error("display texture must be Rgba8Unorm (bytes are already display-encoded), got {0:?}")]
+    TextureFormat(wgpu::TextureFormat),
     /// Mapping a staging buffer for readback failed.
     #[error("GPU readback failed: {0}")]
     Readback(String),
@@ -89,7 +128,7 @@ pub fn unavailable_reason() -> Option<String> {
         Ok(Some(_)) => None,
         Ok(None) => Some(
             if std::env::var(context::ENV_GPU)
-                .map(|v| v.eq_ignore_ascii_case("off"))
+                .map(|v| context::gpu_disabled_by(&v))
                 .unwrap_or(false)
             {
                 format!("{}=off", context::ENV_GPU)

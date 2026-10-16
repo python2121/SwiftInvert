@@ -8,7 +8,8 @@
 )]
 
 use negsession::densitometer::{
-    DensitometerState, NegativeCharacter, Reading, encoded_of_zone, zone_of_encoded, zone_roman,
+    DensitometerState, NegativeCharacter, character, encoded_of_zone, read, zone_of_encoded,
+    zone_roman,
 };
 
 /// 2×2 quadrants: red, green / blue, white — the rgba8 layout the render output takes.
@@ -70,12 +71,12 @@ fn reading_matches_densitometry_on_the_same_triplet() {
     state.adopt(Some(quadrants()));
     state.probe(0.9, 0.9);
     let reading = state.reading().unwrap();
-    assert_eq!(reading, Reading::from_encoded([1.0, 1.0, 1.0]));
+    assert_eq!(reading, read([1.0, 1.0, 1.0]));
     // Paper white: density ~0, zone X.
     assert!(reading.print_density < 0.01);
     assert!(reading.zone > 9.99);
     // Black: the density cap, zone 0.
-    let black = Reading::from_encoded([0.0, 0.0, 0.0]);
+    let black = read([0.0, 0.0, 0.0]);
     assert_eq!(black.print_density, 4.0);
     assert_eq!(black.zone, 0.0);
     // 18 % gray encoded sits at zone V; the ruler inverts exactly.
@@ -126,19 +127,31 @@ fn adopt_swaps_the_bitmap() {
 #[test]
 fn negative_character_thresholds() {
     let normal = negkit::curve_logic::default_grade_range();
-    assert_eq!(
-        NegativeCharacter::of_density_range(normal),
-        Some(NegativeCharacter::Normal)
-    );
-    assert_eq!(
-        NegativeCharacter::of_density_range(normal * 0.5),
-        Some(NegativeCharacter::Flat)
-    );
-    assert_eq!(
-        NegativeCharacter::of_density_range(normal * 1.5),
-        Some(NegativeCharacter::Contrasty)
-    );
-    assert_eq!(NegativeCharacter::of_density_range(0.0), None);
-    assert_eq!(NegativeCharacter::of_density_range(f64::NAN), None);
+    assert_eq!(character(normal), Some(NegativeCharacter::Normal));
+    assert_eq!(character(normal * 0.5), Some(NegativeCharacter::Flat));
+    assert_eq!(character(normal * 1.5), Some(NegativeCharacter::Contrasty));
+    assert_eq!(character(0.0), None);
+    assert_eq!(character(f64::NAN), None);
     assert_eq!(NegativeCharacter::Normal.label(), "normal");
+}
+
+/// The zone overlay reads the SAME adopted bytes as the probe (ZoneGrid.compute): on a flat
+/// paper-white bitmap every cell is zone X with one region label.
+#[test]
+fn zone_grid_comes_from_the_adopted_bytes() {
+    let mut state = DensitometerState::new();
+    assert!(state.zone_grid().is_none(), "no bitmap → no grid");
+    let (w, h) = (48usize, 24usize);
+    state.adopt(Some((vec![255u8; w * h * 4], w, h)));
+    let grid = state.zone_grid().unwrap();
+    assert_eq!(grid.cols, 24);
+    assert_eq!(grid.rows, 12);
+    assert!(grid.zones.iter().all(|&z| z == 10));
+    assert_eq!(grid.labels.len(), 1);
+    assert_eq!(grid.labels[0].zone, 10);
+    // The free function takes tightly packed rows and agrees with the state.
+    assert_eq!(
+        negsession::densitometer::zone_grid(&vec![255u8; w * h * 4], w, h),
+        Some(grid)
+    );
 }

@@ -31,16 +31,19 @@ use std::borrow::Cow;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use negkit::constants::K;
 use negkit::derive::derive_render_params;
 use negkit::kernel::{self, DEFAULT_ANALYSIS_BUFFER, ExposureAnalysis, Prepared};
 use negkit::rect::{NormalizedRect, PixelRoi};
 use negkit::reference::Histogram256;
+use negkit::test_strip::{self, Cell, PatchRect, RowCol};
+use negkit::zone_placement::{self, Pin, Solution};
 use negkit::{ExposureSettings, RgbImage, curve_logic};
 use negraw::RawBackend;
 
-use crate::densitometer::NegativeCharacter;
+use crate::densitometer::{self, NegativeCharacter};
 use crate::geometry;
 use crate::mask::{self, MaskPlane};
 use crate::renderer::{RenderOptions, RenderSource, Renderer};
@@ -48,6 +51,14 @@ use crate::{Result, SessionError};
 
 /// Long edge of the analysis proxy (ImageSession.swift:265).
 pub const PROXY_LONG_EDGE: usize = 1536;
+
+static NEXT_SOURCE_ID: AtomicU64 = AtomicU64::new(1);
+
+/// A process-unique [`RenderSource::id`]: sessions share one renderer (the LRU holds two), so
+/// the id a GPU renderer keys its uploads on must never repeat across sessions.
+fn fresh_source_id() -> u64 {
+    NEXT_SOURCE_ID.fetch_add(1, Ordering::Relaxed)
+}
 
 /// Above this the retained half-size preview buffer costs more than it is worth (12 B/px → 240 MB):
 /// a 24 MP Bayer body's half-size decode is 6 MP and qualifies; an X-Trans preview decodes full
@@ -193,6 +204,89 @@ pub struct ZonePinSample {
     pub mask_val: f64,
 }
 
+impl ZonePinSample {
+    /// A placement pin at content-normalized `(nx, ny)` carrying this sample and
+    /// `target_zone` (`ZonePlacement.Pin`'s init with the mask sample frozen in).
+    pub fn pin(&self, nx: f64, ny: f64, target_zone: f64) -> Pin {
+        Pin {
+            mask_val: self.mask_val,
+            ..Pin::new(nx, ny, self.val_rgb, self.val_luma, target_zone)
+        }
+    }
+}
+
+/// A test-strip build (`ImageSession.renderTestStrip(settings:orientation:)`). Default:
+/// orientation 0, working-space encode.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TestStripRequest {
+    /// Ladder orientation 0–3 (× 90° CW): which axis carries density vs grade and their
+    /// directions; the 5×5 grid itself stays put over the frame.
+    pub orientation: i32,
+    /// sRGB re-expression in-kernel (unmanaged canvases).
+    pub srgb: bool,
+}
+
+/// The frame printed as a 5×5 mosaic of REAL renders — Brightness across (brighter →), Grade
+/// down — always on the proxy tier, cropped, with the current Contrast Mask plane.
+#[derive(Clone, Debug)]
+pub struct TestStripOutput {
+    /// Tightly packed RGBA8, alpha 255, `width × height × 4`.
+    pub rgba8: Vec<u8>,
+    pub width: usize,
+    pub height: usize,
+    /// Every patch at its DISPLAY position with the ladder values it rendered, row-major.
+    pub cells: Vec<Cell>,
+    /// The orientation the mosaic was assembled with.
+    pub orientation: i32,
+    /// The display cell nearest the base settings' own density/grade (the accented rung).
+    pub current: RowCol,
+    /// Orientation-only frame dims of the proxy.
+    pub frame_size: (usize, usize),
+    /// Width ÷ height the canvas should LAY OUT at.
+    pub display_aspect: f64,
+    /// Where this bitmap sits inside the ideal display rect.
+    pub content_window: NormalizedRect,
+}
+
+impl TestStripOutput {
+    /// The patch under content-normalized `(nx, ny)` (edges clamp).
+    pub fn cell_at(&self, nx: f64, ny: f64) -> Option<&Cell> {
+        let rc = test_strip::cell_at(nx, ny);
+        self.cells
+            .iter()
+            .find(|c| c.row == rc.row && c.col == rc.col)
+    }
+
+    /// The display cell at `(row, col)`.
+    pub fn cell(&self, row: usize, col: usize) -> Option<&Cell> {
+        self.cells.iter().find(|c| c.row == row && c.col == col)
+    }
+
+    /// Pixel rect of a patch inside the mosaic.
+    pub fn patch_rect(&self, row: usize, col: usize) -> PatchRect {
+        test_strip::patch_rect(self.width, self.height, row, col)
+    }
+
+    /// The hover / pick caption for a patch (`TestStripView`: Brightness shown as `2 − density`).
+    pub fn label(cell: &Cell) -> String {
+        format!(
+            "Brightness {:.1} · Grade {:.0}",
+            2.0 - cell.density,
+            cell.grade
+        )
+    }
+
+    /// Settings a pick commits: `density` + `grade` from the cell over `base` (autos untouched —
+    /// the patches rendered under them).
+    pub fn settings_for(cell: &Cell, base: &ExposureSettings) -> ExposureSettings {
+        ExposureSettings {
+            density: cell.density,
+            grade: cell.grade,
+            ..base.clone()
+        }
+    }
+}
+
 /// Work counters — the cache-invariant tests and `negcli bench` read these.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SessionStats {
@@ -281,10 +375,25 @@ struct SourceSlots {
 }
 
 impl SourceSlots {
-    fn clear(&mut self) {
-        self.full = None;
-        self.cropped = None;
+    /// Drop both slots, telling the renderer so a device-side copy goes with them.
+    fn clear(&mut self, renderer: &dyn Renderer) {
+        forget(renderer, self.full.take());
+        forget(renderer, self.cropped.take());
         self.cropped_rect = None;
+    }
+
+    fn ids(&self) -> impl Iterator<Item = u64> + '_ {
+        [&self.full, &self.cropped]
+            .into_iter()
+            .flatten()
+            .map(|s| s.id)
+    }
+}
+
+/// Release a source the session no longer holds (no-op for the CPU renderer).
+fn forget(renderer: &dyn Renderer, source: Option<RenderSource>) {
+    if let Some(src) = source {
+        renderer.forget_source(src.id);
     }
 }
 
@@ -299,15 +408,15 @@ struct DisplayTier {
 }
 
 impl DisplayTier {
-    fn invalidate_orientation(&mut self) {
+    fn invalidate_orientation(&mut self, renderer: &dyn Renderer) {
         self.oriented = None;
         self.orient_key = None;
-        self.slots.clear();
+        self.slots.clear(renderer);
     }
 
-    fn clear(&mut self) {
+    fn clear(&mut self, renderer: &dyn Renderer) {
         self.base = None;
-        self.invalidate_orientation();
+        self.invalidate_orientation(renderer);
     }
 }
 
@@ -438,7 +547,6 @@ pub struct Session {
     medium: DisplayTier,
     full: DisplayTier,
     mask: Option<MaskEntry>,
-    next_source_id: u64,
     stats: SessionStats,
 }
 
@@ -516,7 +624,6 @@ impl Session {
             medium,
             full: DisplayTier::default(),
             mask: None,
-            next_source_id: 1,
             stats: SessionStats::default(),
         }
     }
@@ -617,7 +724,7 @@ impl Session {
             total += p.grid.data.len() * std::mem::size_of::<f32>();
         }
         if let Some(m) = &self.mask {
-            total += m.plane.bytes();
+            total += mask::plane_bytes(&m.plane);
         }
         total
     }
@@ -625,19 +732,13 @@ impl Session {
     /// Drop the full AND medium tiers while keeping the proxy tower warm (`releaseEnhancedTiers`):
     /// for sessions the LRU retains but isn't showing, and when HQ is switched off.
     pub fn release_enhanced_tiers(&mut self) {
-        self.full.clear();
-        self.medium.clear();
+        self.full.clear(&*self.renderer);
+        self.medium.clear(&*self.renderer);
     }
 
     /// Drop only the full tier (`clearFull`).
     pub fn release_full_tier(&mut self) {
-        self.full.clear();
-    }
-
-    fn next_id(&mut self) -> u64 {
-        let id = self.next_source_id;
-        self.next_source_id = self.next_source_id.wrapping_add(1);
-        id
+        self.full.clear(&*self.renderer);
     }
 
     // ───────────────────────────── the tower ─────────────────────────────
@@ -681,7 +782,7 @@ impl Session {
             self.preview = preview;
             self.orient_key = Some(o_key);
             // Sources live in (fine-)oriented space; analysis does not.
-            self.proxy_slots.clear();
+            self.proxy_slots.clear(&*self.renderer);
         }
         let p_key = PreparedKey::of(settings);
         if self.prepared.is_none() || self.prepared_key != Some(p_key) {
@@ -757,23 +858,18 @@ impl Session {
     /// covers (`None` = the whole image). Building a cropped source is the only copy.
     fn source_in(
         slots: &mut SourceSlots,
-        next_id: &mut u64,
+        renderer: &dyn Renderer,
         stats: &mut SessionStats,
         image: &Arc<RgbImage>,
         settings: &ExposureSettings,
         uncropped: bool,
     ) -> (RenderSource, Option<PixelRoi>) {
-        let fresh_id = |next_id: &mut u64| {
-            let id = *next_id;
-            *next_id = next_id.wrapping_add(1);
-            id
-        };
         let crop = match (uncropped, settings.crop_rect) {
             (false, Some(crop)) => crop,
             _ => {
                 if slots.full.is_none() {
                     slots.full = Some(RenderSource {
-                        id: fresh_id(next_id),
+                        id: fresh_source_id(),
                         image: Arc::clone(image),
                     });
                     stats.source_builds += 1;
@@ -782,7 +878,7 @@ impl Session {
                     Some(src) => (src.clone(), None),
                     None => (
                         RenderSource {
-                            id: fresh_id(next_id),
+                            id: fresh_source_id(),
                             image: Arc::clone(image),
                         },
                         None,
@@ -791,8 +887,9 @@ impl Session {
             }
         };
         if slots.cropped.is_none() || slots.cropped_rect != Some(crop) {
+            forget(renderer, slots.cropped.take());
             slots.cropped = Some(RenderSource {
-                id: fresh_id(next_id),
+                id: fresh_source_id(),
                 image: crop_arc(image, &crop),
             });
             slots.cropped_rect = Some(crop);
@@ -803,7 +900,7 @@ impl Session {
             Some(src) => (src.clone(), roi),
             None => (
                 RenderSource {
-                    id: fresh_id(next_id),
+                    id: fresh_source_id(),
                     image: crop_arc(image, &crop),
                 },
                 roi,
@@ -815,7 +912,7 @@ impl Session {
     /// `tier.base` must be decoded. Returns (source, roi, oriented image, base dims).
     fn tier_source(
         tier: &mut DisplayTier,
-        next_id: &mut u64,
+        renderer: &dyn Renderer,
         stats: &mut SessionStats,
         settings: &ExposureSettings,
         uncropped: bool,
@@ -838,7 +935,7 @@ impl Session {
                 settings.flip_horizontal,
                 settings.fine_rotation,
             );
-            tier.invalidate_orientation();
+            tier.invalidate_orientation(renderer);
             tier.oriented = Some(oriented);
             tier.orient_key = Some(o_key);
             stats.orients += 1;
@@ -849,7 +946,7 @@ impl Session {
             .ok_or(SessionError::Invalid("display tier not oriented"))?;
         let (source, roi) = Self::source_in(
             &mut tier.slots,
-            next_id,
+            renderer,
             stats,
             &oriented,
             settings,
@@ -923,6 +1020,7 @@ impl Session {
         let (preview, analysis) = self.prepare(settings)?;
         let params = derive_render_params(settings, &analysis);
         let resolved = self.resolve_tier(request.tier);
+        let renderer = Arc::clone(&self.renderer);
         let (source, roi, oriented_dims, tier_base) = match resolved {
             RenderTier::Full => {
                 if self.full.base.is_none() {
@@ -932,7 +1030,7 @@ impl Session {
                 }
                 let (src, roi, oriented, base) = Self::tier_source(
                     &mut self.full,
-                    &mut self.next_source_id,
+                    &*renderer,
                     &mut self.stats,
                     settings,
                     request.uncropped,
@@ -941,11 +1039,11 @@ impl Session {
             }
             RenderTier::MediumIfFree => {
                 if !request.retain_full {
-                    self.full.clear();
+                    self.full.clear(&*renderer);
                 }
                 let (src, roi, oriented, base) = Self::tier_source(
                     &mut self.medium,
-                    &mut self.next_source_id,
+                    &*renderer,
                     &mut self.stats,
                     settings,
                     request.uncropped,
@@ -954,11 +1052,11 @@ impl Session {
             }
             RenderTier::Proxy => {
                 if !request.retain_full {
-                    self.full.clear();
+                    self.full.clear(&*renderer);
                 }
                 let (src, roi) = Self::source_in(
                     &mut self.proxy_slots,
-                    &mut self.next_source_id,
+                    &*renderer,
                     &mut self.stats,
                     &preview,
                     settings,
@@ -975,7 +1073,6 @@ impl Session {
             compute_histogram: request.compute_histogram,
             mask_plane,
         };
-        let renderer = Arc::clone(&self.renderer);
         let (frame, width, height, histogram) = match request.output {
             OutputKind::Rgba8 => {
                 let r = renderer.render_display(&source, &params, &options)?;
@@ -1035,7 +1132,7 @@ impl Session {
             histogram,
             frame_size,
             display_aspect: geometry::display_aspect(f(frame_size), radians, crop),
-            content_window: geometry::content_window(
+            content_window: geometry::content_window_for_roi(
                 f(tier_frame),
                 radians,
                 crop,
@@ -1116,7 +1213,7 @@ impl Session {
             None
         };
         let source = RenderSource {
-            id: self.next_id(),
+            id: fresh_source_id(),
             image,
         };
         let options = RenderOptions {
@@ -1124,7 +1221,10 @@ impl Session {
             compute_histogram: true,
             mask_plane,
         };
-        let r = self.renderer.render_display(&source, &params, &options)?;
+        let r = self.renderer.render_display(&source, &params, &options);
+        // Detached by contract: the upload must not outlive the call.
+        self.renderer.forget_source(source.id);
+        let r = r?;
         self.stats.renders += 1;
         Ok(self.output(
             settings,
@@ -1170,7 +1270,7 @@ impl Session {
         let params = derive_render_params(&settings, &analysis);
         let mask_plane = self.mask_plane(&proxy, &settings, false, &analysis);
         let source = RenderSource {
-            id: self.next_id(),
+            id: fresh_source_id(),
             image,
         };
         let options = RenderOptions {
@@ -1178,7 +1278,10 @@ impl Session {
             compute_histogram: false,
             mask_plane,
         };
-        let r = self.renderer.render(&source, &params, &options)?;
+        let r = self.renderer.render(&source, &params, &options);
+        // A one-shot upload: never retained device-side.
+        self.renderer.forget_source(source.id);
+        let r = r?;
         self.stats.renders += 1;
         Ok(r.image)
     }
@@ -1196,7 +1299,7 @@ impl Session {
             default_grade_range: curve_logic::default_grade_range(),
             anchor: analysis.anchor,
             textural_range: analysis.textural_range,
-            character: NegativeCharacter::of_density_range(density_range),
+            character: densitometer::character(density_range),
             cast_confidence: analysis.neutral_confidence,
         })
     }
@@ -1253,6 +1356,161 @@ impl Session {
             val_luma: K::LUMA_R * val[0] + K::LUMA_G * val[1] + K::LUMA_B * val[2],
             mask_val,
         })
+    }
+}
+
+impl Session {
+    // ───────────────────────────── test strip ─────────────────────────────
+
+    /// The test strip for the current settings.
+    pub fn render_test_strip(&mut self, request: TestStripRequest) -> Result<TestStripOutput> {
+        let settings = self.settings.clone();
+        self.render_test_strip_with(&settings, request)
+    }
+
+    /// `renderTestStrip`: ONE prepare, ONE cropped proxy source, ONE mask plane (density/grade
+    /// don't touch it — the per-patch derive rescales the mask uniform like any slider), then
+    /// 25 derive + `render_display` passes assembled patch by patch with
+    /// `TestStrip.copyPatch`, so only the mosaic and one tile are ever held. Always the proxy
+    /// tier (never a decode), cropped (never a tool view).
+    pub fn render_test_strip_with(
+        &mut self,
+        settings: &ExposureSettings,
+        request: TestStripRequest,
+    ) -> Result<TestStripOutput> {
+        let (preview, analysis) = self.prepare(settings)?;
+        let renderer = Arc::clone(&self.renderer);
+        let (source, roi) = Self::source_in(
+            &mut self.proxy_slots,
+            &*renderer,
+            &mut self.stats,
+            &preview,
+            settings,
+            false,
+        );
+        let mask_plane = self.mask_plane(&preview, settings, false, &analysis);
+        let options = RenderOptions {
+            srgb: request.srgb,
+            compute_histogram: false,
+            mask_plane,
+        };
+        let cells = test_strip::cells_oriented(request.orientation);
+        let mut mosaic: Option<(Vec<u8>, usize, usize)> = None;
+        for cell in &cells {
+            let mut s = settings.clone();
+            s.density = cell.density;
+            s.grade = cell.grade;
+            let params = derive_render_params(&s, &analysis);
+            let tile = renderer.render_display(&source, &params, &options)?;
+            self.stats.renders += 1;
+            match &mut mosaic {
+                None => {
+                    // The first tile IS the mosaic's buffer: every later patch overwrites its
+                    // own window, and the first cell's window is already right.
+                    mosaic = Some((tile.rgba8, tile.width, tile.height));
+                }
+                Some((bytes, w, h)) => {
+                    if (tile.width, tile.height) != (*w, *h) {
+                        return Err(SessionError::Invalid("test strip tile size changed"));
+                    }
+                    test_strip::copy_patch(&tile.rgba8, bytes, *w, *h, *w * 4, cell.row, cell.col);
+                }
+            }
+        }
+        let (rgba8, width, height) =
+            mosaic.ok_or(SessionError::Invalid("test strip has no cells"))?;
+        let nearest = test_strip::nearest_cell(settings.density, settings.grade);
+        let (want_density, want_grade) = (
+            test_strip::DENSITIES_BY_COLUMN
+                .get(nearest.col)
+                .copied()
+                .unwrap_or(settings.density),
+            test_strip::GRADES_BY_ROW
+                .get(nearest.row)
+                .copied()
+                .unwrap_or(settings.grade),
+        );
+        // The rung's DISPLAY position under this orientation (the ladder values are the same
+        // constants on both sides, so exact comparison is right).
+        let current = cells
+            .iter()
+            .find(|c| c.density == want_density && c.grade == want_grade)
+            .map_or(nearest, |c| RowCol {
+                row: c.row,
+                col: c.col,
+            });
+        let radians = applied_radians(settings.fine_rotation);
+        let crop = settings.crop_rect.as_ref();
+        let frame_size = oriented_frame_size(self.proxy_size(), settings.rotation);
+        let f = |d: (usize, usize)| [d.0 as f64, d.1 as f64];
+        Ok(TestStripOutput {
+            rgba8,
+            width,
+            height,
+            cells,
+            orientation: request.orientation.rem_euclid(4),
+            current,
+            frame_size,
+            display_aspect: geometry::display_aspect(f(frame_size), radians, crop),
+            content_window: geometry::content_window_for_roi(
+                f(frame_size),
+                radians,
+                crop,
+                f((preview.width, preview.height)),
+                roi,
+            ),
+        })
+    }
+
+    // ───────────────────────────── zone placement ─────────────────────────────
+
+    /// A placement pin at content-normalized `(u, v)` of the displayed frame with its sample
+    /// frozen (`sampleZonePin` + `Pin.init`): `target_zone` is the armed zone, or the caller's
+    /// thirds-snapped prediction.
+    pub fn zone_pin(&mut self, u: f64, v: f64, target_zone: f64) -> Result<Pin> {
+        Ok(self.sample_zone_pin(u, v, 2)?.pin(u, v, target_zone))
+    }
+
+    /// Zone the achromatic print curve puts `val_luma` on under `settings`
+    /// (`ImageSession.predictedZone`): the analysis from the warm tower, the model from
+    /// `negkit::zone_placement`. `mask_val` is the pin's frozen plane sample (0 without a mask).
+    pub fn predicted_zone(
+        &mut self,
+        settings: &ExposureSettings,
+        val_luma: f64,
+        mask_val: f64,
+    ) -> Result<f64> {
+        let (_, analysis) = self.prepare(settings)?;
+        Ok(zone_placement::predicted_zone(
+            settings, &analysis, val_luma, mask_val,
+        ))
+    }
+
+    /// Solve Brightness (1 pin) / + Grade (2) / + one knee control (3) so the pins print on
+    /// their targets (`ImageSession.solveZonePlacement`), against the warm analysis. `None`
+    /// for no pins, too many, or outer tones too close to tell apart.
+    pub fn solve_zone_placement(
+        &mut self,
+        settings: &ExposureSettings,
+        pins: &[Pin],
+    ) -> Result<Option<Solution>> {
+        let (_, analysis) = self.prepare(settings)?;
+        Ok(zone_placement::solve(settings, &analysis, pins))
+    }
+}
+
+impl Drop for Session {
+    /// A closed session's uploads go with it (the LRU evicts whole sessions).
+    fn drop(&mut self) {
+        let ids: Vec<u64> = self
+            .proxy_slots
+            .ids()
+            .chain(self.medium.slots.ids())
+            .chain(self.full.slots.ids())
+            .collect();
+        for id in ids {
+            self.renderer.forget_source(id);
+        }
     }
 }
 

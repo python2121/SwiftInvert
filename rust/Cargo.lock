@@ -1717,6 +1717,7 @@ dependencies = [
  "env_logger",
  "image",
  "log",
+ "neggpu",
  "negkit",
  "negraw",
  "negsession",
@@ -1765,6 +1766,7 @@ dependencies = [
  "craft-cms",
  "image",
  "log",
+ "neggpu",
  "negkit",
  "negraw",
  "rayon",
@@ -1772,6 +1774,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "tiff",
+ "wgpu",
 ]
 
 [[package]]
