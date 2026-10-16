@@ -79,13 +79,7 @@ fn constrained_box_always_fits() {
     for d in [2.0, -10.0, 25.0, -40.0] {
         let radians = deg(d);
         let b = cg::constrain([1200.0, -700.0], [600.0, 500.0], radians, FRAME, 1.0);
-        assert!(cg::box_fits(
-            b.center,
-            b.half_extents,
-            radians,
-            FRAME,
-            1e-6
-        ));
+        assert!(cg::box_fits(b.center, b.half_extents, radians, FRAME, 1e-6));
         assert!(b.half_extents[0] > 0.0 && b.half_extents[1] > 0.0);
     }
 }
@@ -144,7 +138,10 @@ fn fit_scale_is_zero_when_box_center_outside_rotated_frame() {
     let frame = [100.0, 80.0];
     // θ = 0: the rotated frame is ±(50, 40); center (60, 0) is outside on x. For the +x
     // corners, t.x = +hx > 0 and limit = (50 − 60)/hx < 0, so k = min(k, max(limit, 0)) = 0.
-    assert_eq!(cg::fit_scale([60.0, 0.0], [10.0, 10.0], 0.0, frame, 1.0), 0.0);
+    assert_eq!(
+        cg::fit_scale([60.0, 0.0], [10.0, 10.0], 0.0, frame, 1.0),
+        0.0
+    );
     // Rotated case: center far outside every possible bound.
     assert_eq!(
         cg::fit_scale([200.0, 200.0], [5.0, 5.0], 0.3, frame, 1.0),
@@ -486,7 +483,10 @@ fn content_window_stays_near_the_unit_rect() {
                 .and_then(|c| c.pixel_roi(ow as usize, oh as usize))
                 .map(|p| [p.x0 as f64, p.y0 as f64, p.x1 as f64, p.y1 as f64]);
             let cw = cg::content_window(PROXY, radians, crop.as_ref(), [ow, oh], roi);
-            assert!(cw.x.abs() < 0.01 && cw.y.abs() < 0.01, "origin {cw:?} for {d}°");
+            assert!(
+                cw.x.abs() < 0.01 && cw.y.abs() < 0.01,
+                "origin {cw:?} for {d}°"
+            );
             assert!(
                 (cw.width - 1.0).abs() < 0.01 && (cw.height - 1.0).abs() < 0.01,
                 "size {cw:?} for {d}°"
