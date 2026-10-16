@@ -213,6 +213,19 @@ pub fn clamp_pan(pan: Vec2, frame_size: Vec2, area: Rect) -> Vec2 {
     vec2(pan.x.clamp(-over.x, over.x), pan.y.clamp(-over.y, over.y))
 }
 
+// --- U3: darkroom (the `CanvasOverlay` slot — the same shape the tools wave ships) ---
+/// A canvas layer drawn over the bitmap (zone overlay, test strip, zone placement; the tools'
+/// crop box). `frame_rect` is the ideal frame rect in screen points (the bitmap sits at its
+/// `content_window` inside it).
+pub trait CanvasOverlay {
+    /// Paint over the bitmap (the ui is clipped to the canvas area).
+    fn paint(&mut self, ui: &mut egui::Ui, frame_rect: Rect, zoom_state: &LoupeState);
+    /// Pointer input on the canvas response (with the PREVIOUS frame's `frame_rect`); true =
+    /// consumed, so the canvas skips its own drag-pan and double-click zoom.
+    fn handle(&mut self, response: &egui::Response, frame_rect: Rect) -> bool;
+}
+// --- end U3 ---
+
 /// What the canvas needs to draw besides the loupe state.
 pub struct CanvasInput<'a> {
     pub has_selection: bool,
@@ -242,6 +255,7 @@ pub fn canvas(
     area: Rect,
     state: &mut LoupeState,
     input: &CanvasInput<'_>,
+    overlays: &mut [&mut dyn CanvasOverlay],
 ) -> Vec<CanvasAction> {
     let t = Tokens::get(ui.ctx());
     let mut actions = Vec::new();
@@ -293,6 +307,14 @@ pub fn canvas(
     let mut zoom = state.zoom.clamp(ZOOM_MIN, ZOOM_MAX);
     let mut pan = state.pan;
     let hover = resp.hover_pos();
+    // --- U3: darkroom --- overlays see the pointer first.
+    let mut consumed = false;
+    if let Some(prev) = state.last_frame_rect {
+        for o in overlays.iter_mut() {
+            consumed |= o.handle(&resp, prev);
+        }
+    }
+    // --- end U3 ---
 
     // gestures
     if resp.hovered() {
@@ -346,10 +368,10 @@ pub fn canvas(
         }
         ui.input_mut(|i| i.smooth_scroll_delta = Vec2::ZERO);
     }
-    if resp.dragged() && zoom > 1.0 {
+    if resp.dragged() && zoom > 1.0 && !consumed {
         pan += resp.drag_delta();
     }
-    if resp.double_clicked() {
+    if resp.double_clicked() && !consumed {
         if zoom > 1.001 {
             zoom = 1.0;
             pan = Vec2::ZERO;
@@ -393,6 +415,15 @@ pub fn canvas(
     if input.show_grid {
         grid_lines(&painter, frame_rect, input.grid);
     }
+    // --- U3: darkroom ---
+    if !overlays.is_empty() {
+        let mut oui = ui.new_child(egui::UiBuilder::new().max_rect(area));
+        oui.set_clip_rect(area.intersect(ui.clip_rect()));
+        for o in overlays.iter_mut() {
+            o.paint(&mut oui, frame_rect, state);
+        }
+    }
+    // --- end U3 ---
 
     // hover → content-normalized point (plain presentation only)
     let hover_uv = if input.tool_mode == ToolMode::None && !input.baseline {
@@ -514,6 +545,10 @@ pub enum BarAction {
     CycleHq,
     ToggleZones,
     CanvasColor(CanvasColor),
+    // --- U3: darkroom ---
+    /// A zone-strip cell was clicked: arm (or disarm) that zone for placement.
+    ArmZone(f64),
+    // --- end U3 ---
 }
 
 /// Control-bar inputs.
@@ -523,8 +558,10 @@ pub struct BarInput<'a> {
     pub hq_active: bool,
     pub zones_on: bool,
     pub canvas_color: CanvasColor,
-    /// Densitometer read-out text (slot for the later wave).
-    pub readout: &'a str,
+    // --- U3: darkroom ---
+    /// The spot densitometer read-out + zone strip.
+    pub readout: &'a crate::zones::Readout,
+    // --- end U3 ---
 }
 
 /// The under-canvas control bar (DetailView.swift:102-191).
@@ -568,9 +605,11 @@ pub fn control_bar(ui: &mut egui::Ui, input: &BarInput<'_>) -> Vec<BarAction> {
             {
                 actions.push(BarAction::CycleHq);
             }
-            let zones = badge(ui, "Zones", input.zones_on, false, &t);
+            let zones = badge(ui, "Zones", input.zones_on, true, &t);
             if zones
-                .on_disabled_hover_text("Zone overlay arrives in a later wave (⇧Z)")
+                .on_hover_text(
+                    "Zone system overlay (⇧Z): Adams zones over the preview, same ruler as the densitometer",
+                )
                 .clicked()
             {
                 actions.push(BarAction::ToggleZones);
@@ -584,12 +623,10 @@ pub fn control_bar(ui: &mut egui::Ui, input: &BarInput<'_>) -> Vec<BarAction> {
             vec2(centre_w, 24.0),
             egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
             |ui| {
-                if input.has_selection {
-                    ui.label(
-                        egui::RichText::new(input.readout)
-                            .font(t.mono(10.0))
-                            .color(t.text_secondary),
-                    );
+                if input.has_selection
+                    && let Some(z) = crate::zones::readout_ui(ui, input.readout)
+                {
+                    actions.push(BarAction::ArmZone(z));
                 }
             },
         );
