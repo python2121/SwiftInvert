@@ -146,7 +146,7 @@ levels_points: [Vec<[f64;2]>; 3] (pre-sanitized: sorted, 0.02 off the endpoints,
 ### 3.5 Uniform packing (neggpu::uniforms) — mirrors `ShaderTypes.swift` exactly
 `NormUniforms { floors: [f32;4], ceils: [f32;4], wp: f32, bp: f32, _pad: [f32;2] }` = 48 B.
 `CurveUniforms`: pivots, slopes, curvatures, cmyOffsets, shadowCMY, midCMY, highlightCMY, dMinRGB
-(8 × vec4 = 128 B), then 32 scalars in the Swift order (toe … printSaturation), bandHues, bandSaturations
+(8 × vec4 = 128 B), then 24 scalars in the Swift order (toe … printSaturation, offsets 128→224), bandHues, bandSaturations
 (vec4 ×2), separationDamping, skinProtection, hueTrim, autoHighlight (268), maskScale (272), maskDims (288) → 304 B.
 Scalar constants folded at pack time exactly as `UniformsBuilder.curveUniforms` does (K.toeShoulderStrength,
 K.dMax, K.toeSharpnessBase, …). Levels buffer: `[c*16+0..8] inputs, [c*16+8..16] outputs, [48+c] count`.
