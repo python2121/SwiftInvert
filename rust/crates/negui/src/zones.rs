@@ -143,7 +143,10 @@ impl ZonesState {
     pub fn refresh_grid(&mut self, overlay_on: bool) {
         if overlay_on {
             let t0 = std::time::Instant::now();
-            self.grid = self.densitometer.zone_grid();
+            self.grid = self
+                .densitometer
+                .bitmap()
+                .and_then(|(bytes, w, h)| sampled_zone_grid(bytes, w, h));
             self.grid_ms = t0.elapsed().as_secs_f32() * 1000.0;
         } else {
             self.grid = None;
@@ -167,6 +170,32 @@ impl ZonesState {
             None => self.densitometer.clear(),
         }
     }
+}
+
+/// The zone overlay of an sRGB-encoded rgba8 bitmap, identical to
+/// [`DensitometerState::zone_grid`] but without transcoding every pixel: `ZoneGrid.compute`
+/// only ever reads the pixels at multiples of its stride (`min(w, h) / (4 · cells)`), so those
+/// samples are gathered first (≈ 100 × 140 px whatever the tier) and the grid computed on them
+/// — where the stride is 1, so the cells, their bounds and every sample are the same.
+pub fn sampled_zone_grid(bytes: &[u8], w: usize, h: usize) -> Option<ZoneGrid> {
+    let cells = negkit::zone_grid::CELLS_LONG_EDGE;
+    let step = (w.min(h) / cells.checked_mul(4)?).max(1);
+    if step == 1 {
+        return negsession::zone_grid(bytes, w, h, Encoding::Srgb);
+    }
+    if w < 2 || h < 2 || bytes.len() < w.checked_mul(h)?.checked_mul(4)? {
+        return None;
+    }
+    let (sw, sh) = (w.div_ceil(step), h.div_ceil(step));
+    let mut sampled = Vec::with_capacity(sw * sh * 4);
+    for sy in 0..sh {
+        let row = (sy * step).min(h - 1) * w;
+        for sx in 0..sw {
+            let i = (row + (sx * step).min(w - 1)) * 4;
+            sampled.extend_from_slice(bytes.get(i..i + 4)?);
+        }
+    }
+    negsession::zone_grid(&sampled, sw, sh, Encoding::Srgb)
 }
 
 /// Frame-normalized → bitmap-normalized through the content window.

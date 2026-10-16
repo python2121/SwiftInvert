@@ -18,7 +18,9 @@ use negui::app::{AppOptions, Command, NegApp};
 use negui::interactive_histogram::{GAP, GRAB_TOLERANCE, grab_or_plant, move_anchor};
 use negui::teststrip::{axis_label, picked_settings, preview_badge};
 use negui::zone_placement::{insert_pin, moved_pin};
-use negui::zones::{Readout, frame_to_bitmap, marked_cell, region_edges, strip_shade};
+use negui::zones::{
+    Readout, frame_to_bitmap, marked_cell, region_edges, sampled_zone_grid, strip_shade,
+};
 
 // ───────────────────────────── interactive histogram ─────────────────────────────
 
@@ -212,6 +214,24 @@ fn overlay_draws_edges_only_between_differing_zones() {
         "one vertical edge per row between the 5s and the 6"
     );
     assert!(e.iter().all(|s| s[0].0 == 2 && s[1].0 == 2));
+}
+
+#[test]
+fn sampled_zone_grid_equals_the_full_transcode() {
+    // a textured sRGB bitmap at several sizes (stride 1, 2, 7)
+    for (w, h) in [(120usize, 90usize), (300, 200), (1000, 700)] {
+        let mut bytes = Vec::with_capacity(w * h * 4);
+        for y in 0..h {
+            for x in 0..w {
+                let v = ((x * 7 + y * 13) % 256) as u8;
+                let g = ((x * 3 + (y / 5) * 29) % 256) as u8;
+                bytes.extend_from_slice(&[v, g, v / 2 + g / 2, 255]);
+            }
+        }
+        let full = negsession::zone_grid(&bytes, w, h, negsession::Encoding::Srgb).unwrap();
+        let fast = sampled_zone_grid(&bytes, w, h).unwrap();
+        assert_eq!(fast, full, "{w}×{h}");
+    }
 }
 
 // ───────────────────────────── the app, headless ─────────────────────────────

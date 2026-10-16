@@ -7,8 +7,9 @@
 //!
 //! Seams for later waves: [`ToolMode`] is carried (renders go through
 //! `Session::render_tool_preview`, so entering a tool already widens the render) but no overlay
-//! draws a box yet; `Command::Export`, `ChooseDefaults`, `TestStrip` and `ToggleZones` set a
-//! status line; the control channel would drive [`NegApp::run`] with [`Command`]s.
+//! draws a box yet; `Command::Export` and `ChooseDefaults` set a status line; the control
+//! channel would drive [`NegApp::run`] with [`Command`]s. The darkroom layers (test strip, zone
+//! placement, densitometer + zone overlay, Interactive Histogram) are wired in the `U3` block.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
