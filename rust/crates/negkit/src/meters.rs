@@ -37,6 +37,46 @@ where
     }
 }
 
+/// `f` over every interleaved RGB triple of `data`, collected in order (parallel under the
+/// `rayon` feature — rayon's indexed collect preserves order, so the result is bit-identical
+/// to the serial map). A trailing partial triple is ignored, as `chunks_exact` does.
+#[inline]
+pub(crate) fn map_pixels<U, F>(data: &[f32], f: F) -> Vec<U>
+where
+    U: Send,
+    F: Fn(&[f32]) -> U + Sync + Send,
+{
+    #[cfg(feature = "rayon")]
+    {
+        use rayon::prelude::*;
+        data.par_chunks_exact(3).map(f).collect()
+    }
+    #[cfg(not(feature = "rayon"))]
+    {
+        data.chunks_exact(3).map(f).collect()
+    }
+}
+
+/// `f` over every element of `src`, collected in order (parallel under `rayon`, see
+/// [`map_pixels`]).
+#[inline]
+fn map_slice<T, U, F>(src: &[T], f: F) -> Vec<U>
+where
+    T: Sync,
+    U: Send,
+    F: Fn(&T) -> U + Sync + Send,
+{
+    #[cfg(feature = "rayon")]
+    {
+        use rayon::prelude::*;
+        src.par_iter().map(f).collect()
+    }
+    #[cfg(not(feature = "rayon"))]
+    {
+        src.iter().map(f).collect()
+    }
+}
+
 /// Neutral-axis measurement: per-channel median raw-log refs at three luma bands over each
 /// band's lowest-chroma pixels (`measure_neutral_axis_from_log`).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -78,16 +118,13 @@ fn floors_and_inverse_spans(bounds: &LogNegativeBounds) -> (V3, V3) {
 /// axis): `f64` per pixel, stored as `f32` like upstream's float32 normalized image.
 pub fn normalized_luma(grid: &RgbImage, bounds: &LogNegativeBounds) -> Vec<f32> {
     let (f, inv_d) = floors_and_inverse_spans(bounds);
-    grid.data
-        .chunks_exact(3)
-        .map(|p| {
-            let r = (f64::from(p[0]) - f[0]) * inv_d[0];
-            let g = (f64::from(p[1]) - f[1]) * inv_d[1];
-            let b = (f64::from(p[2]) - f[2]) * inv_d[2];
-            // Boundary cast: upstream stores the normalized image as float32.
-            (K::LUMA_R * r + K::LUMA_G * g + K::LUMA_B * b) as f32
-        })
-        .collect()
+    map_pixels(&grid.data, |p| {
+        let r = (f64::from(p[0]) - f[0]) * inv_d[0];
+        let g = (f64::from(p[1]) - f[1]) * inv_d[1];
+        let b = (f64::from(p[2]) - f[2]) * inv_d[2];
+        // Boundary cast: upstream stores the normalized image as float32.
+        (K::LUMA_R * r + K::LUMA_G * g + K::LUMA_B * b) as f32
+    })
 }
 
 /// `_textured_cells` (NegPy 8532dd92, Boyack & Juenger US 5,724,456): the cells of a luma
@@ -236,16 +273,11 @@ pub fn anchor(grid: &RgbImage, bounds: &LogNegativeBounds) -> Option<f64> {
 /// `measure_textural_range_from_log`: |P90 − P10| of raw log luma over the textured cells
 /// (8532dd92 — rebate and flat sky no longer set grade). `None` on an empty grid.
 pub fn textural_range(grid: &RgbImage) -> Option<f64> {
-    let lum: Vec<f32> = grid
-        .data
-        .chunks_exact(3)
-        .map(|p| {
-            // Boundary cast: upstream's float32 luma plane.
-            (K::LUMA_R * f64::from(p[0])
-                + K::LUMA_G * f64::from(p[1])
-                + K::LUMA_B * f64::from(p[2])) as f32
-        })
-        .collect();
+    let lum: Vec<f32> = map_pixels(&grid.data, |p| {
+        // Boundary cast: upstream's float32 luma plane.
+        (K::LUMA_R * f64::from(p[0]) + K::LUMA_G * f64::from(p[1]) + K::LUMA_B * f64::from(p[2]))
+            as f32
+    });
     // Through `stats` so this shares the radix sort with every other meter (a bare `.sort()`
     // left this the slowest line in prepare).
     let sorted = stats::sorted_ascending(&textured_cells(&lum, grid.width, grid.height));
@@ -301,37 +333,53 @@ pub fn neutral_axis(grid: &RgbImage, bounds: &LogNegativeBounds) -> Option<Neutr
     let eps = 1e-6;
     let (f, inv_d) = floors_and_inverse_spans(bounds);
 
-    // One pass: normalized triplets (f32, mirroring NegPy's float32 normalize_log_image
-    // output), luma, and pass-1 RMS chroma.
-    let mut norm: Vec<f32> = Vec::with_capacity(n * 3);
-    let mut luma: Vec<f32> = Vec::with_capacity(n);
-    let mut chroma: Vec<f32> = Vec::with_capacity(n);
-    for p in grid.data.chunks_exact(3) {
+    // Normalized triplets (f32, mirroring NegPy's float32 normalize_log_image output), then
+    // luma and pass-1 RMS chroma read from the ROUNDED norm values — upstream computes them
+    // from the float32 normalized image.
+    let norm: Vec<[f32; 3]> = map_pixels(&grid.data, |p| {
         // Boundary casts: the float32 normalized image.
-        let r = ((f64::from(p[0]) - f[0]) * inv_d[0]) as f32;
-        let g = ((f64::from(p[1]) - f[1]) * inv_d[1]) as f32;
-        let b = ((f64::from(p[2]) - f[2]) * inv_d[2]) as f32;
-        norm.push(r);
-        norm.push(g);
-        norm.push(b);
-        // Luma/chroma read the ROUNDED norm values — upstream computes them from the float32
-        // normalized image.
-        let (rd, gd, bd) = (f64::from(r), f64::from(g), f64::from(b));
-        luma.push((K::LUMA_R * rd + K::LUMA_G * gd + K::LUMA_B * bd) as f32);
-        chroma.push(rms_chroma(rd, gd, bd) as f32);
-    }
+        [
+            ((f64::from(p[0]) - f[0]) * inv_d[0]) as f32,
+            ((f64::from(p[1]) - f[1]) * inv_d[1]) as f32,
+            ((f64::from(p[2]) - f[2]) * inv_d[2]) as f32,
+        ]
+    });
+    let luma: Vec<f32> = map_slice(&norm, |p| {
+        (K::LUMA_R * f64::from(p[0]) + K::LUMA_G * f64::from(p[1]) + K::LUMA_B * f64::from(p[2]))
+            as f32
+    });
+    let chroma: Vec<f32> = map_slice(&norm, |p| {
+        rms_chroma(f64::from(p[0]), f64::from(p[1]), f64::from(p[2])) as f32
+    });
 
     // Band membership depends only on the (immutable) luma — compute each band's indices
-    // ONCE and reuse across both passes.
-    let band_indices = |lo: f64, hi: f64| -> Vec<usize> {
+    // ONCE (one pass for all three) and reuse across both passes.
+    let (mb, sb, hb) = (
+        K::NEUTRAL_AXIS_MID_BAND,
+        K::NEUTRAL_AXIS_SHADOW_BAND,
+        K::NEUTRAL_AXIS_HIGHLIGHT_BAND,
+    );
+    let (mut mb_idx, mut sb_idx, mut hb_idx) = (
+        Vec::with_capacity(n / 4),
+        Vec::with_capacity(n / 4),
+        Vec::with_capacity(n / 4),
+    );
+    {
         // Boundary casts: the band edges compare against float32 luma.
-        let (lo_f, hi_f) = (lo as f32, hi as f32);
-        luma.iter()
-            .enumerate()
-            .filter(|&(_, &l)| l >= lo_f && l <= hi_f)
-            .map(|(i, _)| i)
-            .collect()
-    };
+        let edges = |band: (f64, f64)| (band.0 as f32, band.1 as f32);
+        let (mb_f, sb_f, hb_f) = (edges(mb), edges(sb), edges(hb));
+        for (i, &l) in luma.iter().enumerate() {
+            if l >= mb_f.0 && l <= mb_f.1 {
+                mb_idx.push(i);
+            }
+            if l >= sb_f.0 && l <= sb_f.1 {
+                sb_idx.push(i);
+            }
+            if l >= hb_f.0 && l <= hb_f.1 {
+                hb_idx.push(i);
+            }
+        }
+    }
 
     let band_refs = |indices: &[usize], chroma_vals: &[f32], cap: f64| -> Option<BandRefs> {
         if indices.len() < K::NEUTRAL_AXIS_MIN_PIXELS {
@@ -370,12 +418,13 @@ pub fn neutral_axis(grid: &RgbImage, bounds: &LogNegativeBounds) -> Option<Neutr
         if kept_chroma.len() < K::NEUTRAL_AXIS_MIN_PIXELS || near_neutral_chroma > cap {
             return None;
         }
+        // Three independent sorts — side by side under `rayon`.
+        let (r, (g, b)) = join(
+            || stats::median(&kept[0]),
+            || join(|| stats::median(&kept[1]), || stats::median(&kept[2])),
+        );
         Some(BandRefs {
-            refs: [
-                stats::median(&kept[0])?,
-                stats::median(&kept[1])?,
-                stats::median(&kept[2])?,
-            ],
+            refs: [r?, g?, b?],
             median_chroma: near_neutral_chroma,
             count: kept_chroma.len(),
         })
@@ -394,14 +443,6 @@ pub fn neutral_axis(grid: &RgbImage, bounds: &LogNegativeBounds) -> Option<Neutr
         out
     };
 
-    let (mb, sb, hb) = (
-        K::NEUTRAL_AXIS_MID_BAND,
-        K::NEUTRAL_AXIS_SHADOW_BAND,
-        K::NEUTRAL_AXIS_HIGHLIGHT_BAND,
-    );
-    let mb_idx = band_indices(mb.0, mb.1);
-    let sb_idx = band_indices(sb.0, sb.1);
-    let hb_idx = band_indices(hb.0, hb.1);
     // The band measurements are independent (each sorts its own subset), so the pairs run
     // side by side under `rayon`; the results are bit-identical either way.
     let (mid1, sh1) = join(
@@ -425,16 +466,13 @@ pub fn neutral_axis(grid: &RgbImage, bounds: &LogNegativeBounds) -> Option<Neutr
             b_c[ch] = nm[1] - a_c[ch] * nm[ch];
         }
     }
-    let chroma2: Vec<f32> = norm
-        .chunks_exact(3)
-        .map(|p| {
-            // Boundary casts: the corrected float32 channels.
-            let r = (a_c[0] * f64::from(p[0]) + b_c[0]) as f32;
-            let g = p[1];
-            let b = (a_c[2] * f64::from(p[2]) + b_c[2]) as f32;
-            rms_chroma(f64::from(r), f64::from(g), f64::from(b)) as f32
-        })
-        .collect();
+    let chroma2: Vec<f32> = map_slice(&norm, |p| {
+        // Boundary casts: the corrected float32 channels.
+        let r = (a_c[0] * f64::from(p[0]) + b_c[0]) as f32;
+        let g = p[1];
+        let b = (a_c[2] * f64::from(p[2]) + b_c[2]) as f32;
+        rms_chroma(f64::from(r), f64::from(g), f64::from(b)) as f32
+    });
 
     let cap = K::NEUTRAL_AXIS_CHROMA_CAP;
     let (mid, (shadow, highlight)) = join(

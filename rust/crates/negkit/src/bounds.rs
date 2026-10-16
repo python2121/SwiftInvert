@@ -167,16 +167,12 @@ pub fn same_pixel_color_floor_refs(
         }
         denoms[ch] = denom;
     }
-    let luma: Vec<f64> = grid
-        .data
-        .chunks_exact(3)
-        .map(|p| {
-            let r = (f64::from(p[0]) - luma_floors[0]) / denoms[0];
-            let g = (f64::from(p[1]) - luma_floors[1]) / denoms[1];
-            let b = (f64::from(p[2]) - luma_floors[2]) / denoms[2];
-            K::LUMA_R * r + K::LUMA_G * g + K::LUMA_B * b
-        })
-        .collect();
+    let luma: Vec<f64> = crate::meters::map_pixels(&grid.data, |p| {
+        let r = (f64::from(p[0]) - luma_floors[0]) / denoms[0];
+        let g = (f64::from(p[1]) - luma_floors[1]) / denoms[1];
+        let b = (f64::from(p[2]) - luma_floors[2]) / denoms[2];
+        K::LUMA_R * r + K::LUMA_G * g + K::LUMA_B * b
+    });
 
     let clip = (50.0 - width).min(color_clip).max(0.00001);
     let sorted_luma = stats::sorted_ascending(&luma);
