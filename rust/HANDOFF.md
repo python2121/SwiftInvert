@@ -15,7 +15,8 @@ Merged and green on `rust-port` (pushed to `origin`, github.com/python2121/Swift
 | `neggpu` (wgpu/WGSL) | parity vs CPU ~1e-7 on every control group, Vulkan AND Metal; host fixes from review 6 landed | 42 |
 | `negsession` (engine) + `negcli` | cache tower (ImageSession keys), sidecars, profiles, history, export (ICC), GpuRenderer, test strip, zone placement | 87 + gpu parity |
 | `negui` + `apps/swiftinvert` | the egui SHELL (U1) merged: library, loupe, controls table, histogram, history, menus, selftest | 7 |
-| **Total** | `NEG_RAW_SAMPLE=/home/deck/Pictures/IMG_0420.CR3 cargo test --workspace` | **431 passed** (Linux, incl. the S2 engine fixes); 398 on the Mac before U1 |
+| `negui` tools/dialogs/darkroom (U2b, U3b) | crop & straighten, analysis rect, export dialog + batch, profiles picker, GPU texture presenter (ring of 2), densitometer + zone strip, zone overlay, test strip, zone placement, interactive histogram, selftest flags `--crop --dialogs --export <dir> --latency --teststrip --zones` | 16 + 15 |
+| **Total** | `NEG_RAW_SAMPLE=/home/deck/Pictures/IMG_0420.CR3 cargo test --workspace` | **462 passed** (Linux) |
 
 Verified on the Mac (Apple M2, Rust 1.96, via ClaudeShip jobs): whole workspace builds and
 tests pass; `swiftinvert --selftest` renders a real negative headless (first render 71 ms,
@@ -26,7 +27,7 @@ Linux: `/home/deck/.cache/swiftinvert-wt/scratch-U1/shell*.png`.
 
 All worktrees are under `/home/deck/.cache/swiftinvert-wt/` (NOT /tmp — it's a 7.7 GB tmpfs
 that filled once). Each agent was asked to commit a compiling state with a DONE/PARTIAL list in
-the commit message and to report in ≤ 20 lines. **S2 and U2's math scaffold are MERGED. Two OPUS agents are running now (cut over 2026-10-16): merge U2b, then U3b**
+the commit message and to report in ≤ 20 lines. **ALL FOUR MERGED (S2, U2 scaffold, U3b darkroom, U2b tools/dialogs/presenter) — rust-port has the complete feature set; 462 tests green on Linux.** A final Opus review of `negui` (review 8) is the last open item, plus the Mac confirmation run.
 (U2 and U3 both add `// --- U2 ---` / `// --- U3 ---` blocks to `negui/src/app.rs`, `loupe.rs`,
 `engine.rs`; expect a small manual merge there).
 
