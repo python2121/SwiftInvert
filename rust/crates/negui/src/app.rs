@@ -456,6 +456,8 @@ pub struct NegApp {
 
     histories: HashMap<PathBuf, History>,
     pending: PendingCommit,
+    /// The central (canvas) region of the last frame — floating windows stay inside it.
+    central_rect: Option<Rect>,
     /// Added to `Instant::now()` for every timer (sidecar debounce, history coalesce, HQ
     /// debounce) — tests advance it instead of sleeping.
     clock_offset: Duration,
@@ -554,6 +556,7 @@ impl NegApp {
             info: None,
             histories: HashMap::new(),
             pending: PendingCommit::default(),
+            central_rect: None,
             clock_offset: Duration::ZERO,
             save_due: None,
             status_message: None,
@@ -671,6 +674,11 @@ impl NegApp {
     #[doc(hidden)]
     pub fn settings_mut(&mut self) -> &mut ExposureSettings {
         &mut self.settings
+    }
+
+    /// The central (canvas + control bar) region of the last frame.
+    pub fn central_rect(&self) -> Option<Rect> {
+        self.central_rect
     }
 
     /// The error pill text on the canvas, if any.
@@ -1857,6 +1865,7 @@ impl NegApp {
             &mut self.settings,
             self.histogram.as_deref(),
             enabled,
+            self.central_rect,
         );
         for a in actions {
             match a {
@@ -2155,6 +2164,7 @@ impl eframe::App for NegApp {
             .frame(egui::Frame::new().fill(t.chrome))
             .show(ui, |ui| {
                 let full = ui.available_rect_before_wrap();
+                self.central_rect = Some(full);
                 let status_h = 18.0;
                 let canvas_rect = Rect::from_min_max(
                     full.min,

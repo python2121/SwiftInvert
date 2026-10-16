@@ -634,6 +634,7 @@ fn profile_picker_rules() {
 /// `--selftest --crop --dialogs --export`: crop/cropped/analysis/dialog captures, a JPEG and a
 /// TIFF written into the tmp dir and ICC-tagged, no sidecar written. Runs on a shared-device
 /// harness so the zero-copy presenter is the one exercised. Skipped without the sample RAW.
+#[cfg(feature = "selftest")]
 #[test]
 fn selftest_crop_and_export_smoke() {
     let sample = std::path::Path::new("/home/deck/Pictures/IMG_0420.CR3");

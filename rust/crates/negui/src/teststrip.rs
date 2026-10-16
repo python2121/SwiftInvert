@@ -114,13 +114,22 @@ pub fn axis_label(
     }
 }
 
+/// A patch's caption — the hover pill and the preview badge say the same thing (Brightness as
+/// `2 − density`, Grade as its ISO R number, like the ladder labels).
+pub fn patch_label(cell: &test_strip::Cell) -> String {
+    format!(
+        "Brightness {:.1} · Grade R{:.0}",
+        2.0 - cell.density,
+        cell.grade
+    )
+}
+
 /// The preview badge text (`TestStripLayer.previewBadge`).
 pub fn preview_badge(row: usize, col: usize, orientation: i32) -> String {
     match test_strip::cell(row, col, orientation) {
         Some(c) => format!(
-            "Brightness {:.1} · Grade R{:.0}  —  double-click to keep, click to compare others, Esc to cancel",
-            2.0 - c.density,
-            c.grade
+            "{}  —  double-click to keep, click to compare others, Esc to cancel",
+            patch_label(&c)
         ),
         None => String::new(),
     }
@@ -352,7 +361,7 @@ impl CanvasOverlay for TestStripController {
                         frame_rect.bottom().min(clip.bottom()) - 10.0,
                     ),
                     Align2::CENTER_BOTTOM,
-                    &TestStripOutput::label(&c),
+                    &patch_label(&c),
                     &t,
                 );
             }

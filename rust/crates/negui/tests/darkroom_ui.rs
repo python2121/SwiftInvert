@@ -16,7 +16,7 @@ use negkit::zone_grid::Grid;
 use negkit::zone_placement::{MAX_PINS, Pin};
 use negui::app::{AppOptions, Command, NegApp};
 use negui::interactive_histogram::{GAP, GRAB_TOLERANCE, grab_or_plant, move_anchor};
-use negui::teststrip::{axis_label, picked_settings, preview_badge};
+use negui::teststrip::{axis_label, patch_label, picked_settings, preview_badge};
 use negui::zone_placement::{insert_pin, moved_pin};
 use negui::zones::{
     Readout, frame_to_bitmap, marked_cell, region_edges, sampled_zone_grid, strip_shade,
@@ -151,6 +151,20 @@ fn a_pick_sets_density_and_grade_only() {
     assert_eq!(picked.auto_exposure, current.auto_exposure);
     assert!(picked_settings(&current, 5, 0, 0).is_none());
     assert!(preview_badge(0, 4, 0).starts_with("Brightness 1.6 · Grade R75"));
+}
+
+/// The hover pill and the preview badge use the same "Grade R95" caption (review 8 #17).
+#[test]
+fn hover_pill_and_preview_badge_share_the_caption() {
+    for (row, col) in [(0, 0), (2, 2), (4, 1)] {
+        let cell = test_strip::cell(row, col, 0).unwrap();
+        let pill = patch_label(&cell);
+        assert!(
+            pill.contains(&format!("Grade R{:.0}", cell.grade)),
+            "{pill}"
+        );
+        assert!(preview_badge(row, col, 0).starts_with(&pill));
+    }
 }
 
 // ───────────────────────────── densitometer / overlay ─────────────────────────────

@@ -550,3 +550,26 @@ fn the_folder_browser_lists_off_the_ui_thread_once_per_path() {
     assert!(harness.query_by_label("▸ film-10").is_none());
     assert_eq!(harness.state().current(), root.join("film-02"));
 }
+
+// ───────────────────────────── [18] Interactive Histogram placement ─────────────────────────────
+
+#[test]
+fn the_interactive_histogram_opens_inside_the_canvas_region() {
+    let dir = folder("rules-levels", &["one"]);
+    let mut h = app(dir, Arc::default(), false);
+    ready(&mut h);
+    h.state_mut().run(Command::InteractiveHistogram);
+    for _ in 0..4 {
+        h.step();
+    }
+    let central = h.state().central_rect().expect("laid out");
+    let window = h
+        .ctx
+        .memory(|m| m.area_rect(egui::Id::new("interactive-histogram")))
+        .expect("window shown");
+    assert!(central.top() > 0.0, "a menu bar sits above the canvas");
+    assert!(
+        window.top() >= central.top() - 0.5 && window.left() >= central.left() - 0.5,
+        "window {window:?} over the menu bar / library (canvas {central:?})"
+    );
+}
