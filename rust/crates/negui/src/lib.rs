@@ -25,6 +25,7 @@ pub mod loupe;
 // --- U2 ---
 pub mod presenter_gpu;
 // --- end U2 ---
+#[cfg(feature = "selftest")]
 pub mod selftest;
 pub mod theme;
 pub mod tools;

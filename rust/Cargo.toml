@@ -16,7 +16,7 @@ negkit = { path = "crates/negkit" }
 negraw = { path = "crates/negraw" }
 neggpu = { path = "crates/neggpu" }
 negsession = { path = "crates/negsession" }
-negui = { path = "crates/negui" }
+negui = { path = "crates/negui", default-features = false }
 
 # foundation
 serde = { version = "1", features = ["derive"] }

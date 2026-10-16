@@ -61,6 +61,7 @@ pub fn run_selftest_with(
         persist: false,
         renderer: None,
         presenter: None,
+        backend: None,
     };
     let mut builder = egui_kittest::Harness::builder()
         .with_size(egui::vec2(SELFTEST_SIZE[0], SELFTEST_SIZE[1]))

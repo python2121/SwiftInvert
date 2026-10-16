@@ -159,20 +159,28 @@ pub fn move_anchor(pts: &[V2], i: usize, x: f64) -> Option<Vec<V2>> {
     Some(next)
 }
 
-/// Show the window (when open). Edits `settings` in place.
+/// Show the window (when open), kept inside `area` (the canvas region: never over the menu bar
+/// or the side panels; it first opens at `area`'s top-left corner). Edits `settings` in place.
 pub fn show(
     ctx: &egui::Context,
     state: &mut LevelsWindow,
     settings: &mut ExposureSettings,
     bins: Option<&Histogram256>,
     enabled: bool,
+    area: Option<egui::Rect>,
 ) -> Vec<LevelsAction> {
     let mut actions = Vec::new();
     if !state.open {
         return actions;
     }
     let mut open = true;
-    egui::Window::new("Interactive Histogram")
+    let mut window = egui::Window::new("Interactive Histogram");
+    if let Some(area) = area.filter(|a| a.is_positive()) {
+        window = window
+            .constrain_to(area)
+            .default_pos(area.min + vec2(16.0, 16.0));
+    }
+    window
         .id(egui::Id::new("interactive-histogram"))
         .open(&mut open)
         .default_size(vec2(560.0, 360.0))

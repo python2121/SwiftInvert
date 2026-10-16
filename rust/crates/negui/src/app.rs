@@ -20,7 +20,7 @@ use egui::{Key, KeyboardShortcut, Modifiers, Rect, pos2, vec2};
 use negkit::ExposureSettings;
 use negsession::history::{PendingCommit, labels};
 use negsession::hq::{HQ_AUTO_ZOOM_THRESHOLD, HQ_UPWARD_DEBOUNCE_MS};
-use negsession::renderer::{GpuRenderer, Renderer, default_renderer};
+use negsession::renderer::Renderer;
 use negsession::session::baseline_settings;
 use negsession::{
     History, HqMode, ProfileStore, RawBackend, RenderRequest, RenderTier, SessionInfo,
@@ -52,8 +52,12 @@ use crate::zones::{Readout, ZoneOverlayLayer, ZonesState};
 
 /// Sidecar save debounce (AppModel.swift:928).
 pub const SAVE_DEBOUNCE: Duration = Duration::from_secs(1);
-/// eframe storage key for [`AppPrefs`].
+/// eframe storage key for the UI part of [`AppPrefs`] (RON).
 pub const PREFS_KEY: &str = "swiftinvert.prefs";
+/// eframe storage key for the sticky export options (RON), decoded on its own.
+pub const EXPORT_KEY: &str = "swiftinvert.export";
+/// eframe storage key for the profile store (its JSON blob, stored verbatim).
+pub const PROFILES_KEY: &str = "swiftinvert.profiles";
 /// Library splitter range (SwiftInvertApp.swift:332-352).
 pub const LIBRARY_WIDTH_RANGE: std::ops::RangeInclusive<f32> = 200.0..=560.0;
 
@@ -69,12 +73,15 @@ pub struct AppPrefs {
     /// Collapsed folder identities per root (Qt: `collapsed/<root>`).
     pub collapsed: HashMap<String, Vec<String>>,
     // --- U2: tools & dialogs ---
-    /// Sticky export sheet (`UserDefaults["exportOptions"]`, Swift field semantics).
+    /// Sticky export sheet (`UserDefaults["exportOptions"]`, Swift field semantics). Stored
+    /// under [`EXPORT_KEY`], not in the UI blob.
+    #[serde(skip)]
     pub export: ExportOptions,
     /// User profiles + the active id, as the engine's JSON blob (`settingsProfiles` /
     /// `activeProfileID`; parsed leniently by `ProfileStore::from_json`). A JSON string rather
     /// than nested RON: `ExposureSettings`' lenient decoder reads through `serde_json::Value`,
-    /// which RON's struct notation does not round-trip.
+    /// which RON's struct notation does not round-trip. Stored under [`PROFILES_KEY`].
+    #[serde(skip)]
     pub profiles: String,
     // --- end U2 ---
     // --- U3: darkroom ---
@@ -102,6 +109,52 @@ impl Default for AppPrefs {
     }
 }
 
+/// The export options and profiles as an older build stored them: inside the UI blob.
+/// (Fields read bare, as they were written — RON spells an `Option` field `Some(..)`.)
+#[derive(Default, serde::Deserialize)]
+#[serde(default)]
+struct LegacyPrefs {
+    #[serde(deserialize_with = "present")]
+    export: Option<ExportOptions>,
+    #[serde(deserialize_with = "present")]
+    profiles: Option<String>,
+}
+
+fn present<'de, D, T>(d: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    T::deserialize(d).map(Some)
+}
+
+impl AppPrefs {
+    /// Read the three groups (UI prefs, export options, profiles) from their own keys, each
+    /// decoded independently with its own fallback — a bad UI field can't reset the profile
+    /// list or the export sheet, and the next save can't overwrite them with defaults. A store
+    /// written before the split falls back to the export/profiles fields of the old blob.
+    pub fn load(storage: &dyn eframe::Storage) -> AppPrefs {
+        let mut prefs: AppPrefs = eframe::get_value(storage, PREFS_KEY).unwrap_or_default();
+        let legacy: LegacyPrefs = eframe::get_value(storage, PREFS_KEY).unwrap_or_default();
+        prefs.export = eframe::get_value::<ExportOptions>(storage, EXPORT_KEY)
+            .or(legacy.export)
+            .map(crate::dialogs::export::sanitize)
+            .unwrap_or_else(crate::dialogs::export::default_export_options);
+        prefs.profiles = storage
+            .get_string(PROFILES_KEY)
+            .or(legacy.profiles)
+            .unwrap_or_default();
+        prefs
+    }
+
+    /// Write the three groups under their own keys.
+    pub fn store(&self, storage: &mut dyn eframe::Storage) {
+        eframe::set_value(storage, PREFS_KEY, self);
+        eframe::set_value(storage, EXPORT_KEY, &self.export);
+        storage.set_string(PROFILES_KEY, self.profiles.clone());
+    }
+}
+
 /// Construction options.
 pub struct AppOptions {
     /// Folder to open at launch (else the sticky folder).
@@ -114,6 +167,8 @@ pub struct AppOptions {
     pub renderer: Option<Arc<dyn Renderer>>,
     /// Frame presenter override; `None` = the CPU/readback presenter.
     pub presenter: Option<Box<dyn FramePresenter>>,
+    /// RAW decoder override (tests); `None` = the build's default backend.
+    pub backend: Option<Arc<dyn RawBackend>>,
 }
 
 impl Default for AppOptions {
@@ -124,6 +179,7 @@ impl Default for AppOptions {
             persist: true,
             renderer: None,
             presenter: None,
+            backend: None,
         }
     }
 }
@@ -224,6 +280,31 @@ pub const SHORTCUTS: &[(KeyboardShortcut, Command)] = &[
 
 fn shortcut_for(cmd: Command) -> Option<KeyboardShortcut> {
     SHORTCUTS.iter().find(|(_, c)| *c == cmd).map(|(s, _)| *s)
+}
+
+/// The key a command answers to, menu shortcuts and the key monitor's bare keys alike.
+fn key_for(cmd: Command) -> Option<KeyboardShortcut> {
+    shortcut_for(cmd).or(match cmd {
+        Command::TestStrip => Some(sc(Modifiers::SHIFT, Key::T)),
+        Command::ToggleZones => Some(sc(Modifiers::SHIFT, Key::Z)),
+        _ => None,
+    })
+}
+
+/// A shortcut in the platform's own spelling (`⇧⌘Z` on macOS, `Ctrl+Shift+Z` elsewhere), as
+/// the menus show it — for tooltips, which must not hard-code the Mac symbols.
+pub fn shortcut_text(ctx: &egui::Context, cmd: Command) -> String {
+    key_for(cmd)
+        .map(|s| ctx.format_shortcut(&s))
+        .unwrap_or_default()
+}
+
+/// `"{label} ({shortcut})"` for a tooltip.
+pub fn with_shortcut(ctx: &egui::Context, label: &str, cmd: Command) -> String {
+    match key_for(cmd) {
+        Some(s) => format!("{label} ({})", ctx.format_shortcut(&s)),
+        None => label.to_owned(),
+    }
 }
 
 /// `AppModel`'s HQ state machine (session-spec §5): the mode, whether HQ is ACTIVE, and the
@@ -375,6 +456,11 @@ pub struct NegApp {
 
     histories: HashMap<PathBuf, History>,
     pending: PendingCommit,
+    /// The central (canvas) region of the last frame — floating windows stay inside it.
+    central_rect: Option<Rect>,
+    /// Added to `Instant::now()` for every timer (sidecar debounce, history coalesce, HQ
+    /// debounce) — tests advance it instead of sleeping.
+    clock_offset: Duration,
     save_due: Option<Instant>,
     status_message: Option<String>,
     copied: Option<ExposureSettings>,
@@ -400,7 +486,7 @@ pub struct NegApp {
 }
 
 struct FolderDialog {
-    text: String,
+    browser: crate::dialogs::FolderBrowser,
 }
 
 impl NegApp {
@@ -408,16 +494,16 @@ impl NegApp {
     pub fn new(cc: &eframe::CreationContext<'_>, options: AppOptions) -> Self {
         crate::theme::install(&cc.egui_ctx);
         let prefs: AppPrefs = if options.persist {
-            cc.storage
-                .and_then(|s| eframe::get_value::<AppPrefs>(s, PREFS_KEY))
-                .unwrap_or_default()
+            cc.storage.map(AppPrefs::load).unwrap_or_default()
         } else {
             AppPrefs::default()
         };
-        let backend: Arc<dyn RawBackend> = Arc::from(negsession::default_backend());
-        let renderer = options
-            .renderer
-            .unwrap_or_else(|| shared_or_default_renderer(cc));
+        let backend: Arc<dyn RawBackend> = options
+            .backend
+            .unwrap_or_else(|| Arc::from(negsession::default_backend()));
+        let renderer = options.renderer.unwrap_or_else(|| {
+            crate::presenter_gpu::shared_or_default_renderer(cc.wgpu_render_state.as_ref())
+        });
         // --- U2: tools & dialogs --- the zero-copy presenter when the device is shared
         let (presenter, texture_sink) = match options.presenter {
             Some(p) => (p, None),
@@ -470,6 +556,8 @@ impl NegApp {
             info: None,
             histories: HashMap::new(),
             pending: PendingCommit::default(),
+            central_rect: None,
+            clock_offset: Duration::ZERO,
             save_due: None,
             status_message: None,
             copied: None,
@@ -559,9 +647,56 @@ impl NegApp {
         self.hq.active
     }
 
+    /// The app's clock (`Instant::now()` + the test offset).
+    fn now(&self) -> Instant {
+        Instant::now() + self.clock_offset
+    }
+
+    /// Test hook: move the app's clock forward (timers fire on the next frame).
+    #[doc(hidden)]
+    pub fn advance_clock(&mut self, by: Duration) {
+        self.clock_offset += by;
+    }
+
+    /// Test hook: open `root` as the library folder (the Open Folder dialog's confirm).
+    #[doc(hidden)]
+    pub fn open_folder_path(&mut self, ctx: &egui::Context, root: PathBuf) {
+        self.open_folder(ctx, root, false);
+    }
+
+    /// Test hook: a draggable control reports begin/end (`setControlEditing`).
+    #[doc(hidden)]
+    pub fn control_editing(&mut self, editing: bool) {
+        self.set_control_editing(editing);
+    }
+
+    /// Test hook: the settings mirror (an edit through it behaves like a control change).
+    #[doc(hidden)]
+    pub fn settings_mut(&mut self) -> &mut ExposureSettings {
+        &mut self.settings
+    }
+
+    /// The central (canvas + control bar) region of the last frame.
+    pub fn central_rect(&self) -> Option<Rect> {
+        self.central_rect
+    }
+
+    /// The error pill text on the canvas, if any.
+    pub fn render_error(&self) -> Option<&str> {
+        self.render_error.as_deref()
+    }
+
+    /// Whether a modal dialog (Export, Profiles, Open Folder) is up.
+    pub fn modal_open(&self) -> bool {
+        self.dialogs.is_modal_open() || self.folder_dialog.is_some()
+    }
+
     // ───────────────────────────── folder / selection ─────────────────────────────
 
     fn open_folder(&mut self, ctx: &egui::Context, root: PathBuf, remember: bool) {
+        // The open frame's pending sidecar save belongs to it: write it before the selection
+        // goes away (`save_now` writes nothing once `selection` is `None`).
+        self.flush_save();
         let key = root.to_string_lossy().into_owned();
         let collapsed: HashSet<String> = self
             .prefs
@@ -708,10 +843,10 @@ impl NegApp {
         self.schedule_render();
         if !self.is_restoring_settings {
             if self.autosave {
-                self.save_due = Some(Instant::now() + SAVE_DEBOUNCE);
+                self.save_due = Some(self.now() + SAVE_DEBOUNCE);
             }
             if !self.is_navigating_history {
-                self.pending.schedule(Instant::now());
+                self.pending.schedule(self.now());
             }
         }
     }
@@ -778,6 +913,16 @@ impl NegApp {
         }
     }
 
+    /// A named action: set `next` with `label` armed for its history entry — only when it
+    /// changes something (an unchanged action must not leave the label armed for the NEXT,
+    /// unrelated edit: "disarmed if nothing changed").
+    fn set_labeled(&mut self, next: ExposureSettings, label: &str) {
+        if next != self.settings {
+            self.arm_label(label);
+            self.settings = next;
+        }
+    }
+
     fn arm_label(&mut self, label: &str) {
         let label = label.to_owned();
         if let Some(h) = self.history() {
@@ -787,6 +932,17 @@ impl NegApp {
 
     fn set_control_editing(&mut self, editing: bool) {
         if self.pending.set_control_editing(editing) {
+            self.commit_history();
+        }
+    }
+
+    /// End every open drag session at once (pointer released) and commit like the last end.
+    fn release_control_editing(&mut self) {
+        let mut ended = false;
+        while self.pending.is_dragging() {
+            ended = self.pending.set_control_editing(false);
+        }
+        if ended {
             self.commit_history();
         }
     }
@@ -812,10 +968,7 @@ impl NegApp {
     fn on_zoom(&mut self, zoom: f32) {
         self.canvas_zoom = zoom;
         let (has_sel, tool) = (self.selection.is_some(), self.tool_active());
-        if self
-            .hq
-            .on_zoom(f64::from(zoom), has_sel, tool, Instant::now())
-        {
+        if self.hq.on_zoom(f64::from(zoom), has_sel, tool, self.now()) {
             self.schedule_render();
         }
     }
@@ -839,14 +992,9 @@ impl NegApp {
         let has_sel = self.selection.is_some();
         match cmd {
             Command::OpenFolder => {
-                let text = self
-                    .library
-                    .root
-                    .clone()
-                    .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_default();
-                self.folder_dialog = Some(FolderDialog { text });
+                self.folder_dialog = Some(FolderDialog {
+                    browser: crate::dialogs::FolderBrowser::new(self.library.root.as_deref()),
+                });
             }
             // --- U2: tools & dialogs ---
             Command::ChooseDefaults => self.dialogs.open_profiles(&self.profiles),
@@ -910,14 +1058,12 @@ impl NegApp {
             Command::ResetAll => {
                 if has_sel {
                     let next = self.profiles.default_settings();
-                    self.arm_label(labels::RESET_ALL);
-                    self.settings = next;
+                    self.set_labeled(next, labels::RESET_ALL);
                 }
             }
             Command::StartFromScratch => {
                 if has_sel {
-                    self.arm_label(labels::START_FROM_SCRATCH);
-                    self.settings = ExposureSettings::default();
+                    self.set_labeled(ExposureSettings::default(), labels::START_FROM_SCRATCH);
                 }
             }
             Command::ToggleLibrary => self.prefs.library_visible = !self.prefs.library_visible,
@@ -956,20 +1102,23 @@ impl NegApp {
             // --- end U3 ---
             Command::RotateLeft => {
                 if has_sel {
-                    self.arm_label(labels::ROTATE_CCW);
-                    self.settings.rotation = (self.settings.rotation - 90).rem_euclid(360);
+                    let mut next = self.settings.clone();
+                    next.rotation = (next.rotation - 90).rem_euclid(360);
+                    self.set_labeled(next, labels::ROTATE_CCW);
                 }
             }
             Command::RotateRight => {
                 if has_sel {
-                    self.arm_label(labels::ROTATE_CW);
-                    self.settings.rotation = (self.settings.rotation + 90).rem_euclid(360);
+                    let mut next = self.settings.clone();
+                    next.rotation = (next.rotation + 90).rem_euclid(360);
+                    self.set_labeled(next, labels::ROTATE_CW);
                 }
             }
             Command::Flip => {
                 if has_sel {
-                    self.arm_label(labels::FLIP_HORIZONTAL);
-                    self.settings.flip_horizontal = !self.settings.flip_horizontal;
+                    let mut next = self.settings.clone();
+                    next.flip_horizontal = !next.flip_horizontal;
+                    self.set_labeled(next, labels::FLIP_HORIZONTAL);
                 }
             }
             // --- U2: tools & dialogs ---
@@ -989,38 +1138,46 @@ impl NegApp {
             Command::ClearCropAndStraighten => {
                 if has_sel {
                     let had_crop = self.settings.crop_rect.is_some();
-                    let had_angle = self.settings.fine_rotation.abs() > 1e-9;
+                    let had_angle = self.settings.fine_rotation != 0.0;
                     let label = match (had_crop, had_angle) {
                         (true, true) => labels::CROP_AND_STRAIGHTEN_CLEARED,
                         (true, false) => labels::CROP_CLEARED,
                         _ => labels::STRAIGHTEN_CLEARED,
                     };
-                    self.arm_label(label);
-                    self.settings.crop_rect = None;
-                    self.settings.fine_rotation = 0.0;
+                    let mut next = self.settings.clone();
+                    next.crop_rect = None;
+                    next.fine_rotation = 0.0;
+                    self.set_labeled(next, label);
                 }
             }
             Command::ClearAnalysis => {
-                if has_sel && self.settings.analysis_rect.is_some() {
-                    self.arm_label(labels::ANALYSIS_REGION_CLEARED);
-                    self.settings.analysis_rect = None;
-                    self.settings.analysis_rect_fine_rotation = 0.0;
+                if has_sel {
+                    let mut next = self.settings.clone();
+                    next.analysis_rect = None;
+                    next.analysis_rect_fine_rotation = 0.0;
+                    self.set_labeled(next, labels::ANALYSIS_REGION_CLEARED);
                 }
             }
-            // --- U3: darkroom --- Escape clears the strip first, then the placement
-            Command::Escape if self.strip.owns_canvas() || self.placement.is_active() => {
-                if self.strip.owns_canvas() {
-                    self.clear_test_strip();
-                } else {
-                    self.clear_zone_placement();
-                }
-            }
-            // --- end U3 ---
             Command::Escape => {
-                // --- U2: tools & dialogs --- dialogs first, then the crop tool cancels
+                // Modal dialogs first (the key monitor stands down while one is up), then the
+                // test strip, the zone placement, and the tools.
                 if self.dialogs.escape() {
                     return;
                 }
+                if self.folder_dialog.take().is_some() {
+                    return;
+                }
+                // --- U3: darkroom --- the strip first, then the placement
+                if self.strip.owns_canvas() {
+                    self.clear_test_strip();
+                    return;
+                }
+                if self.placement.is_active() {
+                    self.clear_zone_placement();
+                    return;
+                }
+                // --- end U3 ---
+                // --- U2: tools & dialogs --- the crop tool cancels
                 if self.tool_mode == ToolMode::Crop {
                     self.cancel_tool();
                     return;
@@ -1030,8 +1187,6 @@ impl NegApp {
                     self.tool_mode = ToolMode::None;
                     self.hq.refresh(f64::from(self.canvas_zoom), true, false);
                     self.schedule_render();
-                } else {
-                    self.folder_dialog = None;
                 }
             }
             Command::TestStrip => self.toggle_test_strip(), // --- U3: darkroom ---
@@ -1041,7 +1196,17 @@ impl NegApp {
     // ───────────────────────────── per-frame ─────────────────────────────
 
     fn handle_events(&mut self, ctx: &egui::Context) {
-        for evt in self.engine.poll() {
+        let events = self.engine.poll();
+        if let Some(reason) = self.engine.stopped() {
+            // Fatal: nothing renders any more — say so instead of "Developing…" forever.
+            let pill = format!("engine stopped: {reason}");
+            if self.render_error.as_deref() != Some(pill.as_str()) {
+                self.render_error = Some(pill);
+            }
+            self.developing = false;
+            self.analyzing = false;
+        }
+        for evt in events {
             match evt {
                 Evt::Opened {
                     path,
@@ -1055,8 +1220,15 @@ impl NegApp {
                     }
                     if let Err(e) = result {
                         self.developing = false;
-                        self.open_failed = Some(format!("Couldn't develop this image: {e}"));
-                        self.render_error = Some("Couldn't develop this image".into());
+                        self.analyzing = false;
+                        let name = path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| path.display().to_string());
+                        let message = format!("Couldn't open {name}: {e}");
+                        log::warn!("{message}");
+                        self.open_failed = Some(message.clone());
+                        self.render_error = Some(message);
                     }
                 }
                 Evt::Analyzing { path, generation } => {
@@ -1073,13 +1245,14 @@ impl NegApp {
                     info,
                     render_time,
                     latency,
+                    gpu,
                 } => {
                     if Some(path.as_path()) != self.selection.as_deref()
                         || generation < self.open_generation
                     {
                         continue;
                     }
-                    let frame = self.presenter.present(ctx, &output);
+                    let frame = self.presenter.present_frame(ctx, &output, gpu);
                     self.loupe.adopt(&output, frame);
                     self.histogram = output.histogram.map(Box::new);
                     self.density_range = output.density_range;
@@ -1138,13 +1311,20 @@ impl NegApp {
                     generation,
                     error,
                 } => {
+                    // After a failed open the pill already says why: the render of that
+                    // frame reports the same failure and must not replace it.
                     if Some(path.as_path()) == self.selection.as_deref()
                         && generation >= self.open_generation
+                        && self.open_failed.is_none()
                     {
                         self.developing = false;
                         self.analyzing = false;
                         self.render_error = Some(format!("Render failed: {error}"));
                     }
+                }
+                Evt::EngineError { message } => {
+                    self.clear_darkroom_layers();
+                    self.status_message = Some(message);
                 }
             }
         }
@@ -1156,6 +1336,7 @@ impl NegApp {
             if !keep && let Some(first) = self.library.flat.first().cloned() {
                 self.select(first, false, false);
             } else if !keep {
+                self.flush_save();
                 self.selection = None;
                 self.multi.clear();
             }
@@ -1163,7 +1344,12 @@ impl NegApp {
     }
 
     fn tick_timers(&mut self, ctx: &egui::Context) {
-        let now = Instant::now();
+        // A drag session can't outlive the pointer: if a control lost its drag-end (its row was
+        // disabled or rebuilt mid-drag), the release still ends the session and commits.
+        if self.pending.is_dragging() && !ctx.input(|i| i.pointer.any_down()) {
+            self.release_control_editing();
+        }
+        let now = self.now();
         if self.pending.is_due(now) {
             self.pending.cancel();
             self.commit_history();
@@ -1194,35 +1380,42 @@ impl NegApp {
         }
     }
 
+    /// The window key monitor. It stands down entirely while a text field has keyboard focus
+    /// (⌘Z there edits the text, not the image) — the field's own Return/Escape act — and,
+    /// while a modal dialog is up, it only routes Escape (which closes the dialog first).
     fn handle_keys(&mut self, ctx: &egui::Context) -> Vec<Command> {
         let mut cmds = Vec::new();
-        let text_focus = ctx.egui_wants_keyboard_input();
+        if ctx.egui_wants_keyboard_input() {
+            return cmds;
+        }
+        let modal = self.modal_open();
         ctx.input_mut(|i| {
+            if i.consume_key(Modifiers::NONE, Key::Escape) {
+                cmds.push(Command::Escape);
+            }
+            if modal {
+                return;
+            }
             for (s, c) in SHORTCUTS {
                 if i.consume_shortcut(s) {
                     cmds.push(*c);
                 }
             }
-            if !text_focus {
-                if i.consume_key(Modifiers::NONE, Key::ArrowLeft)
-                    || i.consume_key(Modifiers::NONE, Key::ArrowUp)
-                {
-                    cmds.push(Command::Previous);
-                }
-                if i.consume_key(Modifiers::NONE, Key::ArrowRight)
-                    || i.consume_key(Modifiers::NONE, Key::ArrowDown)
-                {
-                    cmds.push(Command::Next);
-                }
-                if i.consume_key(Modifiers::SHIFT, Key::Z) {
-                    cmds.push(Command::ToggleZones);
-                }
-                if i.consume_key(Modifiers::SHIFT, Key::T) {
-                    cmds.push(Command::TestStrip);
-                }
+            if i.consume_key(Modifiers::NONE, Key::ArrowLeft)
+                || i.consume_key(Modifiers::NONE, Key::ArrowUp)
+            {
+                cmds.push(Command::Previous);
             }
-            if i.consume_key(Modifiers::NONE, Key::Escape) {
-                cmds.push(Command::Escape);
+            if i.consume_key(Modifiers::NONE, Key::ArrowRight)
+                || i.consume_key(Modifiers::NONE, Key::ArrowDown)
+            {
+                cmds.push(Command::Next);
+            }
+            if i.consume_key(Modifiers::SHIFT, Key::Z) {
+                cmds.push(Command::ToggleZones);
+            }
+            if i.consume_key(Modifiers::SHIFT, Key::T) {
+                cmds.push(Command::TestStrip);
             }
         });
         cmds
@@ -1247,7 +1440,7 @@ impl NegApp {
         let item =
             |ui: &mut egui::Ui, label: &str, cmd: Command, enabled: bool, checked: bool| -> bool {
                 let mut b = egui::Button::new(if checked {
-                    format!("✓ {label}")
+                    format!("✔ {label}")
                 } else {
                     label.to_owned()
                 });
@@ -1460,80 +1653,15 @@ impl NegApp {
             .default_size(vec2(520.0, 420.0))
             .anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0))
             .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Folder");
-                    let te =
-                        egui::TextEdit::singleline(&mut dialog.text).desired_width(f32::INFINITY);
-                    let r = ui.add(te);
-                    if r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
-                        chosen = Some(PathBuf::from(dialog.text.trim()));
-                    }
-                });
-                let current = PathBuf::from(dialog.text.trim());
-                ui.horizontal(|ui| {
-                    if ui.button("↑ Parent").clicked()
-                        && let Some(parent) = current.parent()
-                    {
-                        dialog.text = parent.display().to_string();
-                    }
-                    if ui
-                        .add_enabled(current.is_dir(), egui::Button::new("Open"))
-                        .clicked()
-                    {
-                        chosen = Some(current.clone());
-                    }
-                    if ui.button("Cancel").clicked() {
-                        close = true;
-                    }
-                });
+                chosen = dialog.browser.ui(ui, "Open");
                 ui.separator();
-                let mut dirs: Vec<PathBuf> = std::fs::read_dir(&current)
-                    .map(|rd| {
-                        rd.flatten()
-                            .map(|e| e.path())
-                            .filter(|p| {
-                                p.is_dir()
-                                    && !p
-                                        .file_name()
-                                        .is_some_and(|n| n.to_string_lossy().starts_with('.'))
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                dirs.sort_by(|a, b| {
-                    negsession::library::natural_cmp(
-                        &a.file_name()
-                            .map(|n| n.to_string_lossy().into_owned())
-                            .unwrap_or_default(),
-                        &b.file_name()
-                            .map(|n| n.to_string_lossy().into_owned())
-                            .unwrap_or_default(),
-                    )
-                });
-                egui::ScrollArea::vertical()
-                    .max_height(300.0)
-                    .show(ui, |ui| {
-                        for d in dirs.iter().take(500) {
-                            let name = d
-                                .file_name()
-                                .map(|n| n.to_string_lossy().into_owned())
-                                .unwrap_or_default();
-                            let r = ui.selectable_label(false, format!("▸ {name}"));
-                            if r.double_clicked() {
-                                chosen = Some(d.clone());
-                            } else if r.clicked() {
-                                dialog.text = d.display().to_string();
-                            }
-                        }
-                    });
+                if ui.button("Cancel").clicked() {
+                    close = true;
+                }
             });
         if let Some(c) = chosen {
-            if c.is_dir() {
-                self.folder_dialog = None;
-                self.open_folder(ctx, c, true);
-            } else {
-                self.status_message = Some("Not a folder".into());
-            }
+            self.folder_dialog = None;
+            self.open_folder(ctx, c, true);
         } else if close || !open {
             self.folder_dialog = None;
         }
@@ -1737,6 +1865,7 @@ impl NegApp {
             &mut self.settings,
             self.histogram.as_deref(),
             enabled,
+            self.central_rect,
         );
         for a in actions {
             match a {
@@ -1830,6 +1959,26 @@ impl NegApp {
     }
 
     // ── read-outs and hooks for the selftest / tests ──
+
+    /// Whether the zone overlay is drawn: the preference, on the plain presentation only — no
+    /// tool, and (like the probe) not while View Original shows the stock look.
+    pub fn zone_overlay_shown(&self) -> bool {
+        self.prefs.show_zone_overlay && self.tool_mode == ToolMode::None && !self.baseline_held
+    }
+
+    /// Test hook: hold / release View Original.
+    #[doc(hidden)]
+    pub fn view_original(&mut self, on: bool) {
+        self.set_baseline(on);
+    }
+
+    /// The open image's history length.
+    pub fn history_len(&self) -> usize {
+        self.selection
+            .as_ref()
+            .and_then(|p| self.histories.get(p))
+            .map_or(0, |h| h.entries().len())
+    }
 
     /// Whether the zone overlay preference is on.
     pub fn zone_overlay_on(&self) -> bool {
@@ -2015,6 +2164,7 @@ impl eframe::App for NegApp {
             .frame(egui::Frame::new().fill(t.chrome))
             .show(ui, |ui| {
                 let full = ui.available_rect_before_wrap();
+                self.central_rect = Some(full);
                 let status_h = 18.0;
                 let canvas_rect = Rect::from_min_max(
                     full.min,
@@ -2040,11 +2190,12 @@ impl eframe::App for NegApp {
                 };
                 // --- U3: darkroom --- overlay layers (zone overlay, test strip, placement)
                 let plain = self.tool_mode == ToolMode::None;
+                let shown = self.zone_overlay_shown();
                 let mut zone_layer = self
                     .zones
                     .grid
                     .as_ref()
-                    .filter(|_| self.prefs.show_zone_overlay && plain)
+                    .filter(|_| shown)
                     .map(|grid| ZoneOverlayLayer { grid });
                 let mut overlays: Vec<&mut dyn CanvasOverlay> = Vec::new();
                 if let Some(z) = zone_layer.as_mut() {
@@ -2203,39 +2354,16 @@ impl eframe::App for NegApp {
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         if self.persist {
-            eframe::set_value(storage, PREFS_KEY, &self.prefs);
+            self.prefs.store(storage);
         }
     }
 
     fn on_exit(&mut self) {
         self.flush_save();
+        // A running batch stops after the frame in progress instead of finishing the batch
+        // while the window waits to close.
+        self.dialogs.cancel_export();
     }
-}
-
-/// Share eframe's wgpu device with the engine when there is one (zero-copy later; today the
-/// readback still crosses to the CPU), else the process default (headless GPU or CPU).
-fn shared_or_default_renderer(cc: &eframe::CreationContext<'_>) -> Arc<dyn Renderer> {
-    if std::env::var(neggpu_env_key())
-        .ok()
-        .is_some_and(|v| v.eq_ignore_ascii_case("off"))
-    {
-        return default_renderer();
-    }
-    if let Some(rs) = &cc.wgpu_render_state {
-        match GpuRenderer::from_existing(rs.device.clone(), rs.queue.clone(), rs.adapter.get_info())
-        {
-            Ok(gpu) => {
-                log::info!("renderer: {} (sharing the window's device)", gpu.name());
-                return Arc::new(gpu);
-            }
-            Err(e) => log::warn!("renderer: shared device refused ({e}); falling back"),
-        }
-    }
-    default_renderer()
-}
-
-fn neggpu_env_key() -> &'static str {
-    "NEG_GPU"
 }
 
 /// Reveal `path` in the platform file manager.

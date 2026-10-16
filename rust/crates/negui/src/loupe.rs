@@ -79,6 +79,18 @@ pub struct PresentedFrame {
 pub trait FramePresenter {
     /// Present `output`; `None` when it carried nothing presentable.
     fn present(&mut self, ctx: &egui::Context, output: &RenderOutput) -> Option<PresentedFrame>;
+    /// Present `output` together with the GPU texture that carries its pixels (the zero-copy
+    /// path; `gpu` is `None` for readback frames). The default ignores the texture — dropping
+    /// it frees its ring slot.
+    fn present_frame(
+        &mut self,
+        ctx: &egui::Context,
+        output: &RenderOutput,
+        gpu: Option<crate::presenter_gpu::GpuFrame>,
+    ) -> Option<PresentedFrame> {
+        drop(gpu);
+        self.present(ctx, output)
+    }
     /// Drop any held texture (selection cleared).
     fn clear(&mut self) {}
 }
@@ -592,7 +604,7 @@ pub fn control_bar(ui: &mut egui::Ui, input: &BarInput<'_>) -> Vec<BarAction> {
             if icon_button(ui, "rotate-ccw", 24.0, false, |p, r, c| {
                 rotate_icon(p, r, c, false)
             })
-            .on_hover_text("Rotate left (⌘[)")
+            .on_hover_text(crate::app::with_shortcut(ui.ctx(), "Rotate left", crate::app::Command::RotateLeft))
             .clicked()
             {
                 actions.push(BarAction::RotateCcw);
@@ -600,13 +612,13 @@ pub fn control_bar(ui: &mut egui::Ui, input: &BarInput<'_>) -> Vec<BarAction> {
             if icon_button(ui, "rotate-cw", 24.0, false, |p, r, c| {
                 rotate_icon(p, r, c, true)
             })
-            .on_hover_text("Rotate right (⌘])")
+            .on_hover_text(crate::app::with_shortcut(ui.ctx(), "Rotate right", crate::app::Command::RotateRight))
             .clicked()
             {
                 actions.push(BarAction::RotateCw);
             }
             if icon_button(ui, "flip", 24.0, false, flip_icon)
-                .on_hover_text("Flip horizontal (⇧⌘H)")
+                .on_hover_text(crate::app::with_shortcut(ui.ctx(), "Flip horizontal", crate::app::Command::Flip))
                 .clicked()
             {
                 actions.push(BarAction::Flip);
@@ -624,9 +636,10 @@ pub fn control_bar(ui: &mut egui::Ui, input: &BarInput<'_>) -> Vec<BarAction> {
             }
             let zones = badge(ui, "Zones", input.zones_on, true, &t);
             if zones
-                .on_hover_text(
-                    "Zone system overlay (⇧Z): Adams zones over the preview, same ruler as the densitometer",
-                )
+                .on_hover_text(format!(
+                    "Zone system overlay ({}): Adams zones over the preview, same ruler as the densitometer",
+                    crate::app::shortcut_text(ui.ctx(), crate::app::Command::ToggleZones)
+                ))
                 .clicked()
             {
                 actions.push(BarAction::ToggleZones);

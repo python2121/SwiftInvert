@@ -10,8 +10,8 @@ pub mod export;
 pub mod profiles;
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex};
 
 use egui::Key;
 use negkit::ExposureSettings;
@@ -75,6 +75,13 @@ impl DialogState {
         self.profiles.take().is_some()
     }
 
+    /// Ask a running batch to stop after its current frame (quit).
+    pub fn cancel_export(&self) {
+        if let Some(job) = &self.job {
+            job.cancel();
+        }
+    }
+
     /// The engine accepted a job: track it; the returned flag cancels it.
     pub fn start_job(&mut self, generation: u64, total: usize) -> Arc<AtomicBool> {
         let job = ExportJob::new(generation, total);
@@ -129,11 +136,24 @@ impl DialogState {
 }
 
 /// The in-app folder browser: a path field, ↑ Parent, and the sub-folders of the typed path
-/// (hidden ones skipped, natural order, capped at 500 rows).
+/// (hidden ones skipped, natural order, capped at 500 rows). The listing is read OFF the UI
+/// thread, once per path (a navigation or an edit of the field) — never per repaint, so a large
+/// or network folder can't stall the window; rows show "Loading…" until it lands.
 #[derive(Clone, Debug, Default)]
 pub struct FolderBrowser {
     pub text: String,
+    listing: Option<Listing>,
 }
+
+/// One path's listing, filled by a background thread.
+#[derive(Clone, Debug)]
+struct Listing {
+    path: PathBuf,
+    result: Arc<Mutex<Option<ListingResult>>>,
+}
+
+/// `(path is a folder, its visible sub-folders)`.
+type ListingResult = (bool, Vec<PathBuf>);
 
 impl FolderBrowser {
     pub fn new(start: Option<&Path>) -> Self {
@@ -142,7 +162,10 @@ impl FolderBrowser {
             .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
             .map(|p| p.display().to_string())
             .unwrap_or_default();
-        Self { text }
+        Self {
+            text,
+            listing: None,
+        }
     }
 
     /// The typed folder.
@@ -150,8 +173,48 @@ impl FolderBrowser {
         PathBuf::from(self.text.trim())
     }
 
-    /// Draw it; `Some(folder)` when the user confirmed one (Enter in the field, "Use This
-    /// Folder", or a double-click on a row).
+    /// Start listing `path` unless that listing is already current. Returns the listing's
+    /// result when it has landed.
+    fn listing_for(&mut self, ctx: &egui::Context, path: &Path) -> Option<ListingResult> {
+        if self.listing.as_ref().is_none_or(|l| l.path != path) {
+            let result = Arc::new(Mutex::new(None));
+            let slot = Arc::clone(&result);
+            let dir = path.to_path_buf();
+            let ctx = ctx.clone();
+            let spawned = std::thread::Builder::new()
+                .name("negui-folder-list".into())
+                .spawn(move || {
+                    let listed = (dir.is_dir(), subfolders(&dir));
+                    if let Ok(mut s) = slot.lock() {
+                        *s = Some(listed);
+                    }
+                    ctx.request_repaint();
+                });
+            if let Err(e) = spawned {
+                log::warn!("folder browser: could not list {}: {e}", path.display());
+                if let Ok(mut s) = result.lock() {
+                    *s = Some((false, Vec::new()));
+                }
+            }
+            self.listing = Some(Listing {
+                path: path.to_path_buf(),
+                result,
+            });
+        }
+        self.listing
+            .as_ref()
+            .and_then(|l| l.result.lock().ok().and_then(|r| r.clone()))
+    }
+
+    /// Whether the listing for the current path has landed (tests).
+    pub fn listing_ready(&self) -> bool {
+        self.listing.as_ref().is_some_and(|l| {
+            l.path == self.current() && l.result.lock().ok().is_some_and(|r| r.is_some())
+        })
+    }
+
+    /// Draw it; `Some(folder)` when the user confirmed one (Enter in the field, the confirm
+    /// button, or a double-click on a row).
     pub fn ui(&mut self, ui: &mut egui::Ui, confirm_label: &str) -> Option<PathBuf> {
         let mut chosen = None;
         ui.horizontal(|ui| {
@@ -161,6 +224,8 @@ impl FolderBrowser {
             }
         });
         let current = self.current();
+        let listed = self.listing_for(ui.ctx(), &current);
+        let is_dir = listed.as_ref().is_some_and(|(d, _)| *d);
         ui.horizontal(|ui| {
             if ui.button("↑ Parent").clicked()
                 && let Some(parent) = current.parent()
@@ -168,30 +233,35 @@ impl FolderBrowser {
                 self.text = parent.display().to_string();
             }
             if ui
-                .add_enabled(current.is_dir(), egui::Button::new(confirm_label))
+                .add_enabled(is_dir, egui::Button::new(confirm_label))
                 .clicked()
             {
                 chosen = Some(current.clone());
             }
         });
-        let dirs = subfolders(&current);
         egui::ScrollArea::vertical()
             .max_height(180.0)
             .auto_shrink([false, true])
-            .show(ui, |ui| {
-                for d in dirs.iter().take(500) {
-                    let name = d
-                        .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_default();
-                    let r = ui.selectable_label(false, format!("▸ {name}"));
-                    if r.double_clicked() {
-                        chosen = Some(d.clone());
-                    } else if r.clicked() {
-                        self.text = d.display().to_string();
+            .show(ui, |ui| match &listed {
+                None => {
+                    ui.weak("Loading…");
+                }
+                Some((_, dirs)) => {
+                    for d in dirs.iter().take(500) {
+                        let name = d
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        let r = ui.selectable_label(false, format!("▸ {name}"));
+                        if r.double_clicked() {
+                            chosen = Some(d.clone());
+                        } else if r.clicked() {
+                            self.text = d.display().to_string();
+                        }
                     }
                 }
             });
+        // Confirming re-checks the one chosen path (a single stat, on a click only).
         chosen.filter(|c| c.is_dir())
     }
 }

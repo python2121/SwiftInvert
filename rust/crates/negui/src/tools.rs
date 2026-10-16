@@ -846,6 +846,7 @@ impl ToolState {
 /// drag (`<base>_analysis.png`), the dialogs (`<base>_export.png`, `<base>_profiles.png`), a
 /// JPEG + TIFF export into a folder verified for existence and ICC tags, and the HQ-on
 /// full-tier adjust→frame latency. Sidecars are never written (autosave is off there).
+#[cfg(feature = "selftest")]
 pub mod selftest {
     use std::path::{Path, PathBuf};
     use std::time::{Duration, Instant};
@@ -1036,12 +1037,24 @@ pub mod selftest {
                 .with_destination(ExportDestination::Folder(dir.to_path_buf()));
             options.format = format;
             let dest = options.destination_path(&sel);
+            // A file from an earlier run must not pass for this run's output.
+            match std::fs::remove_file(&dest) {
+                Ok(()) => log::info!("selftest: removed the earlier {}", dest.display()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(format!("selftest: {}: {e}", dest.display())),
+            }
             let t0 = Instant::now();
             if !h.state_mut().start_export_for_selection(options) {
                 return Err("selftest: export refused".into());
             }
             wait(h, Duration::from_secs(180), |a| !a.exporting())?;
             let status = h.state().status_message().unwrap_or_default().to_owned();
+            if !status.starts_with("Exported 1 image") {
+                return Err(format!(
+                    "selftest: export of {} failed: {status}",
+                    sel.display()
+                ));
+            }
             let icc = icc_profile_len(&dest, format)?;
             log::info!(
                 "selftest: exported {} in {:.2} s ({status}); ICC profile {icc} bytes",

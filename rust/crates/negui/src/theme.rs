@@ -205,6 +205,27 @@ pub fn install_tokens(ctx: &egui::Context, t: Tokens) {
             .insert(egui::TextStyle::Heading, FontId::proportional(15.0));
         s.animation_time = 0.12;
     });
+    install_symbol_fallback(ctx);
+}
+
+/// egui's proportional family (Ubuntu Light → Noto Emoji → the emoji icon font) lacks many plain
+/// symbols the UI uses (arrows such as `↑ → ↶ ↷`, `▸`, `⇧`, geometric shapes) — they drew as
+/// boxes. The bundled monospace face (Hack) has them, so it joins the END of the proportional
+/// fallback chain: text still sets in Ubuntu Light, and only otherwise-missing symbols come
+/// from Hack.
+fn install_symbol_fallback(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+    let hack = fonts
+        .families
+        .get(&FontFamily::Monospace)
+        .and_then(|f| f.first())
+        .cloned();
+    if let (Some(hack), Some(prop)) = (hack, fonts.families.get_mut(&FontFamily::Proportional))
+        && !prop.contains(&hack)
+    {
+        prop.push(hack);
+        ctx.set_fonts(fonts);
+    }
 }
 
 /// sRGB float triple → `Color32` (the spec's gradient literals are sRGB floats).

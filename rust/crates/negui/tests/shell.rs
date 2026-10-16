@@ -314,6 +314,7 @@ fn history_commit_timing_rules() {
 
 /// Selftest smoke: the whole shell rendered headlessly from the sample RAW's folder writes a
 /// non-empty PNG of the expected size. Skipped (with a note) when the sample is absent.
+#[cfg(feature = "selftest")]
 #[test]
 fn selftest_writes_a_screenshot() {
     let sample = std::path::Path::new("/home/deck/Pictures/IMG_0420.CR3");
