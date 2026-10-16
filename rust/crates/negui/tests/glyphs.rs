@@ -58,11 +58,23 @@ fn every_ui_symbol_has_a_glyph() {
 fn tooltip_shortcuts_use_the_platform_modifier_names() {
     use negui::app::{Command, with_shortcut};
     let ctx = egui::Context::default();
-    let undo = with_shortcut(&ctx, "Undo", Command::Undo);
-    let redo = with_shortcut(&ctx, "Redo", Command::Redo);
-    let strip = with_shortcut(&ctx, "Test strip", Command::TestStrip);
+    // `format_shortcut` consults the loaded fonts on macOS (can the font draw ⌘?), which only
+    // exist inside a frame — a bare Context panicked there on the Mac.
+    let mut out = (String::new(), String::new(), String::new());
+    let _ = ctx.run(egui::RawInput::default(), |ctx| {
+        out = (
+            with_shortcut(ctx, "Undo", Command::Undo),
+            with_shortcut(ctx, "Redo", Command::Redo),
+            with_shortcut(ctx, "Test strip", Command::TestStrip),
+        );
+    });
+    let (undo, redo, strip) = out;
     if ctx.os() == egui::os::OperatingSystem::Mac {
-        assert_eq!(undo, "Undo (⌘Z)");
+        // symbols when the font has them, egui's textual fallback otherwise
+        assert!(
+            undo == "Undo (⌘Z)" || undo == "Undo (Cmd+Z)",
+            "unexpected Mac spelling: {undo}"
+        );
     } else {
         assert_eq!(undo, "Undo (Ctrl+Z)");
         assert_eq!(redo, "Redo (Ctrl+Shift+Z)");
