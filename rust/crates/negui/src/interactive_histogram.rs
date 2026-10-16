@@ -306,14 +306,13 @@ fn body(
         } else {
             t.text_secondary
         };
+        // A drawn ✕ (the bundled fonts have no U+2715).
         ui.painter().circle_filled(c, 6.0, col.gamma_multiply(0.35));
-        ui.painter().text(
-            c,
-            egui::Align2::CENTER_CENTER,
-            "✕",
-            egui::FontId::proportional(9.0),
-            col,
-        );
+        let d = 2.5;
+        for (a, b) in [(vec2(-d, -d), vec2(d, d)), (vec2(-d, d), vec2(d, -d))] {
+            ui.painter()
+                .line_segment([c + a, c + b], Stroke::new(1.3, col));
+        }
         if resp.clicked() {
             remove = Some(i);
         }
@@ -330,7 +329,7 @@ fn body(
     ui.label(
         egui::RichText::new(
             "Drag in the plot to move tones: left of the grab stretches, right compresses. \
-             Release to plant an anchor — further drags work between anchors; ✕ removes one.",
+             Release to plant an anchor — further drags work between anchors; × removes one.",
         )
         .size(10.5)
         .color(t.text_secondary),

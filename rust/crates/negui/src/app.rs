@@ -1811,6 +1811,28 @@ impl NegApp {
     pub fn interactive_histogram_open(&self) -> bool {
         self.levels.open
     }
+
+    /// The current history entry's label for the open image (tests).
+    pub fn current_history_label(&self) -> Option<String> {
+        let h = self
+            .selection
+            .as_ref()
+            .and_then(|p| self.histories.get(p))?;
+        h.entries().get(h.index()).map(|e| e.label.clone())
+    }
+
+    /// Whether zone placement is up.
+    pub fn zone_placement_active(&self) -> bool {
+        self.placement.is_active()
+    }
+
+    /// Close the Interactive Histogram window.
+    pub fn close_interactive_histogram(&mut self) {
+        if self.levels.drag_index.take().is_some() {
+            self.set_control_editing(false);
+        }
+        self.levels.open = false;
+    }
 }
 // --- end U3 ---
 
@@ -1967,7 +1989,7 @@ impl eframe::App for NegApp {
                         has_selection: self.selection.is_some(),
                         hq_mode: self.hq.mode,
                         hq_active: self.hq.active,
-                        zones_on: false,
+                        zones_on: self.prefs.show_zone_overlay, // --- U3: darkroom ---
                         canvas_color: self.prefs.canvas_color,
                         readout: &readout,
                     },

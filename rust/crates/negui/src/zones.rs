@@ -14,8 +14,9 @@ use crate::theme::Tokens;
 
 /// Zone-strip cell size (points) — `ZoneStrip.cellWidth/cellHeight`.
 pub const STRIP_CELL: [f32; 2] = [9.0, 10.0];
-/// Reserved read-out width so the bar doesn't jump (`DensitometerReadout`: 210 pt).
-pub const READOUT_WIDTH: f32 = 210.0;
+/// Reserved read-out width so the bar doesn't jump (`DensitometerReadout`: 210 pt; wider here
+/// because the Mac's text is `fixedSize` and overflows its frame, egui's would clip).
+pub const READOUT_WIDTH: f32 = 250.0;
 
 /// What the control bar's read-out shows.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
