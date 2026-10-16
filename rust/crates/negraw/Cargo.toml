@@ -1,0 +1,38 @@
+[package]
+name = "negraw"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "RAW decode to scene-linear sensor-native RgbImage under the LibRaw contract; pure-Rust backend by default, LibRaw FFI behind a feature (L2)"
+
+# Own lint table (not `workspace = true`): the workspace FORBIDS `unsafe_code`, but the `libraw`
+# feature is FFI. Here it is `deny`, which `src/libraw/ffi.rs` may `allow` on its one module; the
+# crate root re-forbids it whenever the feature is off (`#![cfg_attr(not(feature = "libraw"), forbid(unsafe_code))]`).
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+too_many_arguments = "allow"
+type_complexity = "allow"
+
+[dependencies]
+negkit = { workspace = true }
+thiserror = { workspace = true }
+log = { workspace = true }
+lightcraft-raw = { workspace = true, optional = true }
+
+[build-dependencies]
+# Only used by the `libraw` feature: compile `csrc/negraw_libraw_shim.c` against the host's
+# `<libraw/libraw.h>` and link `libraw_r`. Versions resolve to the workspace lockfile's.
+cc = { version = "1", optional = true }
+pkg-config = { version = "0.3", optional = true }
+
+[features]
+default = ["lcraw"]
+## Pure-Rust decoder (lightcraft-raw).
+lcraw = ["dep:lightcraft-raw"]
+## LibRaw via FFI (needs libraw_r + its headers + pkg-config on the build host; byte-exact vs NegPy's rawpy decode).
+libraw = ["dep:cc", "dep:pkg-config"]

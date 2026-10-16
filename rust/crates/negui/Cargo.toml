@@ -1,0 +1,39 @@
+[package]
+name = "negui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "egui front end (eframe): library tree, loupe, controls, histogram, tools, dialogs (L5)"
+
+[features]
+default = ["selftest"]
+# The `--selftest` harness (`negui::selftest`, `negui::tools::selftest`) and its egui_kittest
+# dependency; off for a product build that ships without the test harness.
+selftest = ["dep:egui_kittest"]
+
+[lints]
+workspace = true
+
+[dependencies]
+negkit = { workspace = true }
+negsession = { workspace = true }
+egui = { workspace = true }
+eframe = { workspace = true, features = ["wgpu", "persistence"] }
+craft-ui = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }
+image = { workspace = true }
+# The headless screenshot harness behind `selftest` (`swiftinvert --selftest out.png [folder]`):
+# the whole app rendered offscreen through egui-wgpu — how the shell is verified without a window.
+egui_kittest = { workspace = true, features = ["wgpu", "eframe"], optional = true }
+
+# winit refuses to build on Linux without a windowing feature; eframe is reached through
+# egui_kittest in `cargo test -p negui`, where the app's own feature set is not unified in.
+[target.'cfg(target_os = "linux")'.dependencies]
+eframe = { workspace = true, features = ["wgpu", "persistence", "x11", "wayland"] }
+
+[dev-dependencies]
+negraw = { workspace = true }
+egui_kittest = { workspace = true, features = ["wgpu", "snapshot", "eframe"] }
