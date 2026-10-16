@@ -15,6 +15,38 @@ implementation. Scope: library grid, C-41 conversion with NegPy-quality auto
 metering, exposure/color controls, histogram, export. Camera RAW only; no
 B&W/E6, papers, crosstalk, retouch, or toning.
 
+## Rust port (branch `rust-port`, 2026-10-15/16)
+
+A full rewrite in Rust + egui + wgpu lives under `rust/` (Cargo workspace) and
+is the intended successor of both UI shells. **Start from `rust/HANDOFF.md`**
+(state, merge order, remaining work, Mac procedure, cleanup) and
+`rust/PLAN.md` (decisions, architecture, data contracts, test map, progress).
+Layering: `negkit` (pure math, port of NegativeKit — 267 fixture tests) →
+`negraw` (pure-Rust RAW via lightcraft-raw, LibRaw FFI behind `--features
+libraw`) → `neggpu` (ONE WGSL module for Metal/Vulkan/DX12, pinned to the CPU
+reference) → `negsession` (the ImageSession cache tower, sidecars, profiles,
+history, export) → `negui` + `apps/swiftinvert` (eframe shell) and
+`apps/negcli`. Sidecars are byte-compatible with this app's.
+
+```bash
+cd rust && ./ci.sh                      # fmt + clippy -D warnings + cargo test --workspace
+NEG_RAW_SAMPLE=/path/file.CR3 cargo test --workspace     # also runs the real-RAW smoke tests
+cargo run --release -p negcli -- bench /path/file.CR3   # CPU vs GPU bench table
+cargo run --release -p swiftinvert -- --selftest out.png <folder> --crop --teststrip --zones --latency
+NEG_GPU=off …                           # force the CPU reference renderer
+```
+
+Decisions that differ from this Swift tree, all recorded in `rust/PLAN.md` §0:
+the decoder defaults to LibRaw's white level (`2^bits − 1`) and image area;
+the CPU reference applies tone controls in the GPU's PARALLEL form (the Swift
+`ReferenceCurve` is sequential — a latent CPU/GPU divergence here, up to
+0.025 D with shadow + highlight controls combined); the Rust port follows the
+Mac app wherever it differs from the Qt bridge. A real bug in THIS tree was
+found by the port's reviews: `Sources/VulkanRenderKit/Shaders/NegPipeline.comp`
+lines 341-343 decompose the 1-D gid into (x, y) in float32, which mis-samples
+the Contrast Mask plane on the right edge of renders above 2^24 pixels (a 24 MP
+export with the mask on). Fix: integer `gid / outW`, `gid % outW`.
+
 ## Commands
 
 ```bash
