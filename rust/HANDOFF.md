@@ -15,7 +15,7 @@ Merged and green on `rust-port` (pushed to `origin`, github.com/python2121/Swift
 | `neggpu` (wgpu/WGSL) | parity vs CPU ~1e-7 on every control group, Vulkan AND Metal; host fixes from review 6 landed | 42 |
 | `negsession` (engine) + `negcli` | cache tower (ImageSession keys), sidecars, profiles, history, export (ICC), GpuRenderer, test strip, zone placement | 87 + gpu parity |
 | `negui` + `apps/swiftinvert` | the egui SHELL (U1) merged: library, loupe, controls table, histogram, history, menus, selftest | 7 |
-| **Total** | `NEG_RAW_SAMPLE=/home/deck/Pictures/IMG_0420.CR3 cargo test --workspace` | **418 passed** (Linux); 398 on the Mac before U1 |
+| **Total** | `NEG_RAW_SAMPLE=/home/deck/Pictures/IMG_0420.CR3 cargo test --workspace` | **431 passed** (Linux, incl. the S2 engine fixes); 398 on the Mac before U1 |
 
 Verified on the Mac (Apple M2, Rust 1.96, via ClaudeShip jobs): whole workspace builds and
 tests pass; `swiftinvert --selftest` renders a real negative headless (first render 71 ms,
@@ -26,12 +26,11 @@ Linux: `/home/deck/.cache/swiftinvert-wt/scratch-U1/shell*.png`.
 
 All worktrees are under `/home/deck/.cache/swiftinvert-wt/` (NOT /tmp — it's a 7.7 GB tmpfs
 that filled once). Each agent was asked to commit a compiling state with a DONE/PARTIAL list in
-the commit message and to report in ≤ 20 lines. **Merge order: S2 first, then U2, then U3**
+the commit message and to report in ≤ 20 lines. **S2 is MERGED (f4dc641, all 13 items done). Merge order now: U2, then U3**
 (U2 and U3 both add `// --- U2 ---` / `// --- U3 ---` blocks to `negui/src/app.rs`, `loupe.rs`,
 `engine.rs`; expect a small manual merge there).
 
-1. `wt/wave4-S2` — engine fix round from review 7 (`scratchpad/review7.md` is gone with the
-   session; the list is reproduced below). Worktree `wave4-S2`.
+1. ~~`wt/wave4-S2`~~ merged.
 2. `wt/wave4-U2` — tools & dialogs: Crop & Straighten, Crop for Analysis, Export dialog +
    batch, Choose Default Settings (profiles), GPU presenter (`presenter_gpu.rs`), selftest
    `--crop/--export`. Worktree `wave4-U2`.
@@ -43,7 +42,7 @@ After merging each: `cd rust && cargo fmt --all -- --check && cargo clippy --wor
 --all-targets -- -D warnings && NEG_RAW_SAMPLE=/home/deck/Pictures/IMG_0420.CR3 cargo test
 --workspace`, then push, then `git worktree remove --force <path>`.
 
-### The S2 list (engine review 7) — check the branch's commit message for what landed
+### The S2 list (engine review 7) — ALL LANDED in f4dc641 (kept for reference)
 1. sidecar/profile atomic writes: per-call unique temp name + fsync before rename.
 2. export: temp + rename (a failed encode must not truncate the previous file).
 3. `release_enhanced_tiers` keeps the MEDIUM tier (only the full tier is dropped) so HQ Auto
