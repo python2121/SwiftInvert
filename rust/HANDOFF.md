@@ -27,7 +27,7 @@ Linux: `/home/deck/.cache/swiftinvert-wt/scratch-U1/shell*.png`.
 
 All worktrees are under `/home/deck/.cache/swiftinvert-wt/` (NOT /tmp — it's a 7.7 GB tmpfs
 that filled once). Each agent was asked to commit a compiling state with a DONE/PARTIAL list in
-the commit message and to report in ≤ 20 lines. **ALL FOUR MERGED (S2, U2 scaffold, U3b darkroom, U2b tools/dialogs/presenter) — rust-port has the complete feature set; 462 tests green on Linux.** A final Opus review of `negui` (review 8) is the last open item, plus the Mac confirmation run.
+the commit message and to report in ≤ 20 lines. **ALL FOUR MERGED (S2, U2 scaffold, U3b darkroom, U2b tools/dialogs/presenter) — rust-port has the complete feature set; 462 tests green on Linux.** Review 8 (negui) is done and its fixes merged (agent F: 15 new tests; `tests/app_rules.rs`, `tests/glyphs.rs`). All worktrees on both machines are removed. **Nothing is in flight.**
 (U2 and U3 both add `// --- U2 ---` / `// --- U3 ---` blocks to `negui/src/app.rs`, `loupe.rs`,
 `engine.rs`; expect a small manual merge there).
 

@@ -312,5 +312,10 @@ not installed there, report and stop — no installs on the Mac without the user
 | 3 | reviews (Opus darkroom, Sonnet quality) | reviewers | done | no formula divergences; 1 GLSL bug found (f32 gid split past 2^24 px); 6 robustness fixes landed (2aaaa56, 6c40f72); deferred: private fields on RgbImage/Plane, #[must_use], blur allocations, fixtures module behind a feature |
 | 3 | S negsession + negcli | agent S | done | 74 tests; cache tower with ImageSession's keys; sidecars/profiles/history/export (craft-cms ICC via image/tiff encoders); negcli decode/thumb/render/meter/bench/export; CPU proxy frame 91 ms, Session::open 285 ms |
 | 3 | G host fixes (review 6) | agent G | done | 42 tests; error scopes (no aborts), LRU cap 4, unmap guards, `required_limits`, one-slot large display tier (24 MP display 59 → 34 ms cached), Rgba8Unorm-only texture path, `pack_unorm8` |
-| 4 | I integration (negkit darkroom modules + GpuRenderer into negsession, test strip, zone placement) | agent I | in progress | |
-| 4 | U1 egui shell | agent U1 | in progress | |
+| 4 | I integration | agent I | done | GpuRenderer, test strip, zone placement in the engine; GPU/CPU session parity incl. real mask plane |
+| 4 | U1 egui shell | agent U1 | done | library, loupe, controls table, histogram, history, menus, selftest |
+| 4 | S2 engine fixes (review 7) | agent S | done | 13/13 incl. atomic writes, render_into/render_to_texture, sRGB densitometer inverse |
+| 4 | U2/U2b tools + dialogs + GPU presenter | Fable U2 (scaffold) + Opus U2b | done | crop & straighten, analysis rect, export + batch, profiles picker, texture ring presenter |
+| 4 | U3b darkroom UI | Opus U3b | done | densitometer + zone strip, zone overlay, test strip, zone placement, interactive histogram |
+| 4 | review 8 (negui) + fix round F | Opus | done | 2 bugs (lost edit on folder change, sticky labels) + worker panic handling, modal key discipline, prefs split, glyphs — 15 tests |
+| — | **Totals** | | | **477 tests** Linux; Mac: 462 before F (final re-run pending at hand-off); Metal selftest adjust→frame 10 ms proxy / 56 ms HQ full |
