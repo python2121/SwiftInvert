@@ -281,7 +281,7 @@ not installed there, report and stop — no installs on the Mac without the user
 | Platform | GPU backend | Build/tests run | Status |
 |---|---|---|---|
 | Linux (SteamOS host, RADV NAVI33) | Vulkan | here | primary |
-| macOS (Macbook Air, Apple GPU) | Metal | via ClaudeShip job after push | pending |
+| macOS (Macbook Air, Apple M2) | Metal | via ClaudeShip job after push | **verified 2026-10-16**: whole workspace builds, 282 CPU tests + 29 GPU parity tests pass; libraw feature links and matches lcraw at LSB level |
 | Windows | DX12 | — | untested; wgpu-level only |
 | Web (wasm32) | WebGPU, CPU fallback | negkit only at first | later |
 
@@ -308,5 +308,6 @@ not installed there, report and stop — no installs on the Mac without the user
 | 2 | D reference chain | agent D | done | 42 tests; full chain ≤ 2.4e-7 vs 1e-4 (fixture AND live analysis); 1536 px render 54 ms (Swift 509) |
 | 2 | reviews (Opus ×2: reference, analysis) | reviewers | done | no bugs; tone controls moved to the GPU's parallel form (Swift CPU was sequential); live-chain test added |
 | 3 | M contrast mask / crop geometry / densitometry / zones / test strip / zone placement | agent M | done | 83 tests; plane 3e-7, masked chain 1.5e-7; negkit now 267 tests, fully ported |
-| 3 | G neggpu | agent G | in progress | |
+| 3 | G neggpu | agent G | done | 34 tests; GPU vs CPU ~1e-7 mean on every control group (gates 0.01/0.04); rgba8 ≤ 0.5/255; histogram exact; **Vulkan (NAVI33): 1.68 ms proxy frame, 0.242 s 24 MP; Metal (Apple M2): 3.09 ms proxy frame, 0.126 s 24 MP — all 29 parity tests pass on both** from one WGSL module; >2^24-pixel masked render pinned (the GLSL's f32 gid split was wrong there) |
+| 3 | reviews (Opus darkroom, Sonnet quality) | reviewers | done | no formula divergences; 1 GLSL bug found (f32 gid split past 2^24 px); 6 robustness fixes landed (2aaaa56, 6c40f72); deferred: private fields on RgbImage/Plane, #[must_use], blur allocations, fixtures module behind a feature |
 | 3 | S negsession + negcli | agent S | in progress | |
