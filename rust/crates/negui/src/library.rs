@@ -31,7 +31,11 @@ enum ThumbSlot {
 /// What the library asked the app to do.
 #[derive(Clone, Debug, PartialEq)]
 pub enum LibraryAction {
-    Select { path: PathBuf, additive: bool, range: bool },
+    Select {
+        path: PathBuf,
+        additive: bool,
+        range: bool,
+    },
     ChooseFolder,
     ToggleLibrary,
     /// Collapse state changed (persist).
@@ -89,18 +93,25 @@ impl LibraryState {
     }
 
     /// Start scanning `root` on a thread (`build_tree`); `poll` adopts the result.
-    pub fn open_folder(&mut self, root: PathBuf, collapsed: HashSet<String>, repaint: impl Fn() + Send + 'static) {
+    pub fn open_folder(
+        &mut self,
+        root: PathBuf,
+        collapsed: HashSet<String>,
+        repaint: impl Fn() + Send + 'static,
+    ) {
         self.root = Some(root.clone());
         self.collapsed = collapsed;
         self.scanning = true;
         self.thumbs.clear();
         let (tx, rx) = channel();
         self.scan_rx = Some(rx);
-        let spawned = std::thread::Builder::new().name("negui-scan".into()).spawn(move || {
-            let tree = build_tree(&root);
-            let _ = tx.send((root, tree));
-            repaint();
-        });
+        let spawned = std::thread::Builder::new()
+            .name("negui-scan".into())
+            .spawn(move || {
+                let tree = build_tree(&root);
+                let _ = tx.send((root, tree));
+                repaint();
+            });
         if spawned.is_err() {
             self.scanning = false;
             self.scan_rx = None;
@@ -115,7 +126,12 @@ impl LibraryState {
                 Ok((root, tree)) => {
                     if self.root.as_deref() == Some(root.as_path()) {
                         self.flat = tree.as_ref().map(flatten).unwrap_or_default();
-                        self.flat_index = self.flat.iter().enumerate().map(|(i, p)| (p.clone(), i)).collect();
+                        self.flat_index = self
+                            .flat
+                            .iter()
+                            .enumerate()
+                            .map(|(i, p)| (p.clone(), i))
+                            .collect();
                         self.tree = tree;
                         self.scanning = false;
                         self.scan_rx = None;
@@ -133,8 +149,15 @@ impl LibraryState {
             match self.thumb_rx.try_recv() {
                 Ok((path, Some(img))) => {
                     let size = img.size;
-                    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                    let tex = ctx.load_texture(format!("thumb:{name}"), img, egui::TextureOptions::LINEAR);
+                    let name = path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    let tex = ctx.load_texture(
+                        format!("thumb:{name}"),
+                        img,
+                        egui::TextureOptions::LINEAR,
+                    );
                     self.thumbs.insert(path, ThumbSlot::Ready(tex, size));
                 }
                 Ok((path, None)) => {
@@ -170,7 +193,10 @@ impl LibraryState {
         match (self.flat_index.get(from), self.flat_index.get(to)) {
             (Some(&a), Some(&b)) => {
                 let (lo, hi) = (a.min(b), a.max(b));
-                self.flat.get(lo..=hi).map(|s| s.to_vec()).unwrap_or_default()
+                self.flat
+                    .get(lo..=hi)
+                    .map(|s| s.to_vec())
+                    .unwrap_or_default()
             }
             _ => vec![to.to_path_buf()],
         }
@@ -188,7 +214,10 @@ impl LibraryState {
 
     /// Whether the thumbnail of `path` has been resolved (ready or known missing).
     pub fn thumbnail_settled(&self, path: &Path) -> bool {
-        matches!(self.thumbs.get(path), Some(ThumbSlot::Ready(..) | ThumbSlot::Missing))
+        matches!(
+            self.thumbs.get(path),
+            Some(ThumbSlot::Ready(..) | ThumbSlot::Missing)
+        )
     }
 
     fn request_thumb(&mut self, path: &Path) {
@@ -201,7 +230,11 @@ impl LibraryState {
     }
 
     fn identity(&self, folder: &Path) -> String {
-        let rel = self.root.as_deref().and_then(|r| folder.strip_prefix(r).ok()).unwrap_or(folder);
+        let rel = self
+            .root
+            .as_deref()
+            .and_then(|r| folder.strip_prefix(r).ok())
+            .unwrap_or(folder);
         rel.components()
             .map(|c| c.as_os_str().to_string_lossy().into_owned())
             .collect::<Vec<_>>()
@@ -214,7 +247,8 @@ fn decode_thumbnail(backend: &dyn RawBackend, path: &Path) -> Option<egui::Color
     let bytes = backend.thumbnail(path).ok().flatten()?;
     let cursor = std::io::Cursor::new(bytes);
     let mut decoder = image::codecs::jpeg::JpegDecoder::new(cursor).ok()?;
-    let orientation = image::ImageDecoder::orientation(&mut decoder).unwrap_or(image::metadata::Orientation::NoTransforms);
+    let orientation = image::ImageDecoder::orientation(&mut decoder)
+        .unwrap_or(image::metadata::Orientation::NoTransforms);
     let mut img = image::DynamicImage::from_decoder(decoder).ok()?;
     img.apply_orientation(orientation);
     let (w, h) = (img.width(), img.height());
@@ -231,7 +265,10 @@ fn decode_thumbnail(backend: &dyn RawBackend, path: &Path) -> Option<egui::Color
     };
     let rgba = img.to_rgba8();
     let size = [rgba.width() as usize, rgba.height() as usize];
-    Some(egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw()))
+    Some(egui::ColorImage::from_rgba_unmultiplied(
+        size,
+        rgba.as_raw(),
+    ))
 }
 
 /// The library panel contents (header + tree).
@@ -251,7 +288,12 @@ pub fn library_panel(
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| "Library".to_owned());
         ui.add(egui::Label::new(egui::RichText::new(name).size(12.5).strong()).truncate())
-            .on_hover_text(lib.root.as_deref().map(|p| p.display().to_string()).unwrap_or_default());
+            .on_hover_text(
+                lib.root
+                    .as_deref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default(),
+            );
         if lib.scanning {
             ui.add(egui::Spinner::new().size(12.0));
         }
@@ -328,15 +370,31 @@ fn folder_node(
     let cx = row.left() + indent + 8.0;
     let cy = row.center().y;
     let pts = if collapsed {
-        vec![pos2(cx - 2.0, cy - 4.0), pos2(cx + 2.0, cy), pos2(cx - 2.0, cy + 4.0)]
+        vec![
+            pos2(cx - 2.0, cy - 4.0),
+            pos2(cx + 2.0, cy),
+            pos2(cx - 2.0, cy + 4.0),
+        ]
     } else {
-        vec![pos2(cx - 4.0, cy - 2.0), pos2(cx, cy + 2.0), pos2(cx + 4.0, cy - 2.0)]
+        vec![
+            pos2(cx - 4.0, cy - 2.0),
+            pos2(cx, cy + 2.0),
+            pos2(cx + 4.0, cy - 2.0),
+        ]
     };
     p.add(egui::Shape::line(pts, Stroke::new(1.5, t.text_secondary)));
     // folder glyph
     let fx = cx + 12.0;
-    p.rect_filled(Rect::from_min_size(pos2(fx, cy - 4.0), vec2(12.0, 9.0)), 1.5, t.text_secondary.gamma_multiply(0.8));
-    p.rect_filled(Rect::from_min_size(pos2(fx, cy - 6.0), vec2(5.0, 3.0)), 1.0, t.text_secondary.gamma_multiply(0.8));
+    p.rect_filled(
+        Rect::from_min_size(pos2(fx, cy - 4.0), vec2(12.0, 9.0)),
+        1.5,
+        t.text_secondary.gamma_multiply(0.8),
+    );
+    p.rect_filled(
+        Rect::from_min_size(pos2(fx, cy - 6.0), vec2(5.0, 3.0)),
+        1.0,
+        t.text_secondary.gamma_multiply(0.8),
+    );
     p.text(
         pos2(fx + 18.0, cy),
         Align2::LEFT_CENTER,
@@ -378,7 +436,9 @@ fn folder_body(
     let t = Tokens::get(ui.ctx());
     let indent = INDENT * depth as f32;
     let avail = (ui.available_width() - indent - 4.0).max(CELL_MIN);
-    let cols = ((avail + CELL_GAP) / (CELL_MIN + CELL_GAP)).floor().max(1.0) as usize;
+    let cols = ((avail + CELL_GAP) / (CELL_MIN + CELL_GAP))
+        .floor()
+        .max(1.0) as usize;
     let cell_w = ((avail - CELL_GAP * (cols as f32 - 1.0)) / cols as f32).min(CELL_MAX);
     let cell_h = cell_w * 2.0 / 3.0;
     let rows = node.files.len().div_ceil(cols);
@@ -420,10 +480,22 @@ fn folder_body(
                 p.add(egui::Shape::mesh(mesh));
             }
             Some(ThumbSlot::Missing) => {
-                p.text(cell.center(), Align2::CENTER_CENTER, "RAW", t.font(11.0), t.text_tertiary);
+                p.text(
+                    cell.center(),
+                    Align2::CENTER_CENTER,
+                    "RAW",
+                    t.font(11.0),
+                    t.text_tertiary,
+                );
             }
             _ => {
-                p.text(cell.center(), Align2::CENTER_CENTER, "…", t.font(12.0), t.text_tertiary);
+                p.text(
+                    cell.center(),
+                    Align2::CENTER_CENTER,
+                    "…",
+                    t.font(12.0),
+                    t.text_tertiary,
+                );
             }
         }
         let is_current = selection == Some(path.as_path());
@@ -436,17 +508,27 @@ fn folder_body(
                 StrokeKind::Inside,
             );
         } else if resp.hovered() {
-            p.rect_stroke(cell, 6.0, Stroke::new(1.0, t.button_border), StrokeKind::Inside);
+            p.rect_stroke(
+                cell,
+                6.0,
+                Stroke::new(1.0, t.button_border),
+                StrokeKind::Inside,
+            );
         }
         if let Some(idx) = lib.index_of(path) {
             let text = idx.to_string();
             let galley = p.layout_no_wrap(text, t.font(9.0), Color32::WHITE);
             let size = galley.size() + vec2(8.0, 2.0);
-            let badge = Rect::from_min_size(pos2(cell.left() + 5.0, cell.bottom() - 5.0 - size.y), size);
+            let badge =
+                Rect::from_min_size(pos2(cell.left() + 5.0, cell.bottom() - 5.0 - size.y), size);
             p.rect_filled(badge, size.y / 2.0, Color32::from_black_alpha(140));
             p.galley(badge.min + vec2(4.0, 1.0), galley, Color32::WHITE);
         }
-        let resp = resp.on_hover_text(path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
+        let resp = resp.on_hover_text(
+            path.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        );
         if resp.clicked() {
             actions.push(LibraryAction::Select {
                 path: path.clone(),

@@ -31,9 +31,26 @@ pub fn bar_height(count: u32, max_count: u32, log: bool) -> f32 {
 
 /// Per-channel clip fractions at one end: `bins[c·256 + bin] / Σ bins[0..256]` (the R total).
 pub fn clip_fractions(bins: &Histogram256, bin: usize) -> [f64; 3] {
-    let total: f64 = bins.iter().take(256).map(|&c| f64::from(c)).sum::<f64>().max(1.0);
+    let total: f64 = bins
+        .iter()
+        .take(256)
+        .map(|&c| f64::from(c))
+        .sum::<f64>()
+        .max(1.0);
     let at = |c: usize| bins.get(c * 256 + bin).map_or(0.0, |&v| f64::from(v)) / total;
     [at(0), at(1), at(2)]
+}
+
+/// Screen-composite of `colors` (each at `alpha` over black): `1 − Π(1 − a·c)`.
+fn screen_of(colors: impl Iterator<Item = [f32; 3]>, alpha: f32) -> Color32 {
+    let mut acc = [1.0f32; 3];
+    for c in colors {
+        for k in 0..3 {
+            acc[k] *= 1.0 - alpha * c[k];
+        }
+    }
+    let q = |v: f32| ((1.0 - v).clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+    Color32::from_rgb(q(acc[0]), q(acc[1]), q(acc[2]))
 }
 
 /// UI state the panel keeps between frames.
@@ -102,25 +119,40 @@ pub fn histogram_panel(
     let log = !state.linear;
     let inner = chart.shrink2(vec2(0.0, 4.0));
     let bar_w = inner.width() / 256.0;
-    let channel_colors = [
-        Color32::from_rgba_unmultiplied(217, 26, 26, 150),
-        Color32::from_rgba_unmultiplied(26, 204, 38, 150),
-        Color32::from_rgba_unmultiplied(38, 64, 242, 150),
-    ];
-    for (c, color) in channel_colors.iter().enumerate() {
-        let max = bins.iter().skip(c * 256).take(256).copied().max().unwrap_or(0);
-        for i in 0..256usize {
+    // Screen-blended channel fills (the Mac's `.screen` blend), exact per bin: stack the three
+    // bar heights and paint each band with the screen composite of the channels covering it.
+    let channel_colors = [[0.85f32, 0.1, 0.1], [0.1, 0.8, 0.15], [0.15, 0.25, 0.95]];
+    let maxes: [u32; 3] = std::array::from_fn(|c| {
+        bins.iter()
+            .skip(c * 256)
+            .take(256)
+            .copied()
+            .max()
+            .unwrap_or(0)
+    });
+    for i in 0..256usize {
+        let mut hs: [(f32, usize); 3] = std::array::from_fn(|c| {
             let count = bins.get(c * 256 + i).copied().unwrap_or(0);
-            let h = bar_height(count, max, log) * inner.height();
-            if h <= 0.0 {
+            (bar_height(count, maxes[c], log) * inner.height(), c)
+        });
+        hs.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let x0 = inner.left() + bar_w * i as f32;
+        let mut y_from = 0.0f32;
+        for (k, (h, _)) in hs.iter().enumerate() {
+            if *h <= y_from {
                 continue;
             }
-            let x0 = inner.left() + bar_w * i as f32;
+            // channels covering this band: this one and every taller one
+            let color = screen_of(hs.iter().skip(k).map(|(_, c)| channel_colors[*c]), 0.85);
             painter.rect_filled(
-                Rect::from_min_max(pos2(x0, inner.bottom() - h), pos2(x0 + bar_w + 0.5, inner.bottom())),
+                Rect::from_min_max(
+                    pos2(x0, inner.bottom() - h),
+                    pos2(x0 + bar_w + 0.5, inner.bottom() - y_from),
+                ),
                 0.0,
-                *color,
+                color,
             );
+            y_from = *h;
         }
     }
     // luma stroked
@@ -129,20 +161,38 @@ pub fn histogram_panel(
         .map(|i| {
             let count = bins.get(768 + i).copied().unwrap_or(0);
             let h = bar_height(count, lmax, log) * inner.height();
-            pos2(inner.left() + inner.width() * i as f32 / 255.0, inner.bottom() - h)
+            pos2(
+                inner.left() + inner.width() * i as f32 / 255.0,
+                inner.bottom() - h,
+            )
         })
         .collect();
-    painter.add(egui::Shape::line(pts, Stroke::new(1.0, Color32::from_white_alpha(190))));
+    painter.add(egui::Shape::line(
+        pts,
+        Stroke::new(1.0, Color32::from_white_alpha(190)),
+    ));
 
     // clip indicators
     for (end_bin, left) in [(0usize, true), (255usize, false)] {
         let f = clip_fractions(bins, end_bin);
         if f.iter().any(|&v| v > 0.001) {
-            let base_x = if left { chart.left() + 6.0 } else { chart.right() - 6.0 };
+            let base_x = if left {
+                chart.left() + 6.0
+            } else {
+                chart.right() - 6.0
+            };
             let y = chart.top() + 6.0;
-            let base = [Color32::from_rgb(230, 60, 60), Color32::from_rgb(60, 220, 70), Color32::from_rgb(70, 90, 240)];
+            let base = [
+                Color32::from_rgb(230, 60, 60),
+                Color32::from_rgb(60, 220, 70),
+                Color32::from_rgb(70, 90, 240),
+            ];
             for (c, col) in base.iter().enumerate() {
-                let alpha = if f.get(c).copied().unwrap_or(0.0) > 0.001 { 1.0 } else { 0.25 };
+                let alpha = if f.get(c).copied().unwrap_or(0.0) > 0.001 {
+                    1.0
+                } else {
+                    0.25
+                };
                 let dx = c as f32 * 9.0;
                 let x = if left { base_x + dx } else { base_x - dx };
                 let tri = if left {
@@ -150,7 +200,11 @@ pub fn histogram_panel(
                 } else {
                     vec![pos2(x, y), pos2(x - 8.0, y), pos2(x, y + 8.0)]
                 };
-                painter.add(egui::Shape::convex_polygon(tri, col.gamma_multiply(alpha), Stroke::NONE));
+                painter.add(egui::Shape::convex_polygon(
+                    tri,
+                    col.gamma_multiply(alpha),
+                    Stroke::NONE,
+                ));
             }
             let tip = format!(
                 "{} clipping — R {:.1}%  G {:.1}%  B {:.1}%",
@@ -160,14 +214,18 @@ pub fn histogram_panel(
                 f[2] * 100.0
             );
             let hit = Rect::from_min_size(
-                pos2(if left { chart.left() } else { chart.right() - 34.0 }, chart.top()),
+                pos2(
+                    if left {
+                        chart.left()
+                    } else {
+                        chart.right() - 34.0
+                    },
+                    chart.top(),
+                ),
                 vec2(34.0, 16.0),
             );
-            if resp.hover_pos().is_some_and(|p| hit.contains(p)) {
-                egui::show_tooltip_at_pointer(ui.ctx(), ui.layer_id(), ui.id().with("clip").with(left), |ui| {
-                    ui.label(tip);
-                });
-            }
+            ui.interact(hit, ui.id().with("clip").with(left), Sense::hover())
+                .on_hover_text(tip);
         }
     }
 
@@ -183,9 +241,16 @@ pub fn histogram_panel(
         let hr = ui.interact(hit, id, Sense::click_and_drag());
         let hovered = hr.hovered() || hr.dragged();
         let col = Color32::from_white_alpha(if hovered { 220 } else { 140 });
-        painter.line_segment([pos2(x, chart.top() + 8.0), pos2(x, chart.bottom())], Stroke::new(1.5, col));
+        painter.line_segment(
+            [pos2(x, chart.top() + 8.0), pos2(x, chart.bottom())],
+            Stroke::new(1.5, col),
+        );
         painter.add(egui::Shape::convex_polygon(
-            vec![pos2(x - 3.5, chart.top() + 1.0), pos2(x + 3.5, chart.top() + 1.0), pos2(x, chart.top() + 8.0)],
+            vec![
+                pos2(x - 3.5, chart.top() + 1.0),
+                pos2(x + 3.5, chart.top() + 1.0),
+                pos2(x, chart.top() + 8.0),
+            ],
             col,
             Stroke::NONE,
         ));
@@ -207,23 +272,23 @@ pub fn histogram_panel(
                 out.drag_begin = true;
             }
         } else if hr.dragged() {
-            if let (Some(d), Some(p)) = (state.drag, hr.interact_pointer_pos()) {
-                if d.white == white {
-                    let delta = f64::from((p.x - d.start_x) / travel) * HANDLE_FULL_TRAVEL_D;
-                    let v = if white {
-                        (d.start_offset - delta).clamp(0.0, HANDLE_FULL_TRAVEL_D)
-                    } else {
-                        (d.start_offset - delta).clamp(-HANDLE_FULL_TRAVEL_D, 0.0)
-                    };
-                    let slot = if white {
-                        &mut settings.white_point_offset
-                    } else {
-                        &mut settings.black_point_offset
-                    };
-                    if (*slot - v).abs() > 1e-12 {
-                        *slot = v;
-                        out.changed = true;
-                    }
+            if let (Some(d), Some(p)) = (state.drag, hr.interact_pointer_pos())
+                && d.white == white
+            {
+                let delta = f64::from((p.x - d.start_x) / travel) * HANDLE_FULL_TRAVEL_D;
+                let v = if white {
+                    (d.start_offset - delta).clamp(0.0, HANDLE_FULL_TRAVEL_D)
+                } else {
+                    (d.start_offset - delta).clamp(-HANDLE_FULL_TRAVEL_D, 0.0)
+                };
+                let slot = if white {
+                    &mut settings.white_point_offset
+                } else {
+                    &mut settings.black_point_offset
+                };
+                if (*slot - v).abs() > 1e-12 {
+                    *slot = v;
+                    out.changed = true;
                 }
             }
         } else if hr.drag_stopped() && state.drag.is_some_and(|d| d.white == white) {
@@ -237,12 +302,25 @@ pub fn histogram_panel(
         && let Some(p) = resp.hover_pos()
     {
         let bin = (((p.x - chart.left()) / chart.width() * 255.0) as i64).clamp(0, 255) as usize;
-        let total: f64 = bins.iter().take(256).map(|&c| f64::from(c)).sum::<f64>().max(1.0);
+        let total: f64 = bins
+            .iter()
+            .take(256)
+            .map(|&c| f64::from(c))
+            .sum::<f64>()
+            .max(1.0);
         let pct = |c: usize| bins.get(c * 256 + bin).map_or(0.0, |&v| f64::from(v)) / total * 100.0;
-        let text = format!("L {bin}  ·  R {:.1}  G {:.1}  B {:.1}", pct(0), pct(1), pct(2));
+        let text = format!(
+            "L {bin}  ·  R {:.1}  G {:.1}  B {:.1}",
+            pct(0),
+            pct(1),
+            pct(2)
+        );
         let galley = painter.layout_no_wrap(text, t.mono(8.5), Color32::from_white_alpha(230));
         let size = galley.size() + vec2(12.0, 4.0);
-        let r = Rect::from_center_size(pos2(chart.center().x, chart.top() + 4.0 + size.y / 2.0), size);
+        let r = Rect::from_center_size(
+            pos2(chart.center().x, chart.top() + 4.0 + size.y / 2.0),
+            size,
+        );
         painter.rect_filled(r, size.y / 2.0, Color32::from_black_alpha(180));
         painter.galley(r.min + vec2(6.0, 2.0), galley, Color32::WHITE);
     }
@@ -251,16 +329,30 @@ pub fn histogram_panel(
     out
 }
 
-fn footer(ui: &mut egui::Ui, settings: &mut ExposureSettings, state: &mut HistogramState, out: &mut HistogramOut, t: &Tokens) {
+fn footer(
+    ui: &mut egui::Ui,
+    settings: &mut ExposureSettings,
+    state: &mut HistogramState,
+    out: &mut HistogramOut,
+    t: &Tokens,
+) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
-        ui.label(egui::RichText::new("Shadows").size(8.5).color(t.text_tertiary));
+        ui.label(
+            egui::RichText::new("Shadows")
+                .size(8.5)
+                .color(t.text_tertiary),
+        );
         if settings.black_point_offset != 0.0 && reset_x(ui, t, "bp-reset") {
             settings.black_point_offset = 0.0;
             out.changed = true;
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(egui::RichText::new("Highlights").size(8.5).color(t.text_tertiary));
+            ui.label(
+                egui::RichText::new("Highlights")
+                    .size(8.5)
+                    .color(t.text_tertiary),
+            );
             if settings.white_point_offset != 0.0 && reset_x(ui, t, "wp-reset") {
                 settings.white_point_offset = 0.0;
                 out.changed = true;
@@ -289,7 +381,12 @@ pub fn reset_x(ui: &mut egui::Ui, t: &Tokens, salt: &str) -> bool {
     p.line_segment([c + vec2(-d, -d), c + vec2(d, d)], Stroke::new(1.2, col));
     p.line_segment([c + vec2(-d, d), c + vec2(d, -d)], Stroke::new(1.2, col));
     if r.hovered() {
-        p.rect_stroke(rect, 3.0, Stroke::new(1.0, t.button_border), StrokeKind::Inside);
+        p.rect_stroke(
+            rect,
+            3.0,
+            Stroke::new(1.0, t.button_border),
+            StrokeKind::Inside,
+        );
     }
     r.on_hover_text("Reset").clicked()
 }

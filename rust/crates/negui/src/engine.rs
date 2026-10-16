@@ -11,7 +11,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -22,8 +22,10 @@ use negsession::{RawBackend, RenderOutput, RenderRequest, Session, SessionInfo, 
 /// Sessions kept warm (`AppModel.sessionLRU`): the active one plus the one navigated from.
 pub const SESSION_LRU: usize = 2;
 
-/// UI → worker.
+/// UI → worker. (Commands are moved once into the channel; the settings payload's size
+/// difference between variants is irrelevant there.)
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum Cmd {
     /// Open (or revive from the LRU) the session for `path` with these settings; a render
     /// follows as a separate command.
@@ -44,7 +46,9 @@ pub enum Cmd {
         requested_at: Instant,
     },
     /// HQ off: drop the medium/full tiers of `path`.
-    ReleaseEnhanced { path: PathBuf },
+    ReleaseEnhanced {
+        path: PathBuf,
+    },
     /// Drop every session (folder change).
     ClearSessions,
     Shutdown,
@@ -132,11 +136,8 @@ impl Engine {
     /// Drain pending events.
     pub fn poll(&self) -> Vec<Evt> {
         let mut out = Vec::new();
-        loop {
-            match self.rx.try_recv() {
-                Ok(e) => out.push(e),
-                Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => break,
-            }
+        while let Ok(e) = self.rx.try_recv() {
+            out.push(e);
         }
         out
     }
@@ -178,10 +179,11 @@ impl Worker {
             let mut superseding_after = false;
             let mut keep = vec![true; queue.len()];
             for (i, c) in queue.iter().enumerate().rev() {
-                if matches!(c, Cmd::Render { .. }) && superseding_after {
-                    if let Some(k) = keep.get_mut(i) {
-                        *k = false;
-                    }
+                if matches!(c, Cmd::Render { .. })
+                    && superseding_after
+                    && let Some(k) = keep.get_mut(i)
+                {
+                    *k = false;
                 }
                 if matches!(c, Cmd::Render { .. } | Cmd::Open { .. }) {
                     superseding_after = true;
@@ -263,8 +265,9 @@ impl Worker {
             let s = self.sessions.remove(i);
             self.sessions.push(s);
         } else {
-            let session = Session::open(path, Arc::clone(&self.backend), Arc::clone(&self.renderer))
-                .map_err(|e| e.to_string())?;
+            let session =
+                Session::open(path, Arc::clone(&self.backend), Arc::clone(&self.renderer))
+                    .map_err(|e| e.to_string())?;
             self.sessions.push(session);
             while self.sessions.len() > SESSION_LRU {
                 self.sessions.remove(0);

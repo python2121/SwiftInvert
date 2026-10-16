@@ -571,7 +571,11 @@ const fn grading_row(
     }
 }
 
-const fn grading(band: GradingBand, fields: [Field; 3], ids: [&'static str; 3]) -> [ControlSpec; 3] {
+const fn grading(
+    band: GradingBand,
+    fields: [Field; 3],
+    ids: [&'static str; 3],
+) -> [ControlSpec; 3] {
     [
         grading_row(band, ids[0], fields[0], "R ↔ C", GRADE_RC),
         grading_row(band, ids[1], fields[1], "G ↔ M", GRADE_GM),
@@ -580,24 +584,49 @@ const fn grading(band: GradingBand, fields: [Field; 3], ids: [&'static str; 3]) 
 }
 
 const MIXER_RED: [ControlSpec; 2] = mixer(MixerBand::Red, Field::RedHue, Field::RedSaturation, "r");
-const MIXER_YELLOW: [ControlSpec; 2] =
-    mixer(MixerBand::Yellow, Field::YellowHue, Field::YellowSaturation, "y");
-const MIXER_GREEN: [ControlSpec; 2] =
-    mixer(MixerBand::Green, Field::GreenHue, Field::GreenSaturation, "g");
-const MIXER_BLUE: [ControlSpec; 2] = mixer(MixerBand::Blue, Field::BlueHue, Field::BlueSaturation, "b");
+const MIXER_YELLOW: [ControlSpec; 2] = mixer(
+    MixerBand::Yellow,
+    Field::YellowHue,
+    Field::YellowSaturation,
+    "y",
+);
+const MIXER_GREEN: [ControlSpec; 2] = mixer(
+    MixerBand::Green,
+    Field::GreenHue,
+    Field::GreenSaturation,
+    "g",
+);
+const MIXER_BLUE: [ControlSpec; 2] =
+    mixer(MixerBand::Blue, Field::BlueHue, Field::BlueSaturation, "b");
 const GRADING_SHADOWS: [ControlSpec; 3] = grading(
     GradingBand::Shadows,
-    [Field::ColorShadows(0), Field::ColorShadows(1), Field::ColorShadows(2)],
-    ["grading.shadows.rc", "grading.shadows.gm", "grading.shadows.by"],
+    [
+        Field::ColorShadows(0),
+        Field::ColorShadows(1),
+        Field::ColorShadows(2),
+    ],
+    [
+        "grading.shadows.rc",
+        "grading.shadows.gm",
+        "grading.shadows.by",
+    ],
 );
 const GRADING_MIDS: [ControlSpec; 3] = grading(
     GradingBand::Mids,
-    [Field::ColorMids(0), Field::ColorMids(1), Field::ColorMids(2)],
+    [
+        Field::ColorMids(0),
+        Field::ColorMids(1),
+        Field::ColorMids(2),
+    ],
     ["grading.mids.rc", "grading.mids.gm", "grading.mids.by"],
 );
 const GRADING_HIGHS: [ControlSpec; 3] = grading(
     GradingBand::Highs,
-    [Field::ColorHighs(0), Field::ColorHighs(1), Field::ColorHighs(2)],
+    [
+        Field::ColorHighs(0),
+        Field::ColorHighs(1),
+        Field::ColorHighs(2),
+    ],
     ["grading.highs.rc", "grading.highs.gm", "grading.highs.by"],
 );
 
@@ -618,8 +647,26 @@ pub static CONTROLS: &[ControlSpec] = &[
         track: Track::Plain,
         band: BandTag::None,
     },
-    plain("print.grade", Field::Grade, "Grade (ISO R)", Section::Print, 50.0, 180.0, 115.0, Fmt::Fixed(0)),
-    plain("print.contrastMask", Field::ContrastMask, "Contrast Mask", Section::Print, -0.5, 0.5, 0.0, Fmt::Signed(2)),
+    plain(
+        "print.grade",
+        Field::Grade,
+        "Grade (ISO R)",
+        Section::Print,
+        50.0,
+        180.0,
+        115.0,
+        Fmt::Fixed(0),
+    ),
+    plain(
+        "print.contrastMask",
+        Field::ContrastMask,
+        "Contrast Mask",
+        Section::Print,
+        -0.5,
+        0.5,
+        0.0,
+        Fmt::Signed(2),
+    ),
     ControlSpec {
         id: "print.maskSpacer",
         field: Field::MaskSpacer,
@@ -635,18 +682,117 @@ pub static CONTROLS: &[ControlSpec] = &[
         band: BandTag::None,
     },
     // Exposure
-    plain("exposure.stops", Field::ExposureStops, "Exposure (stops)", Section::Exposure, -2.0, 2.0, 0.0, Fmt::Signed(2)),
-    plain("exposure.contrast", Field::OverallContrast, "Contrast", Section::Exposure, -1.0, 2.0, 0.0, Fmt::Fixed(2)),
-    plain("exposure.shadows", Field::Shadows, "Shadows", Section::Exposure, -2.0, 2.0, 0.0, Fmt::Fixed(2)),
-    plain("exposure.shadowContrast", Field::ShadowContrast, "Shadow contrast", Section::Exposure, -3.0, 6.0, 0.0, Fmt::Fixed(2)),
-    plain("exposure.darkShadows", Field::DarkShadows, "Dark shadows", Section::Exposure, -2.0, 2.0, 0.0, Fmt::Fixed(2)),
-    plain("exposure.highlights", Field::Highlights, "Highlights", Section::Exposure, -1.0, 1.0, 0.0, Fmt::Fixed(2)),
-    plain("exposure.highlightContrast", Field::HighlightContrast, "Highlight contrast", Section::Exposure, -1.0, 1.0, 0.0, Fmt::Fixed(2)),
+    plain(
+        "exposure.stops",
+        Field::ExposureStops,
+        "Exposure (stops)",
+        Section::Exposure,
+        -2.0,
+        2.0,
+        0.0,
+        Fmt::Signed(2),
+    ),
+    plain(
+        "exposure.contrast",
+        Field::OverallContrast,
+        "Contrast",
+        Section::Exposure,
+        -1.0,
+        2.0,
+        0.0,
+        Fmt::Fixed(2),
+    ),
+    plain(
+        "exposure.shadows",
+        Field::Shadows,
+        "Shadows",
+        Section::Exposure,
+        -2.0,
+        2.0,
+        0.0,
+        Fmt::Fixed(2),
+    ),
+    plain(
+        "exposure.shadowContrast",
+        Field::ShadowContrast,
+        "Shadow contrast",
+        Section::Exposure,
+        -3.0,
+        6.0,
+        0.0,
+        Fmt::Fixed(2),
+    ),
+    plain(
+        "exposure.darkShadows",
+        Field::DarkShadows,
+        "Dark shadows",
+        Section::Exposure,
+        -2.0,
+        2.0,
+        0.0,
+        Fmt::Fixed(2),
+    ),
+    plain(
+        "exposure.highlights",
+        Field::Highlights,
+        "Highlights",
+        Section::Exposure,
+        -1.0,
+        1.0,
+        0.0,
+        Fmt::Fixed(2),
+    ),
+    plain(
+        "exposure.highlightContrast",
+        Field::HighlightContrast,
+        "Highlight contrast",
+        Section::Exposure,
+        -1.0,
+        1.0,
+        0.0,
+        Fmt::Fixed(2),
+    ),
     // Color
-    plain("color.preSaturation", Field::PreSaturation, "Pre-saturation", Section::Color, 0.5, 2.0, 1.15, Fmt::Fixed(2)),
-    plain("color.castStrength", Field::CastRemovalStrength, "Cast strength", Section::Color, 0.0, 2.0, 0.5, Fmt::Fixed(2)),
-    plain("color.hueTrim", Field::HueTrim, "Hue Trim", Section::Color, -30.0, 30.0, 0.0, Fmt::Degrees),
-    plain("color.printSaturation", Field::PrintSaturation, "Print Saturation", Section::Color, 0.0, 2.0, 1.0, Fmt::Fixed(2)),
+    plain(
+        "color.preSaturation",
+        Field::PreSaturation,
+        "Pre-saturation",
+        Section::Color,
+        0.5,
+        2.0,
+        1.15,
+        Fmt::Fixed(2),
+    ),
+    plain(
+        "color.castStrength",
+        Field::CastRemovalStrength,
+        "Cast strength",
+        Section::Color,
+        0.0,
+        2.0,
+        0.5,
+        Fmt::Fixed(2),
+    ),
+    plain(
+        "color.hueTrim",
+        Field::HueTrim,
+        "Hue Trim",
+        Section::Color,
+        -30.0,
+        30.0,
+        0.0,
+        Fmt::Degrees,
+    ),
+    plain(
+        "color.printSaturation",
+        Field::PrintSaturation,
+        "Print Saturation",
+        Section::Color,
+        0.0,
+        2.0,
+        1.0,
+        Fmt::Fixed(2),
+    ),
     ControlSpec {
         id: "color.separationDamping",
         field: Field::SeparationDamping,
@@ -661,9 +807,36 @@ pub static CONTROLS: &[ControlSpec] = &[
         track: Track::Plain,
         band: BandTag::None,
     },
-    plain("color.vibrance", Field::Vibrance, "Vibrance", Section::Color, 0.0, 2.0, 1.0, Fmt::Fixed(2)),
-    plain("color.saturation", Field::Saturation, "Saturation", Section::Color, 0.0, 2.0, 1.0, Fmt::Fixed(2)),
-    plain("color.skinProtection", Field::SkinProtection, "Skin Protection", Section::Color, 0.0, 1.0, 0.5, Fmt::Fixed(2)),
+    plain(
+        "color.vibrance",
+        Field::Vibrance,
+        "Vibrance",
+        Section::Color,
+        0.0,
+        2.0,
+        1.0,
+        Fmt::Fixed(2),
+    ),
+    plain(
+        "color.saturation",
+        Field::Saturation,
+        "Saturation",
+        Section::Color,
+        0.0,
+        2.0,
+        1.0,
+        Fmt::Fixed(2),
+    ),
+    plain(
+        "color.skinProtection",
+        Field::SkinProtection,
+        "Skin Protection",
+        Section::Color,
+        0.0,
+        1.0,
+        0.5,
+        Fmt::Fixed(2),
+    ),
     // Color Mixer (per band)
     MIXER_RED[0],
     MIXER_RED[1],
@@ -712,10 +885,46 @@ pub static CONTROLS: &[ControlSpec] = &[
     GRADING_HIGHS[1],
     GRADING_HIGHS[2],
     // Tone
-    plain("tone.toe", Field::Toe, "Toe", Section::Tone, -1.0, 1.0, 0.0, Fmt::Fixed(2)),
-    plain("tone.shoulder", Field::Shoulder, "Shoulder", Section::Tone, -1.0, 1.0, 0.0, Fmt::Fixed(2)),
-    plain("tone.whitePoint", Field::WhitePointOffset, "White point", Section::Tone, -0.3, 0.3, 0.0, Fmt::Fixed(3)),
-    plain("tone.blackPoint", Field::BlackPointOffset, "Black point", Section::Tone, -0.3, 0.3, 0.0, Fmt::Fixed(3)),
+    plain(
+        "tone.toe",
+        Field::Toe,
+        "Toe",
+        Section::Tone,
+        -1.0,
+        1.0,
+        0.0,
+        Fmt::Fixed(2),
+    ),
+    plain(
+        "tone.shoulder",
+        Field::Shoulder,
+        "Shoulder",
+        Section::Tone,
+        -1.0,
+        1.0,
+        0.0,
+        Fmt::Fixed(2),
+    ),
+    plain(
+        "tone.whitePoint",
+        Field::WhitePointOffset,
+        "White point",
+        Section::Tone,
+        -0.3,
+        0.3,
+        0.0,
+        Fmt::Fixed(3),
+    ),
+    plain(
+        "tone.blackPoint",
+        Field::BlackPointOffset,
+        "Black point",
+        Section::Tone,
+        -0.3,
+        0.3,
+        0.0,
+        Fmt::Fixed(3),
+    ),
 ];
 
 /// Every toggle row.
@@ -770,7 +979,11 @@ pub fn control(id: &str) -> Option<&'static ControlSpec> {
 }
 
 /// The rows of `section` visible under the given band selections, in order.
-pub fn rows_for(section: Section, mixer: MixerBand, grading: GradingBand) -> Vec<&'static ControlSpec> {
+pub fn rows_for(
+    section: Section,
+    mixer: MixerBand,
+    grading: GradingBand,
+) -> Vec<&'static ControlSpec> {
     CONTROLS
         .iter()
         .filter(|c| c.section == section)

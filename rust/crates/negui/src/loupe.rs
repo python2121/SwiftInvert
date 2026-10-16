@@ -35,7 +35,11 @@ pub enum CanvasColor {
 }
 
 impl CanvasColor {
-    pub const ALL: [CanvasColor; 3] = [CanvasColor::Gray, CanvasColor::VeryDarkGray, CanvasColor::Black];
+    pub const ALL: [CanvasColor; 3] = [
+        CanvasColor::Gray,
+        CanvasColor::VeryDarkGray,
+        CanvasColor::Black,
+    ];
 
     pub fn color(self) -> Color32 {
         match self {
@@ -95,7 +99,9 @@ impl FramePresenter for CpuPresenter {
         let image = egui::ColorImage::from_rgba_unmultiplied(size, rgba);
         match &mut self.handle {
             Some(h) => h.set(image, egui::TextureOptions::LINEAR),
-            None => self.handle = Some(ctx.load_texture("loupe", image, egui::TextureOptions::LINEAR)),
+            None => {
+                self.handle = Some(ctx.load_texture("loupe", image, egui::TextureOptions::LINEAR))
+            }
         }
         self.handle.as_ref().map(|h| PresentedFrame {
             texture: h.id(),
@@ -172,9 +178,17 @@ impl LoupeState {
 
 /// Aspect-fit `aspect` (w/h) inside `area`.
 pub fn fit_rect(area: Rect, aspect: f32) -> Rect {
-    let aspect = if aspect.is_finite() && aspect > 0.0 { aspect } else { 1.5 };
+    let aspect = if aspect.is_finite() && aspect > 0.0 {
+        aspect
+    } else {
+        1.5
+    };
     let (aw, ah) = (area.width().max(1.0), area.height().max(1.0));
-    let (w, h) = if aw / ah > aspect { (ah * aspect, ah) } else { (aw, aw / aspect) };
+    let (w, h) = if aw / ah > aspect {
+        (ah * aspect, ah)
+    } else {
+        (aw, aw / aspect)
+    };
     Rect::from_center_size(area.center(), vec2(w, h))
 }
 
@@ -182,8 +196,14 @@ pub fn fit_rect(area: Rect, aspect: f32) -> Rect {
 pub fn content_rect(frame: Rect, window: &NormalizedRect) -> Rect {
     let (w, h) = (frame.width(), frame.height());
     Rect::from_min_size(
-        pos2(frame.left() + window.x as f32 * w, frame.top() + window.y as f32 * h),
-        vec2((window.width as f32 * w).max(1.0), (window.height as f32 * h).max(1.0)),
+        pos2(
+            frame.left() + window.x as f32 * w,
+            frame.top() + window.y as f32 * h,
+        ),
+        vec2(
+            (window.width as f32 * w).max(1.0),
+            (window.height as f32 * h).max(1.0),
+        ),
     )
 }
 
@@ -217,7 +237,12 @@ pub enum CanvasAction {
 }
 
 /// Draw the canvas into `area`.
-pub fn canvas(ui: &mut egui::Ui, area: Rect, state: &mut LoupeState, input: &CanvasInput<'_>) -> Vec<CanvasAction> {
+pub fn canvas(
+    ui: &mut egui::Ui,
+    area: Rect,
+    state: &mut LoupeState,
+    input: &CanvasInput<'_>,
+) -> Vec<CanvasAction> {
     let t = Tokens::get(ui.ctx());
     let mut actions = Vec::new();
     let painter = ui.painter_at(area);
@@ -225,7 +250,13 @@ pub fn canvas(ui: &mut egui::Ui, area: Rect, state: &mut LoupeState, input: &Can
     let resp = ui.interact(area, ui.id().with("canvas"), Sense::click_and_drag());
 
     if !input.has_selection {
-        painter.text(area.center(), Align2::CENTER_CENTER, "No image selected", t.font(14.0), t.text_tertiary);
+        painter.text(
+            area.center(),
+            Align2::CENTER_CENTER,
+            "No image selected",
+            t.font(14.0),
+            t.text_tertiary,
+        );
         return actions;
     }
     let Some(frame) = state.frame else {
@@ -237,10 +268,22 @@ pub fn canvas(ui: &mut egui::Ui, area: Rect, state: &mut LoupeState, input: &Can
             ""
         };
         if !text.is_empty() {
-            painter.text(area.center(), Align2::CENTER_CENTER, text, t.font(14.0), t.text_secondary);
+            painter.text(
+                area.center(),
+                Align2::CENTER_CENTER,
+                text,
+                t.font(14.0),
+                t.text_secondary,
+            );
         }
         if input.analyzing {
-            pill(&painter, pos2(area.left() + 12.0, area.bottom() - 12.0), Align2::LEFT_BOTTOM, "Analyzing…", &t);
+            pill(
+                &painter,
+                pos2(area.left() + 12.0, area.bottom() - 12.0),
+                Align2::LEFT_BOTTOM,
+                "Analyzing…",
+                &t,
+            );
         }
         return actions;
     };
@@ -259,7 +302,13 @@ pub fn canvas(ui: &mut egui::Ui, area: Rect, state: &mut LoupeState, input: &Can
         let mut used_wheel = false;
         ui.input(|i| {
             for e in &i.events {
-                if let egui::Event::MouseWheel { unit, delta, modifiers } = e {
+                if let egui::Event::MouseWheel {
+                    unit,
+                    delta,
+                    modifiers,
+                    ..
+                } = e
+                {
                     if modifiers.command || modifiers.ctrl {
                         continue; // egui turns these into zoom_delta
                     }
@@ -288,7 +337,11 @@ pub fn canvas(ui: &mut egui::Ui, area: Rect, state: &mut LoupeState, input: &Can
             let new_min = anchor - vec2(rel.x * new_size.x, rel.y * new_size.y);
             pan = new_min + new_size / 2.0 - area.center();
             zoom = new_zoom;
-        } else if !used_wheel && zoom > 1.0 && trackpad_pan != Vec2::ZERO && input.tool_mode == ToolMode::None {
+        } else if !used_wheel
+            && zoom > 1.0
+            && trackpad_pan != Vec2::ZERO
+            && input.tool_mode == ToolMode::None
+        {
             pan += trackpad_pan;
         }
         ui.input_mut(|i| i.smooth_scroll_delta = Vec2::ZERO);
@@ -343,9 +396,12 @@ pub fn canvas(ui: &mut egui::Ui, area: Rect, state: &mut LoupeState, input: &Can
 
     // hover → content-normalized point (plain presentation only)
     let hover_uv = if input.tool_mode == ToolMode::None && !input.baseline {
-        hover
-            .filter(|p| frame_rect.contains(*p))
-            .map(|p| ((p.x - frame_rect.left()) / frame_rect.width(), (p.y - frame_rect.top()) / frame_rect.height()))
+        hover.filter(|p| frame_rect.contains(*p)).map(|p| {
+            (
+                (p.x - frame_rect.left()) / frame_rect.width(),
+                (p.y - frame_rect.top()) / frame_rect.height(),
+            )
+        })
     } else {
         None
     };
@@ -353,13 +409,31 @@ pub fn canvas(ui: &mut egui::Ui, area: Rect, state: &mut LoupeState, input: &Can
 
     // overlays
     if input.baseline {
-        pill(&painter, pos2(area.center().x, area.top() + 12.0), Align2::CENTER_TOP, "Original conversion", &t);
+        pill(
+            &painter,
+            pos2(area.center().x, area.top() + 12.0),
+            Align2::CENTER_TOP,
+            "Original conversion",
+            &t,
+        );
     }
     if input.analyzing {
-        pill(&painter, pos2(area.left() + 12.0, area.bottom() - 12.0), Align2::LEFT_BOTTOM, "Analyzing…", &t);
+        pill(
+            &painter,
+            pos2(area.left() + 12.0, area.bottom() - 12.0),
+            Align2::LEFT_BOTTOM,
+            "Analyzing…",
+            &t,
+        );
     }
     if let Some(e) = input.error {
-        pill(&painter, pos2(area.center().x, area.bottom() - 12.0), Align2::CENTER_BOTTOM, e, &t);
+        pill(
+            &painter,
+            pos2(area.center().x, area.bottom() - 12.0),
+            Align2::CENTER_BOTTOM,
+            e,
+            &t,
+        );
     }
     if let Some(label) = input.frame_label {
         painter.text(
@@ -385,8 +459,18 @@ pub fn pill(painter: &egui::Painter, anchor: Pos2, align: Align2, text: &str, t:
 /// The grid overlay (CropRotationSection.swift:162-201).
 pub fn grid_lines(painter: &egui::Painter, r: Rect, kind: GridLineType) {
     let mut segments: Vec<[Pos2; 2]> = Vec::new();
-    let v = |x: f32| [pos2(r.left() + r.width() * x, r.top()), pos2(r.left() + r.width() * x, r.bottom())];
-    let h = |y: f32| [pos2(r.left(), r.top() + r.height() * y), pos2(r.right(), r.top() + r.height() * y)];
+    let v = |x: f32| {
+        [
+            pos2(r.left() + r.width() * x, r.top()),
+            pos2(r.left() + r.width() * x, r.bottom()),
+        ]
+    };
+    let h = |y: f32| {
+        [
+            pos2(r.left(), r.top() + r.height() * y),
+            pos2(r.right(), r.top() + r.height() * y),
+        ]
+    };
     match kind {
         GridLineType::Thirds => {
             for f in [1.0 / 3.0, 2.0 / 3.0] {
@@ -451,15 +535,19 @@ pub fn control_bar(ui: &mut egui::Ui, input: &BarInput<'_>) -> Vec<BarAction> {
         ui.spacing_mut().item_spacing.x = 8.0;
         ui.add_space(4.0);
         ui.add_enabled_ui(input.has_selection, |ui| {
-            if icon_button(ui, "rotate-ccw", 24.0, false, |p, r, c| rotate_icon(p, r, c, false))
-                .on_hover_text("Rotate left (⌘[)")
-                .clicked()
+            if icon_button(ui, "rotate-ccw", 24.0, false, |p, r, c| {
+                rotate_icon(p, r, c, false)
+            })
+            .on_hover_text("Rotate left (⌘[)")
+            .clicked()
             {
                 actions.push(BarAction::RotateCcw);
             }
-            if icon_button(ui, "rotate-cw", 24.0, false, |p, r, c| rotate_icon(p, r, c, true))
-                .on_hover_text("Rotate right (⌘])")
-                .clicked()
+            if icon_button(ui, "rotate-cw", 24.0, false, |p, r, c| {
+                rotate_icon(p, r, c, true)
+            })
+            .on_hover_text("Rotate right (⌘])")
+            .clicked()
             {
                 actions.push(BarAction::RotateCw);
             }
@@ -481,7 +569,10 @@ pub fn control_bar(ui: &mut egui::Ui, input: &BarInput<'_>) -> Vec<BarAction> {
                 actions.push(BarAction::CycleHq);
             }
             let zones = badge(ui, "Zones", input.zones_on, false, &t);
-            if zones.on_disabled_hover_text("Zone overlay arrives in a later wave (⇧Z)").clicked() {
+            if zones
+                .on_disabled_hover_text("Zone overlay arrives in a later wave (⇧Z)")
+                .clicked()
+            {
                 actions.push(BarAction::ToggleZones);
             }
         });
@@ -489,11 +580,19 @@ pub fn control_bar(ui: &mut egui::Ui, input: &BarInput<'_>) -> Vec<BarAction> {
         let remaining = ui.available_width();
         let right_w = 110.0;
         let centre_w = (remaining - right_w).max(0.0);
-        ui.allocate_ui_with_layout(vec2(centre_w, 24.0), egui::Layout::centered_and_justified(egui::Direction::LeftToRight), |ui| {
-            if input.has_selection {
-                ui.label(egui::RichText::new(input.readout).font(t.mono(10.0)).color(t.text_secondary));
-            }
-        });
+        ui.allocate_ui_with_layout(
+            vec2(centre_w, 24.0),
+            egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
+            |ui| {
+                if input.has_selection {
+                    ui.label(
+                        egui::RichText::new(input.readout)
+                            .font(t.mono(10.0))
+                            .color(t.text_secondary),
+                    );
+                }
+            },
+        );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add_space(6.0);
             for c in CanvasColor::ALL.iter().rev() {
@@ -514,7 +613,11 @@ pub fn control_bar(ui: &mut egui::Ui, input: &BarInput<'_>) -> Vec<BarAction> {
                     actions.push(BarAction::CanvasColor(*c));
                 }
             }
-            ui.label(egui::RichText::new("Canvas").size(10.5).color(t.text_secondary));
+            ui.label(
+                egui::RichText::new("Canvas")
+                    .size(10.5)
+                    .color(t.text_secondary),
+            );
         });
     });
     actions
@@ -523,7 +626,11 @@ pub fn control_bar(ui: &mut egui::Ui, input: &BarInput<'_>) -> Vec<BarAction> {
 /// HQ badge with the spec's fill/stroke/text per state.
 fn hq_badge(ui: &mut egui::Ui, mode: HqMode, t: &Tokens) -> egui::Response {
     let (fill, stroke, text) = match mode {
-        HqMode::Off => (t.text_alpha(0.06), t.text_secondary.gamma_multiply(0.4), t.text),
+        HqMode::Off => (
+            t.text_alpha(0.06),
+            t.text_secondary.gamma_multiply(0.4),
+            t.text,
+        ),
         HqMode::Auto => (t.accent_alpha(0.18), t.accent_alpha(0.55), t.text),
         HqMode::On => (t.accent_alpha(0.85), t.accent, Color32::WHITE),
     };
@@ -541,19 +648,38 @@ fn badge(ui: &mut egui::Ui, label: &str, on: bool, enabled: bool, t: &Tokens) ->
     } else {
         (t.text_alpha(0.06), t.text_secondary.gamma_multiply(0.4))
     };
-    ui.add_enabled_ui(enabled, |ui| chip(ui, label, fill, stroke, t.text, t)).inner
+    ui.add_enabled_ui(enabled, |ui| chip(ui, label, fill, stroke, t.text, t))
+        .inner
 }
 
-fn chip(ui: &mut egui::Ui, label: &str, fill: Color32, stroke: Color32, text: Color32, t: &Tokens) -> egui::Response {
-    let galley = ui.painter().layout_no_wrap(label.to_owned(), t.font(10.5), text);
+fn chip(
+    ui: &mut egui::Ui,
+    label: &str,
+    fill: Color32,
+    stroke: Color32,
+    text: Color32,
+    t: &Tokens,
+) -> egui::Response {
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.to_owned(), t.font(10.5), text);
     let size = galley.size() + vec2(14.0, 6.0);
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
     let enabled = ui.is_enabled();
     let alpha = if enabled { 1.0 } else { 0.4 };
     let p = ui.painter();
     p.rect_filled(rect, size.y / 2.0, fill.gamma_multiply(alpha));
-    p.rect_stroke(rect, size.y / 2.0, Stroke::new(1.0, stroke.gamma_multiply(alpha)), StrokeKind::Inside);
-    p.galley(rect.min + vec2(7.0, 3.0), galley, text.gamma_multiply(alpha));
+    p.rect_stroke(
+        rect,
+        size.y / 2.0,
+        Stroke::new(1.0, stroke.gamma_multiply(alpha)),
+        StrokeKind::Inside,
+    );
+    p.galley(
+        rect.min + vec2(7.0, 3.0),
+        galley,
+        text.gamma_multiply(alpha),
+    );
     resp
 }
 
@@ -570,7 +696,11 @@ pub fn icon_button(
         normal: craft_ui::buttons::ButtonVisuals {
             fill: Color32::TRANSPARENT,
             stroke: Stroke::NONE,
-            icon: if ui.is_enabled() { t.text_secondary } else { t.text_disabled },
+            icon: if ui.is_enabled() {
+                t.text_secondary
+            } else {
+                t.text_disabled
+            },
         },
         hovered: craft_ui::buttons::ButtonVisuals {
             fill: t.hover,
@@ -607,7 +737,11 @@ pub fn rotate_icon(p: &egui::Painter, rect: Rect, color: Color32, clockwise: boo
     let pts: Vec<Pos2> = (0..=n)
         .map(|i| {
             let a = start + (end - start) * i as f32 / n as f32;
-            let a = if clockwise { a } else { std::f32::consts::PI - a };
+            let a = if clockwise {
+                a
+            } else {
+                std::f32::consts::PI - a
+            };
             c + vec2(a.cos() * r, a.sin() * r)
         })
         .collect();
@@ -615,7 +749,11 @@ pub fn rotate_icon(p: &egui::Painter, rect: Rect, color: Color32, clockwise: boo
     p.add(egui::Shape::line(pts, Stroke::new(1.5, color)));
     let d = if clockwise { 1.0 } else { -1.0 };
     p.add(egui::Shape::convex_polygon(
-        vec![tip + vec2(-3.0 * d, -3.5), tip + vec2(3.5 * d, 0.0), tip + vec2(-3.0 * d, 3.5)],
+        vec![
+            tip + vec2(-3.0 * d, -3.5),
+            tip + vec2(3.5 * d, 0.0),
+            tip + vec2(-3.0 * d, 3.5),
+        ],
         color,
         Stroke::NONE,
     ));
@@ -635,5 +773,8 @@ pub fn flip_icon(p: &egui::Painter, rect: Rect, color: Color32) {
         vec![c + vec2(2.0, -h), c + vec2(2.0, h), c + vec2(w, h)],
         Stroke::new(1.2, color),
     ));
-    p.line_segment([c + vec2(0.0, -h - 2.0), c + vec2(0.0, h + 2.0)], Stroke::new(1.0, color.gamma_multiply(0.6)));
+    p.line_segment(
+        [c + vec2(0.0, -h - 2.0), c + vec2(0.0, h + 2.0)],
+        Stroke::new(1.0, color.gamma_multiply(0.6)),
+    );
 }
