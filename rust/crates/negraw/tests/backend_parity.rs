@@ -4,8 +4,8 @@
 //! it prints why it skipped and passes. Compares the PREVIEW path (binned / half-size linear),
 //! which is what analysis and the proxy render see, and the full path's means. Prints the numbers
 //! under `--nocapture`; asserts only that the two previews agree in size (modulo the default
-//! crop) and that the per-channel means are within 1 % — the tight per-pixel figure is reported,
-//! not gated, until the crop question is settled.
+//! crop) and that the per-channel means are within 0.2 % in the default (LibRaw-parity)
+//! configuration; the per-sample max/mean figures are printed for the record.
 
 #![cfg(all(feature = "lcraw", feature = "libraw"))]
 
@@ -39,8 +39,14 @@ fn lcraw_matches_libraw_on_the_sample() {
     let t_lr = t.elapsed();
 
     for (label, lc) in [
-        ("lcraw default-crop", LcrawBackend::default()),
-        ("lcraw libraw-area", LcrawBackend::libraw_area()),
+        (
+            "lcraw default (libraw area + bit-depth white)",
+            LcrawBackend::default(),
+        ),
+        (
+            "lcraw file-native (default crop + file white)",
+            LcrawBackend::file_native(),
+        ),
     ] {
         let t = Instant::now();
         let ours = lc.decode_preview(&path).expect("lcraw preview");
@@ -70,14 +76,21 @@ fn lcraw_matches_libraw_on_the_sample() {
                 a.height.abs_diff(b.height)
             );
         }
-        for c in 0..3 {
-            let rel = (ma[c] - mb[c]).abs() / ma[c].max(1e-9);
-            assert!(
-                rel < 0.01,
-                "{label}: channel {c} mean differs by {rel:.4} (libraw {} vs lcraw {})",
-                ma[c],
-                mb[c]
-            );
+        if label.starts_with("lcraw default") {
+            assert_eq!((a.width, a.height), (b.width, b.height), "{label}: size");
+            for c in 0..3 {
+                let rel = (ma[c] - mb[c]).abs() / ma[c].max(1e-9);
+                assert!(
+                    rel < 0.002,
+                    "{label}: channel {c} mean differs by {rel:.4} (libraw {} vs lcraw {})",
+                    ma[c],
+                    mb[c]
+                );
+            }
+        } else {
+            // the file's white is a uniform scale: the three channel ratios must agree
+            let r: Vec<f64> = (0..3).map(|c| mb[c] / ma[c].max(1e-9)).collect();
+            eprintln!("  uniform scale ratios {r:?}");
         }
     }
 

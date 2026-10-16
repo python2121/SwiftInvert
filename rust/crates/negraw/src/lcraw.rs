@@ -14,7 +14,8 @@
 //! | X-Trans preview = full demosaic (no `half_size`) | 3×3 bin (`PLAN` §3.6) | DIVERGES by design: 1/3 size, no interpolation |
 //! | full = LibRaw default demosaic (AHD; Fuji: X-Trans-aware) | `develop(Method::Ahd)`; non-Bayer → `xtrans::directional` | same class, different code: NOT pixel-identical |
 //! | `user_flip=0` + `applyingFlip(sizes.flip)` | `RawImage::orientation` (EXIF) → dcraw code → [`crate::orient::applying_flip`] | exact for 0/3/5/6; mirror codes ignored on both sides |
-//! | output area = LibRaw's image area (masked borders off; NO DNG DefaultCrop) | active area, then the file's default crop when [`LcrawBackend::apply_default_crop`] (default ON per PLAN §3.6) | DIVERGES: dims differ by the crop margins (e.g. 6024×4024 vs 6000×4000); set `apply_default_crop=false` for LibRaw's area |
+//! | output area = LibRaw's image area (masked borders off; NO DNG DefaultCrop) | active area (default); the file's default crop only with [`LcrawBackend::apply_default_crop`] | exact by default (6024×4020 on the R100; the crop would give 6000×4000) |
+//! | white = `maximum` = `2^bits − 1` (`adjust_maximum_thr=0`) | [`WhiteReference::BitDepth`] overrides lightcraft's highlight-linearity `white` (default) | exact; `WhiteReference::File` keeps lightcraft's (1.43× brighter on the R100) |
 //! | DNG opcodes: LibRaw (no DNG SDK) applies NONE | `OpcodeList1/2/3` CLEARED before developing unless [`LcrawBackend::apply_opcodes`] | exact by default — so GainMap vignetting, WarpRectilinear distortion, bad-pixel maps are NOT applied (lens corrections unwanted) |
 //! | — | `decode` raises DNG samples stuck at the sensor's real saturation point to the white level (`lift_clipped_samples`, DNG/3FR only, not switchable) | DIVERGES only for clipped samples (they read 1.0 instead of ~0.9) |
 //! | `pixel_aspect` (D1X) → `stretch()` | `develop` resizes rows (Mitchell) | same intent; preview falls back to the full path |
@@ -35,8 +36,23 @@ use crate::convert::rgb32f_into_image;
 use crate::orient::{applying_flip, dcraw_flip_from_exif};
 use crate::{CfaKind, Decoded, NegRawError, RawBackend, RawInfoLite, Result, read_file};
 
-/// The `lightcraft-raw` backend. `Default` = the LibRaw-parity settings (no opcodes) with the
-/// PLAN's default crop on.
+/// Which white level the `[0, 1]` scale is anchored to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum WhiteReference {
+    /// LibRaw's `maximum` under `adjust_maximum_thr = 0`: the bit-depth ceiling `2^bits − 1`
+    /// (16383 on a 14-bit body). NegPy/rawpy and the Swift app see this scale.
+    #[default]
+    BitDepth,
+    /// The file's own white — lightcraft's highlight-linearity limit (11606 on the EOS R100),
+    /// i.e. LibRaw's `linear_max`. ~1.43× brighter than [`Self::BitDepth`] on that body. A pure
+    /// scale, which the log-density bounds cancel; only clipping differs.
+    File,
+}
+
+/// The `lightcraft-raw` backend. `Default` = the LibRaw-parity settings: no opcodes, LibRaw's
+/// image area (no default crop), bit-depth white. Measured 2026-10-15 on an EOS R100 CR3 against
+/// LibRaw 0.22.1: with the file's white and default crop the previews were 3000×2000 vs
+/// 3012×2010 and a uniform 1.44× brighter; this default closes both.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LcrawBackend {
     /// Apply the DNG opcode lists (GainMap vignetting, WarpRectilinear distortion, FixBadPixels,
@@ -44,26 +60,35 @@ pub struct LcrawBackend {
     /// lens corrections are not wanted in a negative-conversion pipeline: default `false`.
     pub apply_opcodes: bool,
     /// Crop the developed frame to the file's default crop (DNG `DefaultCropOrigin/Size`, or the
-    /// vendor crop lightcraft derives). LibRaw outputs the whole image area instead; PLAN §3.6 asks
-    /// for the crop: default `true`.
+    /// vendor crop lightcraft derives). LibRaw outputs the whole image area instead, which is what
+    /// the Swift app and NegPy meter: default `false`.
     pub apply_default_crop: bool,
+    /// See [`WhiteReference`]; default LibRaw's bit-depth maximum.
+    pub white_reference: WhiteReference,
 }
 
 impl Default for LcrawBackend {
     fn default() -> Self {
-        Self {
-            apply_opcodes: false,
-            apply_default_crop: true,
-        }
+        Self::libraw_area()
     }
 }
 
 impl LcrawBackend {
-    /// LibRaw's exact output area (no default crop), opcodes off.
+    /// LibRaw's exact output area and scale (no default crop, bit-depth white), opcodes off.
     pub fn libraw_area() -> Self {
         Self {
             apply_opcodes: false,
             apply_default_crop: false,
+            white_reference: WhiteReference::BitDepth,
+        }
+    }
+
+    /// lightcraft's own semantics: the file's default crop and white, opcodes off.
+    pub fn file_native() -> Self {
+        Self {
+            apply_opcodes: false,
+            apply_default_crop: true,
+            white_reference: WhiteReference::File,
         }
     }
 
@@ -87,6 +112,14 @@ impl LcrawBackend {
         if !self.apply_default_crop {
             // a zero-size crop makes `develop_crop` fall back to the whole active area
             raw.crop = Rect::default();
+        }
+        if self.white_reference == WhiteReference::BitDepth && (1..=16).contains(&raw.bits) {
+            // LibRaw's `maximum` (adjust_maximum_thr = 0): the bit-depth ceiling, not the
+            // highlight-linearity limit lightcraft stores in `white`.
+            let ceiling = ((1u32 << raw.bits) - 1) as f32;
+            for w in &mut raw.white {
+                *w = ceiling;
+            }
         }
         Ok(raw)
     }

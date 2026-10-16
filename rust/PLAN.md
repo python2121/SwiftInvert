@@ -154,8 +154,10 @@ Flags word: bit 0 = sRGB display/export encode (decode Adobe TRC → gamut matri
 
 ### 3.6 Decode contract (negraw) — LibRaw semantics expressed in lightcraft-raw terms
 Output = sensor-native camera RGB, **unity white balance, no camera matrix**, black-subtracted,
-white-normalized to [0,1] (`RawImage::normalized()` gives exactly this per CFA sample), EXIF
-orientation baked (`applying_flip` equivalent from `RawImage::orientation`), default crop applied.
+white-normalized to [0,1] with **LibRaw's `maximum` = `2^bits − 1`** (NOT lightcraft's
+highlight-linearity `white`: that read 1.44× brighter on an EOS R100, measured 2026-10-15), EXIF
+orientation baked (`applying_flip` equivalent from `RawImage::orientation`), **LibRaw's image area
+(no default crop)** — 6024×4020 on the R100 where the DNG-style crop gives 6000×4000.
 - **Preview**: `develop_binned(k=2)` for Bayer (= LibRaw `half_size` + linear: R, B, mean of the two greens per 2×2); X-Trans: `develop_binned(k=3)` when `can_bin`, else full `demosaic(Method::XTrans)` then `downsampled`. Preview kept at native binned size; the Session downsamples to the 1536 proxy (medium tier = that buffer, under the 20 MP budget).
 - **Full** (export / HQ): `develop(Method::Ahd)` for Bayer, X-Trans method for X-Trans. (LibRaw default is AHD too.)
 - Highlight reconstruction OFF (clip at 1.0 like `no_auto_bright` + `adjust_maximum_thr=0`); no opcodes beyond what `normalized()` applies (document which OpcodeLists the backend applies; lens corrections are NOT wanted).
