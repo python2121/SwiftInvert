@@ -155,7 +155,8 @@ pub fn build_plane(
     if render_source.width < 2 || render_source.height < 2 {
         return None;
     }
-    if !(bounds.luminance_density_range() > 1e-6) {
+    let range = bounds.luminance_density_range();
+    if range.is_nan() || range <= 1e-6 {
         return None;
     }
 
@@ -197,12 +198,12 @@ pub fn build_plane(
 /// (radius `round(4σ)`), coefficients `exp(−d²/2σ²)` normalized to sum 1 — so the parity
 /// fixture can pin the plane against cv2's own output. Empty for σ ≤ 0 or a zero radius.
 pub fn gaussian_taps(sigma: f64) -> Vec<f32> {
-    if !(sigma > 0.0) {
+    if sigma.is_nan() || sigma <= 0.0 {
         return Vec::new();
     }
     // `round` = Swift `.rounded()` (half away from zero); ksize is small, the cast is exact.
     let mut ksize = (8.0 * sigma + 1.0).round().max(0.0) as usize;
-    if ksize % 2 == 0 {
+    if ksize.is_multiple_of(2) {
         ksize += 1;
     }
     let radius = (ksize - 1) / 2;

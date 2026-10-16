@@ -50,7 +50,9 @@ fn analysis() -> ExposureAnalysis {
     let j = fixtures::read_json("synthetic64/default/analysis.json").expect("analysis.json");
     let b = &j["bounds"];
     let m = &j["meters"];
-    let na = m["neutral_axis_refs"].as_array().expect("neutral_axis_refs");
+    let na = m["neutral_axis_refs"]
+        .as_array()
+        .expect("neutral_axis_refs");
     let (neutral_mid, neutral_shadow, neutral_highlight, neutral_confidence) = if na[0].is_null() {
         (None, None, None, None)
     } else {
@@ -122,7 +124,8 @@ fn plane_matches_fixture(name: &str) {
     let plane = contrast_mask::build_plane(&input(), &bounds(), spacer).expect("plane");
     assert_eq!((plane.width, plane.height), (64, 64));
     assert_eq!(plane.data.len(), expected.len());
-    let (max, _) = fixtures::max_mean_abs_diff(&plane.data, &expected);
+    let (max, mean) = fixtures::max_mean_abs_diff(&plane.data, &expected);
+    eprintln!("plane {name}: max {max:.3e} mean {mean:.3e} (gate 1e-5)");
     assert!(max < 1e-5, "plane {name}: max diff {max}");
 }
 
@@ -159,6 +162,7 @@ fn ev_expansion_matches_fixture() {
             max_diff = max_diff.max((got - expected[y * out_w + x]).abs());
         }
     }
+    eprintln!("ev expansion: max {max_diff:.3e} (gate 1e-5)");
     assert!(max_diff < 1e-5, "ev expansion: max diff {max_diff}");
 }
 
@@ -186,6 +190,7 @@ fn masked_full_chain_matches_fixture() {
     let expected = fixtures::read_f32("contrast_mask/masked_output.bin").unwrap();
     assert_eq!(encoded.data.len(), expected.len());
     let (max, mean) = fixtures::max_mean_abs_diff(&encoded.data, &expected);
+    eprintln!("masked chain: max {max:.3e} mean {mean:.3e} (gate 1e-4)");
     assert!(max < 1e-4, "masked chain: max diff {max} (mean {mean})");
 }
 
@@ -241,7 +246,8 @@ fn positive_gamma_compresses_val_range() {
         for (pix, p) in norm.data.chunks_exact(3).enumerate() {
             let mut v = p[1];
             if let Some(plane) = &plane {
-                v += params.mask_val_scale[1] as f32 * plane.sample(pix % w, pix / w, w, norm.height);
+                v += params.mask_val_scale[1] as f32
+                    * plane.sample(pix % w, pix / w, w, norm.height);
             }
             lo = lo.min(v);
             hi = hi.max(v);
@@ -303,7 +309,10 @@ fn sampler_at_other_render_sizes_stays_within_the_plane() {
     for y in (0..192).step_by(7) {
         for x in (0..192).step_by(5) {
             let s = plane.sample(x, y, 192, 192);
-            assert!(s >= lo - 1e-6 && s <= hi + 1e-6, "({x},{y}) = {s} outside [{lo},{hi}]");
+            assert!(
+                s >= lo - 1e-6 && s <= hi + 1e-6,
+                "({x},{y}) = {s} outside [{lo},{hi}]"
+            );
         }
     }
     // Pixel (1,1) of a 3× render maps to plane coordinate (0.0, 0.0) → the corner value.
