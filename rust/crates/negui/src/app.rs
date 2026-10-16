@@ -7,8 +7,9 @@
 //!
 //! Seams for later waves: [`ToolMode`] is carried (renders go through
 //! `Session::render_tool_preview`, so entering a tool already widens the render) but no overlay
-//! draws a box yet; `Command::Export`, `ChooseDefaults`, `TestStrip` and `ToggleZones` set a
-//! status line; the control channel would drive [`NegApp::run`] with [`Command`]s.
+//! draws a box yet; `Command::Export` and `ChooseDefaults` set a status line; the control
+//! channel would drive [`NegApp::run`] with [`Command`]s. The darkroom layers (test strip, zone
+//! placement, densitometer + zone overlay, Interactive Histogram) are wired in the `U3` block.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -34,6 +35,14 @@ use crate::loupe::{
     LoupeState, canvas, control_bar,
 };
 use crate::theme::Tokens;
+// --- U3: darkroom ---
+use crate::engine::{DarkroomCmd, DarkroomEvt, PinOp};
+use crate::interactive_histogram::{LevelsAction, LevelsWindow};
+use crate::loupe::CanvasOverlay;
+use crate::teststrip::{StripAction, TestStripController};
+use crate::zone_placement::{PlacementAction, ZonePlacementController};
+use crate::zones::{Readout, ZoneOverlayLayer, ZonesState};
+// --- end U3 ---
 
 /// Sidecar save debounce (AppModel.swift:928).
 pub const SAVE_DEBOUNCE: Duration = Duration::from_secs(1);
@@ -53,6 +62,10 @@ pub struct AppPrefs {
     pub sidebar: SidebarPrefs,
     /// Collapsed folder identities per root (Qt: `collapsed/<root>`).
     pub collapsed: HashMap<String, Vec<String>>,
+    // --- U3: darkroom ---
+    /// `@AppStorage("showZoneOverlay")` (default off).
+    pub show_zone_overlay: bool,
+    // --- end U3 ---
 }
 
 impl Default for AppPrefs {
@@ -64,6 +77,9 @@ impl Default for AppPrefs {
             library_width: 320.0,
             sidebar: SidebarPrefs::default(),
             collapsed: HashMap::new(),
+            // --- U3: darkroom ---
+            show_zone_overlay: false,
+            // --- end U3 ---
         }
     }
 }
@@ -124,6 +140,10 @@ pub enum Command {
     ClearAnalysis,
     Escape,
     TestStrip,
+    // --- U3: darkroom ---
+    /// Open (or raise) the Interactive Histogram window.
+    InteractiveHistogram,
+    // --- end U3 ---
 }
 
 const fn sc(m: Modifiers, k: Key) -> KeyboardShortcut {
@@ -190,6 +210,11 @@ pub struct HqController {
     pub mode: HqMode,
     pub active: bool,
     due: Option<Instant>,
+    // --- U3: darkroom ---
+    /// `canvasOwnedByProxyTool`: a test strip or zone placement owns the canvas (proxy renders
+    /// only — HQ is suppressed).
+    pub canvas_owned: bool,
+    // --- end U3 ---
 }
 
 impl HqController {
@@ -198,7 +223,7 @@ impl HqController {
             zoom,
             HQ_AUTO_ZOOM_THRESHOLD,
             has_selection,
-            false,
+            self.canvas_owned,
             tool_active,
         )
     }
@@ -336,6 +361,13 @@ pub struct NegApp {
     perf: Perf,
     frames_rendered: u64,
     open_failed: Option<String>,
+
+    // --- U3: darkroom ---
+    zones: ZonesState,
+    strip: TestStripController,
+    placement: ZonePlacementController,
+    levels: LevelsWindow,
+    // --- end U3 ---
 }
 
 struct FolderDialog {
@@ -406,6 +438,12 @@ impl NegApp {
             perf: Perf::default(),
             frames_rendered: 0,
             open_failed: None,
+            // --- U3: darkroom ---
+            zones: ZonesState::default(),
+            strip: TestStripController::default(),
+            placement: ZonePlacementController::default(),
+            levels: LevelsWindow::default(),
+            // --- end U3 ---
         };
         let folder = options
             .initial_folder
@@ -501,6 +539,10 @@ impl NegApp {
         self.multi.clear();
         self.loupe.clear();
         self.presenter.clear();
+        // --- U3: darkroom ---
+        self.clear_darkroom_layers();
+        self.zones.clear();
+        // --- end U3 ---
     }
 
     fn select(&mut self, path: PathBuf, additive: bool, range: bool) {
@@ -550,6 +592,10 @@ impl NegApp {
         self.open_failed = None;
         self.analyzing = false;
         self.hover_uv = None;
+        // --- U3: darkroom ---
+        self.clear_darkroom_layers();
+        self.zones.clear();
+        // --- end U3 ---
         self.multi.insert(path.clone());
         let restored =
             SidecarStore::load(&path).unwrap_or_else(|| self.profiles.default_settings());
@@ -612,6 +658,9 @@ impl NegApp {
     /// `settings` didSet (session-spec §6).
     fn settings_changed(&mut self) {
         self.last_settings = self.settings.clone();
+        // --- U3: darkroom --- any real edit clears the strip and the placement
+        self.clear_darkroom_layers();
+        // --- end U3 ---
         self.schedule_render();
         if !self.is_restoring_settings {
             if self.autosave {
@@ -704,6 +753,9 @@ impl NegApp {
             self.selection.is_some(),
             self.tool_active(),
         );
+        // --- U3: darkroom --- (`hqMode` didSet clears strip + placement)
+        self.clear_darkroom_layers();
+        // --- end U3 ---
         self.hq.set_mode(mode, zoom, has_sel, tool);
         if mode == HqMode::Off
             && let Some(p) = self.selection.clone()
@@ -726,6 +778,11 @@ impl NegApp {
 
     fn set_baseline(&mut self, on: bool) {
         if self.baseline_held != on {
+            // --- U3: darkroom ---
+            if on {
+                self.clear_darkroom_layers();
+            }
+            // --- end U3 ---
             self.baseline_held = on;
             self.schedule_render();
         }
@@ -822,9 +879,19 @@ impl NegApp {
             Command::ToggleGrid => {
                 self.sidebar.prefs.show_grid_lines = !self.sidebar.prefs.show_grid_lines
             }
+            // --- U3: darkroom ---
             Command::ToggleZones => {
-                self.status_message = Some("Zone overlay arrives in a later wave".into())
+                if has_sel {
+                    self.prefs.show_zone_overlay = !self.prefs.show_zone_overlay;
+                    self.zones.refresh_grid(self.prefs.show_zone_overlay);
+                }
             }
+            Command::InteractiveHistogram => {
+                if has_sel {
+                    self.levels.open = true;
+                }
+            }
+            // --- end U3 ---
             Command::SetHq(m) => {
                 if has_sel {
                     self.set_hq_mode(m);
@@ -837,6 +904,11 @@ impl NegApp {
             }
             Command::Previous => self.select_adjacent(-1),
             Command::Next => self.select_adjacent(1),
+            // --- U3: darkroom --- while a strip is up the rotate commands turn the LADDER
+            Command::RotateLeft | Command::RotateRight if self.strip.owns_canvas() => {
+                self.rotate_ladder(cmd == Command::RotateRight);
+            }
+            // --- end U3 ---
             Command::RotateLeft => {
                 if has_sel {
                     self.arm_label(labels::ROTATE_CCW);
@@ -856,6 +928,7 @@ impl NegApp {
                 }
             }
             Command::ToggleCrop | Command::ToggleAnalysis => {
+                self.clear_darkroom_layers(); // --- U3: darkroom ---
                 self.status_message = Some("Canvas tools arrive in a later wave".into());
             }
             Command::ClearCropAndStraighten => {
@@ -879,6 +952,15 @@ impl NegApp {
                     self.settings.analysis_rect_fine_rotation = 0.0;
                 }
             }
+            // --- U3: darkroom --- Escape clears the strip first, then the placement
+            Command::Escape if self.strip.owns_canvas() || self.placement.is_active() => {
+                if self.strip.owns_canvas() {
+                    self.clear_test_strip();
+                } else {
+                    self.clear_zone_placement();
+                }
+            }
+            // --- end U3 ---
             Command::Escape => {
                 if self.tool_mode != ToolMode::None {
                     self.tool_mode = ToolMode::None;
@@ -888,9 +970,7 @@ impl NegApp {
                     self.folder_dialog = None;
                 }
             }
-            Command::TestStrip => {
-                self.status_message = Some("The test strip arrives in a later wave".into())
-            }
+            Command::TestStrip => self.toggle_test_strip(), // --- U3: darkroom ---
         }
     }
 
@@ -954,7 +1034,21 @@ impl NegApp {
                         self.perf.render_ms,
                         self.perf.latency_ms
                     );
+                    // --- U3: darkroom --- the densitometer adopts the bytes (moved, not copied)
+                    self.zones.adopt(*output, self.prefs.show_zone_overlay);
+                    // --- end U3 ---
                 }
+                // --- U3: darkroom ---
+                Evt::Darkroom {
+                    path,
+                    generation,
+                    event,
+                } => {
+                    if Some(path.as_path()) == self.selection.as_deref() {
+                        self.on_darkroom_event(ctx, generation, event);
+                    }
+                }
+                // --- end U3 ---
                 Evt::RenderFailed {
                     path,
                     generation,
@@ -1177,7 +1271,13 @@ impl NegApp {
                 ) {
                     cmds.push(Command::ToggleGrid);
                 }
-                if item(ui, "Zone Overlay", Command::ToggleZones, has_sel, false) {
+                if item(
+                    ui,
+                    "Zone Overlay",
+                    Command::ToggleZones,
+                    has_sel,
+                    self.prefs.show_zone_overlay, // --- U3: darkroom ---
+                ) {
                     cmds.push(Command::ToggleZones);
                 }
                 ui.separator();
@@ -1365,6 +1465,378 @@ impl NegApp {
     }
 }
 
+// --- U3: darkroom ---
+/// The darkroom layers (test strip, zone placement, densitometer + zone overlay, Interactive
+/// Histogram) — `AppModel` session-spec §7–§9. The layer state lives in `teststrip`,
+/// `zone_placement`, `zones` and `interactive_histogram`; this block is the app glue.
+impl NegApp {
+    /// Whether the strip or the placement owns the canvas (HQ suppressed, probe off).
+    fn darkroom_owns_canvas(&self) -> bool {
+        self.strip.owns_canvas() || self.placement.is_active()
+    }
+
+    /// Re-resolve HQ after the canvas owner changed (`refreshHQActive(debounced: false)`).
+    fn refresh_canvas_owner(&mut self) {
+        self.hq.canvas_owned = self.darkroom_owns_canvas();
+        let (zoom, has_sel, tool) = (
+            f64::from(self.canvas_zoom),
+            self.selection.is_some(),
+            self.tool_active(),
+        );
+        if self.hq.refresh(zoom, has_sel, tool) {
+            self.schedule_render();
+        }
+    }
+
+    /// Clear both canvas-owning layers.
+    fn clear_darkroom_layers(&mut self) {
+        let a = self.strip.clear();
+        let b = self.placement.clear();
+        if a || b {
+            self.refresh_canvas_owner();
+        }
+    }
+
+    fn clear_test_strip(&mut self) {
+        if self.strip.clear() {
+            self.refresh_canvas_owner();
+        }
+    }
+
+    fn clear_zone_placement(&mut self) {
+        if self.placement.clear() {
+            self.refresh_canvas_owner();
+        }
+    }
+
+    fn send_darkroom(&mut self, cmd: DarkroomCmd, generation: u64) {
+        let Some(path) = self.selection.clone() else {
+            return;
+        };
+        self.engine.send(Cmd::Darkroom {
+            path,
+            settings: self.settings.clone(),
+            cmd,
+            generation,
+        });
+    }
+
+    /// Strip and placement are proxy renders: an explicit HQ On is demoted to Off first.
+    fn demote_hq_on(&mut self) {
+        if self.hq.mode == HqMode::On {
+            self.set_hq_mode(HqMode::Off);
+        }
+    }
+
+    /// `toggleTestStrip()`.
+    fn toggle_test_strip(&mut self) {
+        if self.strip.owns_canvas() {
+            self.clear_test_strip();
+            return;
+        }
+        if self.selection.is_none() || self.tool_active() || self.baseline_held {
+            return;
+        }
+        self.clear_zone_placement();
+        self.demote_hq_on();
+        let generation = self.strip.begin_build(self.settings.clone());
+        self.refresh_canvas_owner();
+        let orientation = self.strip.orientation;
+        self.send_darkroom(DarkroomCmd::TestStrip { orientation }, generation);
+    }
+
+    /// `rotateTestStripLadder`.
+    fn rotate_ladder(&mut self, clockwise: bool) {
+        self.strip.orientation = (self.strip.orientation + if clockwise { 1 } else { 3 }) % 4;
+        self.clear_test_strip();
+        self.toggle_test_strip();
+    }
+
+    /// `armZonePlacementTarget`.
+    fn arm_zone(&mut self, zone: f64) {
+        if self.selection.is_none() || self.tool_active() || self.baseline_held {
+            return;
+        }
+        self.clear_test_strip();
+        self.demote_hq_on();
+        self.placement.arm(zone);
+        self.refresh_canvas_owner();
+    }
+
+    fn resolve_zone_placement(&mut self) {
+        let Some(st) = &mut self.placement.state else {
+            return;
+        };
+        if st.pins.is_empty() {
+            return;
+        }
+        st.solving = true;
+        let pins = st.pins.clone();
+        let generation = self.placement.next_generation();
+        self.send_darkroom(DarkroomCmd::ZoneSolve { pins }, generation);
+    }
+
+    /// The probe meters the plain presentation only (no tool, no strip, no placement).
+    fn probe_densitometer(&mut self, uv: Option<(f32, f32)>) {
+        let active = !self.tool_active() && !self.baseline_held && !self.darkroom_owns_canvas();
+        let uv = uv.filter(|_| active);
+        self.zones.probe(uv, &self.loupe.content_window);
+    }
+
+    fn on_darkroom_event(&mut self, ctx: &egui::Context, generation: u64, event: DarkroomEvt) {
+        match event {
+            DarkroomEvt::TestStrip { result, build_time } => {
+                if generation != self.strip.generation {
+                    return;
+                }
+                self.strip.build_ms = build_time.as_secs_f32() * 1000.0;
+                let snapshot = self.strip.snapshot.clone();
+                match result {
+                    Ok(out)
+                        if snapshot.as_ref() == Some(&self.settings)
+                            && !self.tool_active()
+                            && !self.baseline_held =>
+                    {
+                        log::info!(
+                            "test strip {}×{} built in {:.0} ms",
+                            out.width,
+                            out.height,
+                            self.strip.build_ms
+                        );
+                        self.strip.adopt(ctx, &out, self.settings.clone());
+                    }
+                    Ok(_) => self.clear_test_strip(),
+                    Err(e) => {
+                        self.status_message = Some(format!("Test strip failed: {e}"));
+                        self.clear_test_strip();
+                    }
+                }
+            }
+            DarkroomEvt::Preview { result } => {
+                if generation != self.strip.generation {
+                    return;
+                }
+                if let (Ok(out), Some((row, col))) = (result, self.strip.requested_preview.take()) {
+                    self.strip.adopt_preview(ctx, row, col, &out);
+                }
+            }
+            DarkroomEvt::ZoneSampled { op, result } => {
+                if generation != self.placement.generation {
+                    return;
+                }
+                if let Ok(pin) = result
+                    && self.placement.apply_sample(op, pin)
+                {
+                    self.resolve_zone_placement();
+                }
+            }
+            DarkroomEvt::ZoneSolved {
+                labels,
+                solution,
+                preview,
+            } => {
+                if generation != self.placement.generation {
+                    return;
+                }
+                self.placement
+                    .adopt_solve(ctx, labels, solution.map(|s| *s), preview.as_deref());
+            }
+        }
+    }
+
+    /// Per-frame: the Interactive Histogram window and the layers' queued actions.
+    fn darkroom_frame(&mut self, ctx: &egui::Context) {
+        let enabled = self.selection.is_some();
+        let actions = crate::interactive_histogram::show(
+            ctx,
+            &mut self.levels,
+            &mut self.settings,
+            self.histogram.as_deref(),
+            enabled,
+        );
+        for a in actions {
+            match a {
+                LevelsAction::DragBegin => self.set_control_editing(true),
+                LevelsAction::DragEnd => self.set_control_editing(false),
+                LevelsAction::Label(l) => self.arm_label(&l),
+            }
+        }
+        for a in self.strip.take_actions(ctx) {
+            match a {
+                StripAction::Preview { row, col } => {
+                    let Some(strip) = &self.strip.strip else {
+                        continue;
+                    };
+                    let Some(s) =
+                        crate::teststrip::picked_settings(&strip.base, row, col, strip.orientation)
+                    else {
+                        continue;
+                    };
+                    self.strip.requested_preview = Some((row, col));
+                    let generation = self.strip.generation;
+                    if let Some(path) = self.selection.clone() {
+                        self.engine.send(Cmd::Darkroom {
+                            path,
+                            settings: s,
+                            cmd: DarkroomCmd::Preview,
+                            generation,
+                        });
+                    }
+                }
+                StripAction::BackToGrid => self.strip.back_to_grid(),
+                StripAction::Confirm { row, col } => {
+                    let orientation = self.strip.strip.as_ref().map(|s| s.orientation);
+                    if let Some(next) = orientation.and_then(|o| {
+                        crate::teststrip::picked_settings(&self.settings, row, col, o)
+                    }) {
+                        if next != self.settings {
+                            self.arm_label(labels::TEST_STRIP_PICK);
+                            self.settings = next;
+                        }
+                        self.clear_test_strip();
+                    }
+                }
+            }
+        }
+        for a in self.placement.take_actions() {
+            match a {
+                PlacementAction::AddPin { u, v } => {
+                    let armed = self.placement.armed();
+                    let generation = self.placement.next_generation();
+                    self.send_darkroom(
+                        DarkroomCmd::ZoneSample {
+                            u,
+                            v,
+                            armed,
+                            op: PinOp::Add,
+                        },
+                        generation,
+                    );
+                }
+                PlacementAction::MovePin { index, u, v, last } => {
+                    let generation = self.placement.next_generation();
+                    self.send_darkroom(
+                        DarkroomCmd::ZoneSample {
+                            u,
+                            v,
+                            armed: None,
+                            op: PinOp::Move { index, last },
+                        },
+                        generation,
+                    );
+                }
+                PlacementAction::Apply => {
+                    let next = self
+                        .placement
+                        .state
+                        .as_ref()
+                        .and_then(|s| s.solution.as_ref())
+                        .map(|s| s.settings.clone());
+                    if let Some(next) = next {
+                        if next != self.settings {
+                            self.arm_label(labels::ZONE_PLACEMENT);
+                            self.settings = next;
+                        }
+                        self.clear_zone_placement();
+                    }
+                }
+                PlacementAction::Clear => self.clear_zone_placement(),
+            }
+        }
+    }
+
+    // ── read-outs and hooks for the selftest / tests ──
+
+    /// Whether the zone overlay preference is on.
+    pub fn zone_overlay_on(&self) -> bool {
+        self.prefs.show_zone_overlay
+    }
+
+    /// The overlay grid is computed (the overlay is drawn on the next frame).
+    pub fn zone_grid_ready(&self) -> bool {
+        self.zones.grid.is_some()
+    }
+
+    /// Last zone-grid computation time (ms).
+    pub fn zone_grid_ms(&self) -> f32 {
+        self.zones.grid_ms
+    }
+
+    /// The current densitometer read-out.
+    pub fn densitometer_readout(&self) -> Readout {
+        Readout {
+            reading: self.zones.densitometer.reading(),
+            armed: self.placement.armed(),
+        }
+    }
+
+    /// A test strip is on screen (not merely building).
+    pub fn test_strip_up(&self) -> bool {
+        self.strip.strip.is_some()
+    }
+
+    /// A test strip is showing or building.
+    pub fn test_strip_owns_canvas(&self) -> bool {
+        self.strip.owns_canvas()
+    }
+
+    /// Last test-strip build time (ms, worker side).
+    pub fn test_strip_build_ms(&self) -> f32 {
+        self.strip.build_ms
+    }
+
+    /// The ladder orientation (0–3).
+    pub fn test_strip_orientation(&self) -> i32 {
+        self.strip.orientation
+    }
+
+    /// Arm a zone for placement (a zone-strip cell click).
+    pub fn arm_placement_zone(&mut self, zone: f64) {
+        self.arm_zone(zone);
+    }
+
+    /// Placement pins and whether a solution is in.
+    pub fn placement_status(&self) -> Option<(usize, bool, bool)> {
+        self.placement
+            .state
+            .as_ref()
+            .map(|s| (s.pins.len(), s.solution.is_some(), s.solving))
+    }
+
+    /// The canvas' ideal frame rect of the last layout (screen points).
+    pub fn canvas_frame_rect(&self) -> Option<Rect> {
+        self.loupe.last_frame_rect
+    }
+
+    /// Whether the Interactive Histogram window is open.
+    pub fn interactive_histogram_open(&self) -> bool {
+        self.levels.open
+    }
+
+    /// The current history entry's label for the open image (tests).
+    pub fn current_history_label(&self) -> Option<String> {
+        let h = self
+            .selection
+            .as_ref()
+            .and_then(|p| self.histories.get(p))?;
+        h.entries().get(h.index()).map(|e| e.label.clone())
+    }
+
+    /// Whether zone placement is up.
+    pub fn zone_placement_active(&self) -> bool {
+        self.placement.is_active()
+    }
+
+    /// Close the Interactive Histogram window.
+    pub fn close_interactive_histogram(&mut self) {
+        if self.levels.drag_index.take().is_some() {
+            self.set_control_editing(false);
+        }
+        self.levels.open = false;
+    }
+}
+// --- end U3 ---
+
 impl eframe::App for NegApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.handle_events(ctx);
@@ -1415,6 +1887,7 @@ impl eframe::App for NegApp {
                     can_undo,
                     can_redo,
                     is_exporting: false,
+                    test_strip_active: self.strip.owns_canvas(), // --- U3: darkroom ---
                 };
                 let mut sidebar = std::mem::take(&mut self.sidebar);
                 sidebar_actions = controls_sidebar(ui, &mut sidebar, &mut self.settings, input);
@@ -1481,26 +1954,45 @@ impl eframe::App for NegApp {
                     tool_mode: self.tool_mode,
                     frame_label: None,
                 };
-                canvas_actions = canvas(ui, canvas_rect, &mut self.loupe, &input);
+                // --- U3: darkroom --- overlay layers (zone overlay, test strip, placement)
+                let plain = self.tool_mode == ToolMode::None;
+                let mut zone_layer = self
+                    .zones
+                    .grid
+                    .as_ref()
+                    .filter(|_| self.prefs.show_zone_overlay && plain)
+                    .map(|grid| ZoneOverlayLayer { grid });
+                let mut overlays: Vec<&mut dyn CanvasOverlay> = Vec::new();
+                if let Some(z) = zone_layer.as_mut() {
+                    overlays.push(z);
+                }
+                if plain {
+                    overlays.push(&mut self.strip);
+                    overlays.push(&mut self.placement);
+                }
+                // --- end U3 ---
+                canvas_actions = canvas(ui, canvas_rect, &mut self.loupe, &input, &mut overlays);
                 let mut bar_ui = ui.new_child(
                     egui::UiBuilder::new()
                         .max_rect(bar_rect)
                         .layout(egui::Layout::left_to_right(egui::Align::Center)),
                 );
                 bar_ui.painter().rect_filled(bar_rect, 0.0, t.chrome);
-                let readout = match self.hover_uv {
-                    Some(_) => "densitometer — later wave",
-                    None => "hover to meter",
+                // --- U3: darkroom ---
+                let readout = Readout {
+                    reading: self.zones.densitometer.reading(),
+                    armed: self.placement.armed(),
                 };
+                // --- end U3 ---
                 bar_actions = control_bar(
                     &mut bar_ui,
                     &BarInput {
                         has_selection: self.selection.is_some(),
                         hq_mode: self.hq.mode,
                         hq_active: self.hq.active,
-                        zones_on: false,
+                        zones_on: self.prefs.show_zone_overlay, // --- U3: darkroom ---
                         canvas_color: self.prefs.canvas_color,
-                        readout,
+                        readout: &readout,
                     },
                 );
                 // status line
@@ -1561,6 +2053,9 @@ impl eframe::App for NegApp {
                 SidebarAction::Redo => cmds.push(Command::Redo),
                 SidebarAction::JumpHistory(i) => self.jump_history(i),
                 SidebarAction::PrefsChanged => {}
+                // --- U3: darkroom ---
+                SidebarAction::OpenInteractiveHistogram => cmds.push(Command::InteractiveHistogram),
+                // --- end U3 ---
             }
         }
         for a in lib_actions {
@@ -1578,7 +2073,10 @@ impl eframe::App for NegApp {
         for a in canvas_actions {
             match a {
                 CanvasAction::ZoomChanged(z) => self.on_zoom(z),
-                CanvasAction::Hover(uv) => self.hover_uv = uv,
+                CanvasAction::Hover(uv) => {
+                    self.hover_uv = uv;
+                    self.probe_densitometer(uv); // --- U3: darkroom ---
+                }
             }
         }
         for a in bar_actions {
@@ -1589,12 +2087,14 @@ impl eframe::App for NegApp {
                 BarAction::CycleHq => cmds.push(Command::CycleHq),
                 BarAction::ToggleZones => cmds.push(Command::ToggleZones),
                 BarAction::CanvasColor(c) => self.prefs.canvas_color = c,
+                BarAction::ArmZone(z) => self.arm_zone(z), // --- U3: darkroom ---
             }
         }
         for c in cmds {
             self.run(c);
         }
         self.folder_dialog_ui(&ctx);
+        self.darkroom_frame(&ctx); // --- U3: darkroom ---
 
         // settings didSet
         if self.settings != self.last_settings {

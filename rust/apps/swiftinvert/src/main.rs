@@ -21,13 +21,25 @@ use eframe::wgpu;
 const APP_NAME: &str = "SwiftInvert";
 
 fn usage() -> ExitCode {
-    eprintln!("usage: swiftinvert [folder]\n       swiftinvert --selftest <out.png> [folder]");
+    eprintln!(
+        "usage: swiftinvert [folder]\n       swiftinvert --selftest <out.png> [folder] [--teststrip] [--zones]"
+    );
     ExitCode::from(2)
 }
 
 fn main() -> ExitCode {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // --- U3: darkroom --- `--teststrip` / `--zones` add darkroom captures to `--selftest`
+    let darkroom = negui::selftest::DarkroomCaptures {
+        test_strip: args.iter().any(|a| a == "--teststrip"),
+        zones: args.iter().any(|a| a == "--zones"),
+    };
+    let args: Vec<String> = args
+        .into_iter()
+        .filter(|a| a != "--teststrip" && a != "--zones")
+        .collect();
+    // --- end U3 ---
     if args.first().map(String::as_str) == Some("--selftest") {
         let Some(out) = args.get(1) else {
             return usage();
@@ -37,10 +49,11 @@ fn main() -> ExitCode {
             .map(PathBuf::from)
             .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Pictures")));
         let Some(folder) = folder else { return usage() };
-        return match negui::selftest::run_selftest(
+        return match negui::selftest::run_selftest_with(
             std::path::Path::new(out),
             folder,
             Duration::from_secs(120),
+            darkroom,
         ) {
             Ok([w, h]) => {
                 println!("selftest: wrote {out} ({w}×{h})");

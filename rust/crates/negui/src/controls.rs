@@ -111,6 +111,10 @@ pub struct SidebarInput<'a> {
     pub can_undo: bool,
     pub can_redo: bool,
     pub is_exporting: bool,
+    // --- U3: darkroom ---
+    /// A test strip is showing or building (the button's active style).
+    pub test_strip_active: bool,
+    // --- end U3 ---
 }
 
 /// Things the sidebar asked the app to do (settings edits are applied in place).
@@ -135,6 +139,10 @@ pub enum SidebarAction {
     JumpHistory(usize),
     /// Sidebar prefs changed (persist).
     PrefsChanged,
+    // --- U3: darkroom ---
+    /// The histogram chart was double-clicked: open the Interactive Histogram window.
+    OpenInteractiveHistogram,
+    // --- end U3 ---
 }
 
 /// Slider result.
@@ -683,6 +691,11 @@ pub fn controls_sidebar(
             if h.drag_end {
                 actions.push(SidebarAction::DragEnd);
             }
+            // --- U3: darkroom ---
+            if h.double_clicked && enabled {
+                actions.push(SidebarAction::OpenInteractiveHistogram);
+            }
+            // --- end U3 ---
             ui.add_space(6.0);
             egui::ScrollArea::vertical()
                 .id_salt("controls-scroll")
@@ -770,12 +783,16 @@ fn groups(
         if let Some(sp) = spec_by_id("print.maskSpacer") {
             slider_row(ui, sp, settings, enabled, actions);
         }
-        if small_button(ui, "▦ Test Strip", false, false)
-            .on_disabled_hover_text("The test strip arrives in a later wave (⇧T)")
+        // --- U3: darkroom ---
+        if small_button(ui, "▦ Test Strip", enabled, input.test_strip_active)
+            .on_hover_text(
+                "Print the frame as a 5×5 test strip — Brightness across, Grade down (⇧T)",
+            )
             .clicked()
         {
             actions.push(SidebarAction::TestStrip);
         }
+        // --- end U3 ---
     });
     ui.add_space(gap);
 
