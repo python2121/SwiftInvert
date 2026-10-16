@@ -67,13 +67,28 @@ fn main() -> ExitCode {
         APP_NAME,
         options,
         Box::new(move |cc| {
-            Ok(Box::new(negui::NegApp::new(
+            // macOS: the menus go in the system menu bar (opt out with SWIFTINVERT_NO_NATIVE_MENU=1);
+            // every other platform keeps the in-window egui menu bar.
+            let native_menu = cfg!(target_os = "macos")
+                && std::env::var_os("SWIFTINVERT_NO_NATIVE_MENU").is_none();
+            let app = negui::NegApp::new(
                 cc,
                 negui::AppOptions {
                     initial_folder: folder,
+                    native_menu,
                     ..Default::default()
                 },
-            )))
+            );
+            #[cfg(target_os = "macos")]
+            if native_menu {
+                return Ok(
+                    match negui::native_menu::NativeMenuApp::new(app, &cc.egui_ctx) {
+                        Ok(wrapped) => Box::new(wrapped) as Box<dyn eframe::App>,
+                        Err(app) => app,
+                    },
+                );
+            }
+            Ok(Box::new(app))
         }),
     );
     match result {

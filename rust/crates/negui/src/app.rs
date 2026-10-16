@@ -169,6 +169,9 @@ pub struct AppOptions {
     pub presenter: Option<Box<dyn FramePresenter>>,
     /// RAW decoder override (tests); `None` = the build's default backend.
     pub backend: Option<Arc<dyn RawBackend>>,
+    /// Put the menus in the macOS menu bar instead of drawing them in the window. Ignored on
+    /// other platforms; off under `--selftest` (no AppKit menu in a headless harness).
+    pub native_menu: bool,
 }
 
 impl Default for AppOptions {
@@ -180,6 +183,7 @@ impl Default for AppOptions {
             renderer: None,
             presenter: None,
             backend: None,
+            native_menu: false,
         }
     }
 }
@@ -280,6 +284,34 @@ pub const SHORTCUTS: &[(KeyboardShortcut, Command)] = &[
 
 fn shortcut_for(cmd: Command) -> Option<KeyboardShortcut> {
     SHORTCUTS.iter().find(|(_, c)| *c == cmd).map(|(s, _)| *s)
+}
+
+/// One top-level menu ("File", "Edit", …) of [`NegApp::menu_model`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct MenuSection {
+    pub title: &'static str,
+    pub entries: Vec<MenuEntry>,
+}
+
+/// A row of a [`MenuSection`].
+#[derive(Clone, Debug, PartialEq)]
+pub enum MenuEntry {
+    /// A command; `checked` is `Some` for toggles and radio rows.
+    Item {
+        label: String,
+        cmd: Command,
+        enabled: bool,
+        checked: Option<bool>,
+    },
+    Separator,
+    /// A non-interactive caption (the "HQ Preview" group).
+    Heading(&'static str),
+}
+
+/// The menu key equivalent of a command (the ⌘-chords; the key monitor's bare keys are not
+/// menu equivalents), for the native macOS menu.
+pub fn menu_shortcut(cmd: Command) -> Option<KeyboardShortcut> {
+    shortcut_for(cmd)
 }
 
 /// The key a command answers to, menu shortcuts and the key monitor's bare keys alike.
@@ -424,6 +456,9 @@ pub struct Perf {
 
 /// The app.
 pub struct NegApp {
+    /// The menus live in the macOS menu bar (`native_menu::NativeMenuApp` owns the AppKit menu
+    /// and drives it); the window then draws no menu bar and leaves ⌘-chords to that menu.
+    native_menu: bool,
     engine: Engine,
     library: LibraryState,
     sidebar: SidebarState,
@@ -576,6 +611,7 @@ impl NegApp {
             placement: ZonePlacementController::default(),
             levels: LevelsWindow::default(),
             // --- end U3 ---
+            native_menu: cfg!(target_os = "macos") && options.native_menu,
         };
         let folder = options
             .initial_folder
@@ -684,6 +720,16 @@ impl NegApp {
     /// The error pill text on the canvas, if any.
     pub fn render_error(&self) -> Option<&str> {
         self.render_error.as_deref()
+    }
+
+    /// Whether the menus live in the macOS menu bar (and not in the window).
+    pub fn has_native_menu(&self) -> bool {
+        self.native_menu
+    }
+
+    /// Hand the menus back to the window (the native menu failed to install).
+    pub fn set_native_menu(&mut self, on: bool) {
+        self.native_menu = cfg!(target_os = "macos") && on;
     }
 
     /// Whether a modal dialog (Export, Profiles, Open Folder) is up.
@@ -1389,6 +1435,7 @@ impl NegApp {
             return cmds;
         }
         let modal = self.modal_open();
+        let native_menu = self.has_native_menu();
         ctx.input_mut(|i| {
             if i.consume_key(Modifiers::NONE, Key::Escape) {
                 cmds.push(Command::Escape);
@@ -1396,9 +1443,11 @@ impl NegApp {
             if modal {
                 return;
             }
-            for (s, c) in SHORTCUTS {
-                if i.consume_shortcut(s) {
-                    cmds.push(*c);
+            if !native_menu {
+                for (s, c) in SHORTCUTS {
+                    if i.consume_shortcut(s) {
+                        cmds.push(*c);
+                    }
                 }
             }
             if i.consume_key(Modifiers::NONE, Key::ArrowLeft)
@@ -1421,8 +1470,23 @@ impl NegApp {
         cmds
     }
 
-    fn menu_bar(&mut self, ui: &mut egui::Ui) -> Vec<Command> {
-        let mut cmds = Vec::new();
+    /// The menu bar as data: the egui bar (Linux/Windows) and the native macOS menu
+    /// (`native_menu`) are both generated from this, so labels, order, enabled and checked
+    /// state can't drift between platforms.
+    pub fn menu_model(&self) -> Vec<MenuSection> {
+        use MenuEntry::{Heading, Separator};
+        let item = |label: &str, cmd: Command, enabled: bool| MenuEntry::Item {
+            label: label.to_owned(),
+            cmd,
+            enabled,
+            checked: None,
+        };
+        let check = |label: &str, cmd: Command, enabled: bool, on: bool| MenuEntry::Item {
+            label: label.to_owned(),
+            cmd,
+            enabled,
+            checked: Some(on),
+        };
         let has_sel = self.selection.is_some();
         let has_files = !self.library.flat.is_empty();
         let (can_undo, can_redo, uncommitted) = self
@@ -1437,204 +1501,153 @@ impl NegApp {
                 )
             })
             .unwrap_or((false, false, false));
-        let item =
-            |ui: &mut egui::Ui, label: &str, cmd: Command, enabled: bool, checked: bool| -> bool {
-                let mut b = egui::Button::new(if checked {
-                    format!("✔ {label}")
-                } else {
-                    label.to_owned()
-                });
-                if let Some(s) = shortcut_for(cmd) {
-                    b = b.shortcut_text(ui.ctx().format_shortcut(&s));
-                }
-                let r = ui.add_enabled(enabled, b);
-                if r.clicked() {
-                    ui.close();
-                    true
-                } else {
-                    false
-                }
-            };
-        egui::MenuBar::new().ui(ui, |ui| {
-            ui.menu_button("File", |ui| {
-                if item(ui, "Open Folder…", Command::OpenFolder, true, false) {
-                    cmds.push(Command::OpenFolder);
-                }
-                if item(
-                    ui,
-                    "Choose Default Settings…",
-                    Command::ChooseDefaults,
-                    true,
-                    false,
-                ) {
-                    cmds.push(Command::ChooseDefaults);
-                }
-                ui.separator();
-                if item(ui, "Export…", Command::Export, has_sel, false) {
-                    cmds.push(Command::Export);
-                }
-                if item(
-                    ui,
-                    "Show in File Manager",
-                    Command::ShowInFileManager,
-                    has_sel,
-                    false,
-                ) {
-                    cmds.push(Command::ShowInFileManager);
-                }
-            });
-            ui.menu_button("Edit", |ui| {
-                if item(
-                    ui,
-                    "Undo Edit",
-                    Command::Undo,
-                    can_undo || uncommitted,
-                    false,
-                ) {
-                    cmds.push(Command::Undo);
-                }
-                if item(ui, "Redo Edit", Command::Redo, can_redo, false) {
-                    cmds.push(Command::Redo);
-                }
-                ui.separator();
-                if item(
-                    ui,
-                    "Copy Adjustments",
-                    Command::CopyAdjustments,
-                    has_sel,
-                    false,
-                ) {
-                    cmds.push(Command::CopyAdjustments);
-                }
-                if item(
-                    ui,
-                    "Paste Adjustments",
-                    Command::PasteAdjustments,
-                    has_sel && self.copied.is_some(),
-                    false,
-                ) {
-                    cmds.push(Command::PasteAdjustments);
-                }
-                if item(
-                    ui,
-                    "Paste Adjustments to Selection",
-                    Command::PasteToSelection,
-                    self.multi.len() > 1 && self.copied.is_some(),
-                    false,
-                ) {
-                    cmds.push(Command::PasteToSelection);
-                }
-                ui.separator();
-                if item(ui, "Reset All", Command::ResetAll, has_sel, false) {
-                    cmds.push(Command::ResetAll);
-                }
-            });
-            ui.menu_button("View", |ui| {
-                if item(
-                    ui,
-                    "Show Library",
-                    Command::ToggleLibrary,
-                    true,
-                    self.prefs.library_visible,
-                ) {
-                    cmds.push(Command::ToggleLibrary);
-                }
-                if item(
-                    ui,
-                    "Show Grid Lines",
-                    Command::ToggleGrid,
-                    true,
-                    self.sidebar.prefs.show_grid_lines,
-                ) {
-                    cmds.push(Command::ToggleGrid);
-                }
-                if item(
-                    ui,
-                    "Zone Overlay",
-                    Command::ToggleZones,
-                    has_sel,
-                    self.prefs.show_zone_overlay, // --- U3: darkroom ---
-                ) {
-                    cmds.push(Command::ToggleZones);
-                }
-                ui.separator();
-                ui.label(egui::RichText::new("HQ Preview").weak());
-                for (m, label) in [
-                    (HqMode::Off, "Off"),
-                    (HqMode::Auto, "Auto"),
-                    (HqMode::On, "On"),
-                ] {
-                    if item(
-                        ui,
-                        &format!("    {label}"),
-                        Command::SetHq(m),
+        let geometry =
+            self.settings.crop_rect.is_some() || self.settings.fine_rotation.abs() > 1e-9;
+        let mut view = vec![
+            check(
+                "Show Library",
+                Command::ToggleLibrary,
+                true,
+                self.prefs.library_visible,
+            ),
+            check(
+                "Show Grid Lines",
+                Command::ToggleGrid,
+                true,
+                self.sidebar.prefs.show_grid_lines,
+            ),
+            check(
+                "Zone Overlay",
+                Command::ToggleZones,
+                has_sel,
+                self.prefs.show_zone_overlay, // --- U3: darkroom ---
+            ),
+            Separator,
+            Heading("HQ Preview"),
+        ];
+        for (m, label) in [
+            (HqMode::Off, "Off"),
+            (HqMode::Auto, "Auto"),
+            (HqMode::On, "On"),
+        ] {
+            view.push(check(label, Command::SetHq(m), has_sel, self.hq.mode == m));
+        }
+        view.push(item("Cycle HQ Preview", Command::CycleHq, has_sel));
+        vec![
+            MenuSection {
+                title: "File",
+                entries: vec![
+                    item("Open Folder…", Command::OpenFolder, true),
+                    item("Choose Default Settings…", Command::ChooseDefaults, true),
+                    Separator,
+                    item("Export…", Command::Export, has_sel),
+                    item("Show in File Manager", Command::ShowInFileManager, has_sel),
+                ],
+            },
+            MenuSection {
+                title: "Edit",
+                entries: vec![
+                    item("Undo Edit", Command::Undo, can_undo || uncommitted),
+                    item("Redo Edit", Command::Redo, can_redo),
+                    Separator,
+                    item("Copy Adjustments", Command::CopyAdjustments, has_sel),
+                    item(
+                        "Paste Adjustments",
+                        Command::PasteAdjustments,
+                        has_sel && self.copied.is_some(),
+                    ),
+                    item(
+                        "Paste Adjustments to Selection",
+                        Command::PasteToSelection,
+                        self.multi.len() > 1 && self.copied.is_some(),
+                    ),
+                    Separator,
+                    item("Reset All", Command::ResetAll, has_sel),
+                ],
+            },
+            MenuSection {
+                title: "View",
+                entries: view,
+            },
+            MenuSection {
+                title: "Image",
+                entries: vec![
+                    item("Previous Image", Command::Previous, has_files),
+                    item("Next Image", Command::Next, has_files),
+                    Separator,
+                    item("Rotate Left", Command::RotateLeft, has_sel),
+                    item("Rotate Right", Command::RotateRight, has_sel),
+                    item("Flip Horizontal", Command::Flip, has_sel),
+                    Separator,
+                    check(
+                        "Crop or Straighten",
+                        Command::ToggleCrop,
                         has_sel,
-                        self.hq.mode == m,
-                    ) {
-                        cmds.push(Command::SetHq(m));
+                        self.tool_mode == ToolMode::Crop,
+                    ),
+                    item(
+                        "Clear Crop & Straighten",
+                        Command::ClearCropAndStraighten,
+                        has_sel && geometry,
+                    ),
+                    check(
+                        "Crop for Analysis",
+                        Command::ToggleAnalysis,
+                        has_sel,
+                        self.tool_mode == ToolMode::AnalysisRegion,
+                    ),
+                    item(
+                        "Clear Analysis Region",
+                        Command::ClearAnalysis,
+                        has_sel && self.settings.analysis_rect.is_some(),
+                    ),
+                ],
+            },
+        ]
+    }
+
+    /// The in-window egui menu bar, drawn from [`Self::menu_model`] (every platform except a
+    /// macOS build with the native menu installed).
+    fn menu_bar(&mut self, ui: &mut egui::Ui) -> Vec<Command> {
+        let mut cmds = Vec::new();
+        let model = self.menu_model();
+        egui::MenuBar::new().ui(ui, |ui| {
+            for section in &model {
+                ui.menu_button(section.title, |ui| {
+                    for entry in &section.entries {
+                        match entry {
+                            MenuEntry::Separator => {
+                                ui.separator();
+                            }
+                            MenuEntry::Heading(text) => {
+                                ui.label(egui::RichText::new(*text).weak());
+                            }
+                            MenuEntry::Item {
+                                label,
+                                cmd,
+                                enabled,
+                                checked,
+                            } => {
+                                // the HQ radio rows sit indented under their heading
+                                let indent = matches!(cmd, Command::SetHq(_));
+                                let text = match (checked, indent) {
+                                    (Some(true), _) => format!("✔ {label}"),
+                                    (_, true) => format!("    {label}"),
+                                    _ => label.clone(),
+                                };
+                                let mut b = egui::Button::new(text);
+                                if let Some(s) = shortcut_for(*cmd) {
+                                    b = b.shortcut_text(ui.ctx().format_shortcut(&s));
+                                }
+                                if ui.add_enabled(*enabled, b).clicked() {
+                                    ui.close();
+                                    cmds.push(*cmd);
+                                }
+                            }
+                        }
                     }
-                }
-                if item(ui, "Cycle HQ Preview", Command::CycleHq, has_sel, false) {
-                    cmds.push(Command::CycleHq);
-                }
-            });
-            ui.menu_button("Image", |ui| {
-                if item(ui, "Previous Image", Command::Previous, has_files, false) {
-                    cmds.push(Command::Previous);
-                }
-                if item(ui, "Next Image", Command::Next, has_files, false) {
-                    cmds.push(Command::Next);
-                }
-                ui.separator();
-                if item(ui, "Rotate Left", Command::RotateLeft, has_sel, false) {
-                    cmds.push(Command::RotateLeft);
-                }
-                if item(ui, "Rotate Right", Command::RotateRight, has_sel, false) {
-                    cmds.push(Command::RotateRight);
-                }
-                if item(ui, "Flip Horizontal", Command::Flip, has_sel, false) {
-                    cmds.push(Command::Flip);
-                }
-                ui.separator();
-                if item(
-                    ui,
-                    "Crop or Straighten",
-                    Command::ToggleCrop,
-                    has_sel,
-                    self.tool_mode == ToolMode::Crop,
-                ) {
-                    cmds.push(Command::ToggleCrop);
-                }
-                let geometry =
-                    self.settings.crop_rect.is_some() || self.settings.fine_rotation.abs() > 1e-9;
-                if item(
-                    ui,
-                    "Clear Crop & Straighten",
-                    Command::ClearCropAndStraighten,
-                    has_sel && geometry,
-                    false,
-                ) {
-                    cmds.push(Command::ClearCropAndStraighten);
-                }
-                if item(
-                    ui,
-                    "Crop for Analysis",
-                    Command::ToggleAnalysis,
-                    has_sel,
-                    self.tool_mode == ToolMode::AnalysisRegion,
-                ) {
-                    cmds.push(Command::ToggleAnalysis);
-                }
-                if item(
-                    ui,
-                    "Clear Analysis Region",
-                    Command::ClearAnalysis,
-                    has_sel && self.settings.analysis_rect.is_some(),
-                    false,
-                ) {
-                    cmds.push(Command::ClearAnalysis);
-                }
-            });
+                });
+            }
         });
         cmds
     }
@@ -2082,16 +2095,18 @@ impl eframe::App for NegApp {
         let t = Tokens::get(&ctx);
         let mut cmds = self.handle_keys(&ctx);
 
-        egui::Panel::top("menu-bar")
-            .exact_size(t.menu_bar_h)
-            .frame(
-                egui::Frame::new()
-                    .fill(t.chrome)
-                    .inner_margin(egui::Margin::symmetric(6, 2)),
-            )
-            .show(ui, |ui| {
-                cmds.extend(self.menu_bar(ui));
-            });
+        if !self.has_native_menu() {
+            egui::Panel::top("menu-bar")
+                .exact_size(t.menu_bar_h)
+                .frame(
+                    egui::Frame::new()
+                        .fill(t.chrome)
+                        .inner_margin(egui::Margin::symmetric(6, 2)),
+                )
+                .show(ui, |ui| {
+                    cmds.extend(self.menu_bar(ui));
+                });
+        }
 
         // controls sidebar (right)
         let mut sidebar_actions = Vec::new();

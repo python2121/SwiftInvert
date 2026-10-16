@@ -350,3 +350,22 @@ fn selftest_writes_a_screenshot() {
         distinct.len()
     );
 }
+
+/// The library grid never leaves whitespace beside its thumbnails: at every panel width the
+/// columns plus gaps fill the available width (the cap can't bite before a column is added).
+#[test]
+fn library_grid_cells_fill_the_width_at_every_panel_size() {
+    use negui::library::{CELL_GAP, CELL_MAX, CELL_MIN};
+    let mut avail = CELL_MIN;
+    while avail <= 600.0 {
+        let cols = ((avail + CELL_GAP) / (CELL_MIN + CELL_GAP))
+            .floor()
+            .max(1.0);
+        let cell = (avail - CELL_GAP * (cols - 1.0)) / cols;
+        assert!(
+            cell <= CELL_MAX + 1e-3,
+            "at {avail} pt a {cols}-column cell ({cell}) would be capped and leave whitespace"
+        );
+        avail += 0.5;
+    }
+}
