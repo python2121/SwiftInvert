@@ -467,7 +467,7 @@ impl RenderPipeline {
         let limits = self.ctx.limits();
         let limit = limits
             .max_buffer_size
-            .min(u64::from(limits.max_storage_buffer_binding_size));
+            .min(limits.max_storage_buffer_binding_size);
         if bytes > limit {
             return Err(GpuError::TooLarge { bytes, limit });
         }
@@ -565,7 +565,7 @@ impl RenderPipeline {
         let key = (source.width, source.height);
         let n = source.pixel_count();
         let float_bytes = n * 12;
-        if !tiers.contains_key(&key) {
+        if let std::collections::hash_map::Entry::Vacant(slot) = tiers.entry(key) {
             self.check_size(float_bytes)?;
             let storage = wgpu::BufferUsages::STORAGE;
             let normalized = new_buffer(device, "normalized", float_bytes, storage);
@@ -591,25 +591,22 @@ impl RenderPipeline {
                     &[(0, content), (4, &sh.push), (5, &sh.levels), (7, &sh.hist)],
                 )
             });
-            tiers.insert(
-                key,
-                Tier {
-                    width: source.width,
-                    height: source.height,
-                    normalized,
-                    linear,
-                    encoded_f: None,
-                    encoded_u8: None,
-                    padded_u8: None,
-                    bg_normalize: None,
-                    bg_curve: None,
-                    bg_pop,
-                    bg_hist,
-                    bg_encode_f: [None, None],
-                    bg_encode_u8: [None, None],
-                    bg_encode_padded: [None, None],
-                },
-            );
+            slot.insert(Tier {
+                width: source.width,
+                height: source.height,
+                normalized,
+                linear,
+                encoded_f: None,
+                encoded_u8: None,
+                padded_u8: None,
+                bg_normalize: None,
+                bg_curve: None,
+                bg_pop,
+                bg_hist,
+                bg_encode_f: [None, None],
+                bg_encode_u8: [None, None],
+                bg_encode_padded: [None, None],
+            });
         }
         let Some(tier) = tiers.get_mut(&key) else {
             return Err(GpuError::Invalid("render tier vanished"));

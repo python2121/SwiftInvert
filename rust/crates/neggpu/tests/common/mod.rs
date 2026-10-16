@@ -7,11 +7,11 @@
 
 use std::sync::OnceLock;
 
+use neggpu::{GpuContext, RenderPipeline};
 use negkit::derive::derive_render_params;
 use negkit::kernel::ExposureAnalysis;
 use negkit::reference::MaskSampler;
 use negkit::{ExposureSettings, LogNegativeBounds, RenderParams, RgbImage, V3, fixtures};
-use neggpu::{GpuContext, RenderPipeline};
 use serde_json::Value;
 
 pub struct Gpu {
@@ -51,7 +51,6 @@ macro_rules! gpu_or_skip {
         }
     };
 }
-pub(crate) use gpu_or_skip;
 
 /// Deterministic synthetic scan (the Swift suites' `syntheticNegative`): smooth ramps +
 /// integer-hash noise inside a plausible negative range, channels offset like an
@@ -288,7 +287,10 @@ impl MaskSampler for TestPlane {
             pf[0].floor().clamp(0.0, dims[0] - 1.0),
             pf[1].floor().clamp(0.0, dims[1] - 1.0),
         ];
-        let hi = [(lo[0] + 1.0).min(dims[0] - 1.0), (lo[1] + 1.0).min(dims[1] - 1.0)];
+        let hi = [
+            (lo[0] + 1.0).min(dims[0] - 1.0),
+            (lo[1] + 1.0).min(dims[1] - 1.0),
+        ];
         let f = [
             (pf[0] - lo[0]).clamp(0.0, 1.0),
             (pf[1] - lo[1]).clamp(0.0, 1.0),
