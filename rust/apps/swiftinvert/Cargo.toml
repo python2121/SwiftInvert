@@ -22,4 +22,6 @@ neggpu = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "persistence", "wayland", "x11"] }
 egui = { workspace = true }
 log = { workspace = true }
+# decodes the embedded app icon (Assets/icon_1024.png — the Swift app's own icon)
+image = { workspace = true }
 env_logger = { workspace = true }

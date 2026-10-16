@@ -369,3 +369,87 @@ fn library_grid_cells_fill_the_width_at_every_panel_size() {
         avail += 0.5;
     }
 }
+
+/// Both bottom panels carry a drag bar on top, and dragging EITHER one resizes History
+/// (the Crop & Rotation panel keeps its fixed height and rides on top of History).
+#[test]
+fn both_drag_bars_resize_the_history_panel() {
+    use negui::controls::{SidebarInput, SidebarState, controls_sidebar};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let state = Rc::new(RefCell::new(SidebarState::default()));
+    let start_h = state.borrow().prefs.history_height;
+    let shared = Rc::clone(&state);
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(340.0, 900.0))
+        .build_ui(move |ui| {
+            let mut settings = negkit::ExposureSettings::default();
+            let input = SidebarInput {
+                has_selection: true,
+                bins: None,
+                density_range: 1.0,
+                character: None,
+                status_message: None,
+                history: None,
+                tool_mode: negsession::ToolMode::None,
+                baseline_held: false,
+                can_undo: false,
+                can_redo: false,
+                is_exporting: false,
+                test_strip_active: false,
+            };
+            let mut st = shared.borrow_mut();
+            let _ = controls_sidebar(ui, &mut st, &mut settings, input);
+        });
+    harness.run();
+
+    // drag a bar at `y` upward by `dy` points
+    let drag = |harness: &mut egui_kittest::Harness<'_>, y: f32, dy: f32| {
+        let from = egui::pos2(170.0, y);
+        harness.event(egui::Event::PointerMoved(from));
+        harness.run();
+        harness.event(egui::Event::PointerButton {
+            pos: from,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        });
+        harness.run();
+        for k in 1..=4 {
+            harness.event(egui::Event::PointerMoved(egui::pos2(
+                170.0,
+                y - dy * k as f32 / 4.0,
+            )));
+            harness.run();
+        }
+        let to = egui::pos2(170.0, y - dy);
+        harness.event(egui::Event::PointerButton {
+            pos: to,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        harness.run();
+    };
+
+    // panel geometry (the harness's root ui has an 8 pt outer margin): History = height + 7 pt
+    // bar at the bottom, Crop & Rotation = 126 + 7 above it
+    let bottom = 900.0 - 8.0;
+    let hist_top = bottom - (start_h + 7.0);
+    drag(&mut harness, hist_top + 3.5, 40.0);
+    let after_history_bar = state.borrow().prefs.history_height;
+    assert!(
+        (after_history_bar - (start_h + 40.0)).abs() < 1.0,
+        "History's own bar: {start_h} → {after_history_bar}"
+    );
+
+    let hist_top = bottom - (after_history_bar + 7.0);
+    let crop_top = hist_top - (126.0 + 7.0);
+    drag(&mut harness, crop_top + 3.5, 30.0);
+    let after_crop_bar = state.borrow().prefs.history_height;
+    assert!(
+        (after_crop_bar - (after_history_bar + 30.0)).abs() < 1.0,
+        "the Crop & Rotation bar also grows History: {after_history_bar} → {after_crop_bar}"
+    );
+}

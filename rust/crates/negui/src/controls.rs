@@ -534,6 +534,96 @@ fn small_button(ui: &mut egui::Ui, label: &str, enabled: bool, active: bool) -> 
     ui.add_enabled(enabled, b)
 }
 
+/// A full-width sidebar action button: icon and label centred together, the icon a little larger
+/// than the text with a clear gap between them. `width` is the button's width (pass
+/// `ui.available_width()` minus anything sharing the row). Disabled when `enabled` is false or the
+/// surrounding ui is disabled; `active` fills it with the accent (a tool that is on).
+fn wide_button(
+    ui: &mut egui::Ui,
+    icon: &str,
+    label: &str,
+    width: f32,
+    enabled: bool,
+    active: bool,
+) -> egui::Response {
+    let t = Tokens::get(ui.ctx());
+    let enabled = enabled && ui.is_enabled();
+    let size = vec2(width.max(40.0), 26.0);
+    let sense = if enabled {
+        Sense::click_and_drag()
+    } else {
+        Sense::hover()
+    };
+    let (rect, resp) = ui.allocate_exact_size(size, sense);
+    if !ui.is_rect_visible(rect) {
+        return resp;
+    }
+    let fill = if active {
+        t.accent.gamma_multiply(0.45)
+    } else if enabled && resp.is_pointer_button_down_on() {
+        t.pressed
+    } else if enabled && resp.hovered() {
+        t.hover
+    } else {
+        t.button
+    };
+    let text_col = if enabled { t.text } else { t.text_disabled };
+    let painter = ui.painter();
+    painter.rect(
+        rect,
+        5.0,
+        fill,
+        Stroke::new(1.0, t.button_border),
+        StrokeKind::Inside,
+    );
+    let icon_g =
+        painter.layout_no_wrap(icon.to_owned(), egui::FontId::proportional(15.0), text_col);
+    let text_g =
+        painter.layout_no_wrap(label.to_owned(), egui::FontId::proportional(11.5), text_col);
+    let gap = 7.0;
+    let total = icon_g.size().x + gap + text_g.size().x;
+    let x0 = rect.center().x - total / 2.0;
+    let cy = rect.center().y;
+    painter.galley(
+        egui::pos2(x0, cy - icon_g.size().y / 2.0),
+        icon_g.clone(),
+        text_col,
+    );
+    painter.galley(
+        egui::pos2(x0 + icon_g.size().x + gap, cy - text_g.size().y / 2.0),
+        text_g,
+        text_col,
+    );
+    resp
+}
+
+/// A thin full-width drag strip at the top of a bottom panel; dragging it resizes the History
+/// panel (both the Crop & Rotation and the History panels carry one). Returns the vertical drag
+/// delta this frame (negative = upward = History grows) and whether the drag ended.
+fn resize_grip(ui: &mut egui::Ui, id: &str) -> (f32, bool) {
+    let t = Tokens::get(ui.ctx());
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 7.0), Sense::drag());
+    let resp = ui
+        .interact(rect, ui.id().with(id), Sense::drag())
+        .union(resp);
+    let hot = resp.hovered() || resp.dragged();
+    if hot {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+    }
+    let col = if hot { t.text_secondary } else { t.divider };
+    let c = rect.center();
+    ui.painter()
+        .rect_filled(egui::Rect::from_center_size(c, vec2(32.0, 3.0)), 1.5, col);
+    (
+        if resp.dragged() {
+            resp.drag_delta().y
+        } else {
+            0.0
+        },
+        resp.drag_stopped(),
+    )
+}
+
 /// Slider rows of `section` under the current band selections.
 fn slider_rows(
     ui: &mut egui::Ui,
@@ -613,46 +703,58 @@ pub fn controls_sidebar(
     } else {
         state.prefs.history_height.clamp(40.0, 600.0)
     };
-    let hp = egui::Panel::bottom(ui.id().with("history-panel"))
-        .resizable(!state.prefs.history_collapsed)
-        .default_size(hist_h)
-        .size_range(if state.prefs.history_collapsed {
-            26.0..=26.0
-        } else {
-            40.0..=600.0
-        })
-        .frame(
-            egui::Frame::new()
-                .fill(t.chrome)
-                .inner_margin(egui::Margin::symmetric(10, 4)),
-        )
+    // Both bottom panels carry a drag strip on top; either one resizes History (the Crop &
+    // Rotation panel keeps its fixed height and rides on top of History).
+    let grip_h = 7.0;
+    let mut grip_dy = 0.0;
+    let mut grip_done = false;
+    let panel_margin = egui::Margin {
+        left: 10,
+        right: 10,
+        top: 0,
+        bottom: 4,
+    };
+    egui::Panel::bottom(ui.id().with("history-panel"))
+        .resizable(false)
+        .exact_size(hist_h + grip_h)
+        .frame(egui::Frame::new().fill(t.chrome).inner_margin(panel_margin))
         .show(ui, |ui| {
+            let (dy, done) = resize_grip(ui, "history-grip");
+            grip_dy += dy;
+            grip_done |= done;
             history_panel(ui, state, &input, &mut actions);
         });
-    if !state.prefs.history_collapsed {
-        let h = hp.response.rect.height();
-        if (h - state.prefs.history_height).abs() > 0.5 && h >= 40.0 {
-            state.prefs.history_height = h;
-            actions.push(SidebarAction::PrefsChanged);
-        }
-    }
 
     // Crop & Rotation (bottom, fixed)
     egui::Panel::bottom(ui.id().with("crop-panel"))
         .resizable(false)
-        .exact_size(if state.prefs.crop_rotation_collapsed {
-            28.0
-        } else {
-            118.0
-        })
-        .frame(
-            egui::Frame::new()
-                .fill(t.chrome)
-                .inner_margin(egui::Margin::symmetric(10, 4)),
+        .exact_size(
+            grip_h
+                + if state.prefs.crop_rotation_collapsed {
+                    28.0
+                } else {
+                    126.0
+                },
         )
+        .frame(egui::Frame::new().fill(t.chrome).inner_margin(panel_margin))
         .show(ui, |ui| {
+            let (dy, done) = resize_grip(ui, "crop-grip");
+            grip_dy += dy;
+            grip_done |= done;
             crop_rotation_section(ui, state, settings, &input, &mut actions);
         });
+    if grip_dy != 0.0 {
+        // dragging up grows History; a drag on a collapsed History opens it
+        if state.prefs.history_collapsed && grip_dy < 0.0 {
+            state.prefs.history_collapsed = false;
+        }
+        if !state.prefs.history_collapsed {
+            state.prefs.history_height = (state.prefs.history_height - grip_dy).clamp(40.0, 600.0);
+        }
+    }
+    if grip_done {
+        actions.push(SidebarAction::PrefsChanged);
+    }
 
     // Adjustments
     egui::CentralPanel::default()
@@ -725,14 +827,26 @@ fn groups(
         ui.spacing_mut().item_spacing.y = 8.0;
         ui.horizontal(|ui| {
             let active = input.tool_mode == ToolMode::AnalysisRegion;
+            let x = if settings.analysis_rect.is_some() {
+                20.0
+            } else {
+                0.0
+            };
             // --- U2: tools & dialogs ---
-            if small_button(ui, "▣ Crop for Analysis", enabled, active)
-                .on_hover_text(crate::app::with_shortcut(
-                    ui.ctx(),
-                    "Meter only the region you draw",
-                    crate::app::Command::ToggleAnalysis,
-                ))
-                .clicked()
+            if wide_button(
+                ui,
+                "▣",
+                "Crop for Analysis",
+                ui.available_width() - x,
+                enabled,
+                active,
+            )
+            .on_hover_text(crate::app::with_shortcut(
+                ui.ctx(),
+                "Meter only the region you draw",
+                crate::app::Command::ToggleAnalysis,
+            ))
+            .clicked()
             {
                 actions.push(SidebarAction::ToggleAnalysisTool);
             }
@@ -747,19 +861,29 @@ fn groups(
                     .color(t.text_secondary),
             );
         }
-        let hold = ui
-            .add_enabled(
-                enabled,
-                egui::Button::new(egui::RichText::new("◉ View Original").size(11.0)),
-            )
-            .on_hover_text("Hold to compare with the stock conversion");
+        let hold = wide_button(
+            ui,
+            "◉",
+            "View Original",
+            ui.available_width(),
+            enabled,
+            input.baseline_held,
+        )
+        .on_hover_text("Hold to compare with the stock conversion");
         let pressed = enabled && hold.is_pointer_button_down_on();
         if pressed != input.baseline_held {
             actions.push(SidebarAction::ViewOriginal(pressed));
         }
-        if small_button(ui, "↺ Start from Scratch", enabled, false)
-            .on_hover_text("Stock settings (cancels the default profile)")
-            .clicked()
+        if wide_button(
+            ui,
+            "↺",
+            "Start from Scratch",
+            ui.available_width(),
+            enabled,
+            false,
+        )
+        .on_hover_text("Stock settings (cancels the default profile)")
+        .clicked()
         {
             actions.push(SidebarAction::StartFromScratch);
         }
@@ -787,13 +911,20 @@ fn groups(
             slider_row(ui, sp, settings, enabled, actions);
         }
         // --- U3: darkroom ---
-        if small_button(ui, "▦ Test Strip", enabled, input.test_strip_active)
-            .on_hover_text(crate::app::with_shortcut(
-                ui.ctx(),
-                "Print the frame as a 5×5 test strip — Brightness across, Grade down",
-                crate::app::Command::TestStrip,
-            ))
-            .clicked()
+        if wide_button(
+            ui,
+            "▦",
+            "Test Strip",
+            ui.available_width(),
+            enabled,
+            input.test_strip_active,
+        )
+        .on_hover_text(crate::app::with_shortcut(
+            ui.ctx(),
+            "Print the frame as a 5×5 test strip — Brightness across, Grade down",
+            crate::app::Command::TestStrip,
+        ))
+        .clicked()
         {
             actions.push(SidebarAction::TestStrip);
         }
@@ -945,18 +1076,26 @@ fn crop_rotation_section(
     ui.add_enabled_ui(enabled, |ui| {
         ui.horizontal(|ui| {
             let active = input.tool_mode == ToolMode::Crop;
+            let geometry_set = settings.crop_rect.is_some() || settings.fine_rotation.abs() > 1e-9;
+            let x = if geometry_set { 20.0 } else { 0.0 };
             // --- U2: tools & dialogs ---
-            if small_button(ui, "⛶ Crop or Straighten", true, active)
-                .on_hover_text(crate::app::with_shortcut(
-                    ui.ctx(),
-                    "Crop & Straighten",
-                    crate::app::Command::ToggleCrop,
-                ))
-                .clicked()
+            if wide_button(
+                ui,
+                "⛶",
+                "Crop or Straighten",
+                ui.available_width() - x,
+                true,
+                active,
+            )
+            .on_hover_text(crate::app::with_shortcut(
+                ui.ctx(),
+                "Crop & Straighten",
+                crate::app::Command::ToggleCrop,
+            ))
+            .clicked()
             {
                 actions.push(SidebarAction::ToggleCropTool);
             }
-            let geometry_set = settings.crop_rect.is_some() || settings.fine_rotation.abs() > 1e-9;
             if geometry_set && reset_x(ui, &t, "crop-x") {
                 actions.push(SidebarAction::ClearCropAndStraighten);
             }

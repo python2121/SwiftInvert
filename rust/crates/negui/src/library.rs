@@ -292,6 +292,7 @@ pub fn library_panel(
             .and_then(|r| r.file_name())
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| "Library".to_owned());
+        ui.add_space(6.0);
         ui.add(egui::Label::new(egui::RichText::new(name).size(12.5).strong()).truncate())
             .on_hover_text(
                 lib.root
@@ -303,8 +304,10 @@ pub fn library_panel(
             ui.add(egui::Spinner::new().size(12.0));
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.add_space(6.0);
+            ui.spacing_mut().item_spacing.x = 8.0;
             if ui
-                .add(egui::Button::new(egui::RichText::new("◧").size(15.0)).frame(false))
+                .add(egui::Button::new(egui::RichText::new("◧").size(23.0)).frame(false))
                 .on_hover_text(crate::app::with_shortcut(
                     ui.ctx(),
                     "Hide library",
@@ -315,7 +318,7 @@ pub fn library_panel(
                 actions.push(LibraryAction::ToggleLibrary);
             }
             if ui
-                .add(egui::Button::new(egui::RichText::new("▤").size(15.0)).frame(false))
+                .add(egui::Button::new(egui::RichText::new("▤").size(23.0)).frame(false))
                 .on_hover_text(crate::app::with_shortcut(
                     ui.ctx(),
                     "Open folder…",
