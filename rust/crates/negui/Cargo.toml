@@ -12,15 +12,21 @@ workspace = true
 [dependencies]
 negkit = { workspace = true }
 negsession = { workspace = true }
-neggpu = { workspace = true }
 egui = { workspace = true }
-eframe = { workspace = true, features = ["wgpu"] }
-egui_extras = { workspace = true }
+eframe = { workspace = true, features = ["wgpu", "persistence"] }
 craft-ui = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
-wgpu = { workspace = true }
+image = { workspace = true }
+# The headless screenshot harness behind `selftest` (`swiftinvert --selftest out.png [folder]`):
+# the whole app rendered offscreen through egui-wgpu — how the shell is verified without a window.
+egui_kittest = { workspace = true, features = ["wgpu", "eframe"] }
+
+# winit refuses to build on Linux without a windowing feature; eframe is reached through
+# egui_kittest in `cargo test -p negui`, where the app's own feature set is not unified in.
+[target.'cfg(target_os = "linux")'.dependencies]
+eframe = { workspace = true, features = ["wgpu", "persistence", "x11", "wayland"] }
 
 [dev-dependencies]
-egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
+egui_kittest = { workspace = true, features = ["wgpu", "snapshot", "eframe"] }

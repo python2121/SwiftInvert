@@ -45,6 +45,9 @@ pub use session::{
     ToolMode,
 };
 pub use sidecar::SidecarStore;
+// FLAGGED (wave 4 / U1): the decoder seam `Session::open` takes, re-exported so a front end that
+// reads only `negsession` can construct a session without a `negraw` dependency of its own.
+pub use negraw::{RawBackend, default_backend, is_raw_file};
 
 use std::path::PathBuf;
 

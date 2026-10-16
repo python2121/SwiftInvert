@@ -12,7 +12,8 @@ workspace = true
 
 [dependencies]
 negui = { workspace = true }
-eframe = { workspace = true, features = ["default_fonts", "wgpu", "wayland", "x11"] }
+neggpu = { workspace = true }
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "persistence", "wayland", "x11"] }
 egui = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }
