@@ -1715,8 +1715,8 @@ name = "negcli"
 version = "0.1.0"
 dependencies = [
  "env_logger",
+ "image",
  "log",
- "neggpu",
  "negkit",
  "negraw",
  "negsession",
@@ -1765,9 +1765,9 @@ dependencies = [
  "craft-cms",
  "image",
  "log",
- "neggpu",
  "negkit",
  "negraw",
+ "rayon",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

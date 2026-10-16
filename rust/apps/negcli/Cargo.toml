@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Headless driver: decode / thumb / render / bench / meter"
+description = "Headless driver: decode / thumb / render / meter / bench / export"
 publish = false
 
 [lints]
@@ -13,8 +13,8 @@ workspace = true
 [dependencies]
 negkit = { workspace = true }
 negraw = { workspace = true }
-neggpu = { workspace = true }
 negsession = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }
+image = { workspace = true }
