@@ -101,6 +101,7 @@ fn app(dir: PathBuf, backend: Arc<FakeBackend>, autosave: bool) -> H {
         renderer: Some(cpu()),
         presenter: None,
         backend: Some(backend),
+        native_menu: false,
     };
     egui_kittest::Harness::builder()
         .with_size(egui::vec2(1280.0, 800.0))

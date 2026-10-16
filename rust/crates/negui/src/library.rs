@@ -18,8 +18,13 @@ use crate::theme::Tokens;
 pub const THUMB_MAX_PX: u32 = 384;
 /// Grid cell width range and spacing.
 pub const CELL_MIN: f32 = 120.0;
-pub const CELL_MAX: f32 = 180.0;
 pub const CELL_GAP: f32 = 8.0;
+/// The widest a cell gets: exactly where the next column fits (`n` columns turn into `n + 1`
+/// once a cell would pass `2·MIN + GAP` at one column, and less at more columns), so the
+/// thumbnails grow continuously with the panel and never stall with whitespace beside them
+/// before the grid gains a column. (It was 180, which left a dead band from 180 pt to the
+/// two-column threshold at ~248 pt.)
+pub const CELL_MAX: f32 = 2.0 * CELL_MIN + CELL_GAP;
 pub const INDENT: f32 = 14.0;
 
 enum ThumbSlot {

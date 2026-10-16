@@ -62,6 +62,8 @@ pub fn run_selftest_with(
         renderer: None,
         presenter: None,
         backend: None,
+        // headless: no AppKit menu bar; the in-window bar is what the screenshots show
+        native_menu: false,
     };
     let mut builder = egui_kittest::Harness::builder()
         .with_size(egui::vec2(SELFTEST_SIZE[0], SELFTEST_SIZE[1]))

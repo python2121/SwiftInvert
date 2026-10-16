@@ -22,6 +22,8 @@ pub mod engine;
 pub mod histogram;
 pub mod library;
 pub mod loupe;
+#[cfg(target_os = "macos")]
+pub mod native_menu;
 // --- U2 ---
 pub mod presenter_gpu;
 // --- end U2 ---
@@ -36,5 +38,5 @@ pub mod zone_placement;
 pub mod zones;
 // --- end U3 ---
 
-pub use app::{AppOptions, AppPrefs, NegApp};
+pub use app::{AppOptions, AppPrefs, MenuEntry, MenuSection, NegApp};
 pub use loupe::{CpuPresenter, FramePresenter, PresentedFrame};

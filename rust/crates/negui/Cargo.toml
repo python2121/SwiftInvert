@@ -34,6 +34,11 @@ egui_kittest = { workspace = true, features = ["wgpu", "eframe"], optional = tru
 [target.'cfg(target_os = "linux")'.dependencies]
 eframe = { workspace = true, features = ["wgpu", "persistence", "x11", "wayland"] }
 
+# The native macOS menu bar (pure Rust over AppKit via objc2; MIT OR Apache-2.0 — the crate Tauri
+# and LightCraft use). macOS only: Linux/Windows keep the in-window egui menu bar and never build it.
+[target.'cfg(target_os = "macos")'.dependencies]
+muda = { version = "0.21", default-features = false }
+
 [dev-dependencies]
 negraw = { workspace = true }
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot", "eframe"] }

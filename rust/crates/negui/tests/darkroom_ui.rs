@@ -273,6 +273,7 @@ fn harness(folder: std::path::PathBuf) -> H {
         renderer: None,
         presenter: None,
         backend: None,
+        native_menu: false,
     };
     egui_kittest::Harness::builder()
         .with_size(egui::vec2(1440.0, 900.0))
