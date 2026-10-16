@@ -310,4 +310,7 @@ not installed there, report and stop — no installs on the Mac without the user
 | 3 | M contrast mask / crop geometry / densitometry / zones / test strip / zone placement | agent M | done | 83 tests; plane 3e-7, masked chain 1.5e-7; negkit now 267 tests, fully ported |
 | 3 | G neggpu | agent G | done | 34 tests; GPU vs CPU ~1e-7 mean on every control group (gates 0.01/0.04); rgba8 ≤ 0.5/255; histogram exact; **Vulkan (NAVI33): 1.68 ms proxy frame, 0.242 s 24 MP; Metal (Apple M2): 3.09 ms proxy frame, 0.126 s 24 MP — all 29 parity tests pass on both** from one WGSL module; >2^24-pixel masked render pinned (the GLSL's f32 gid split was wrong there) |
 | 3 | reviews (Opus darkroom, Sonnet quality) | reviewers | done | no formula divergences; 1 GLSL bug found (f32 gid split past 2^24 px); 6 robustness fixes landed (2aaaa56, 6c40f72); deferred: private fields on RgbImage/Plane, #[must_use], blur allocations, fixtures module behind a feature |
-| 3 | S negsession + negcli | agent S | in progress | |
+| 3 | S negsession + negcli | agent S | done | 74 tests; cache tower with ImageSession's keys; sidecars/profiles/history/export (craft-cms ICC via image/tiff encoders); negcli decode/thumb/render/meter/bench/export; CPU proxy frame 91 ms, Session::open 285 ms |
+| 3 | G host fixes (review 6) | agent G | done | 42 tests; error scopes (no aborts), LRU cap 4, unmap guards, `required_limits`, one-slot large display tier (24 MP display 59 → 34 ms cached), Rgba8Unorm-only texture path, `pack_unorm8` |
+| 4 | I integration (negkit darkroom modules + GpuRenderer into negsession, test strip, zone placement) | agent I | in progress | |
+| 4 | U1 egui shell | agent U1 | in progress | |
