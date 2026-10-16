@@ -929,6 +929,41 @@ fn timing_proxy_display_and_export_render() {
         gpu.ctx.backend_name()
     );
 
+    // Medium (3012×2010) and full (6024×4016) DISPLAY tiers, cached (the retained large
+    // slot) and uncached (release_cached before each tick — what every slider tick paid
+    // before the slot existed).
+    for &(w, h, name) in &[(3012usize, 2010usize, "medium"), (6024, 4016, "full")] {
+        if let Err(e) = gpu.pipeline.fits_render(w as u32, h as u32) {
+            println!("{name} display tier skipped: {e}");
+            continue;
+        }
+        let img = synthetic_negative(w, h);
+        let src = gpu.pipeline.upload(&img).unwrap();
+        let mut dest = vec![0u8; src.rgba8_len()];
+        let mut uncached = f64::MAX;
+        for _ in 0..3 {
+            gpu.pipeline.release_cached();
+            let t = Instant::now();
+            gpu.pipeline
+                .render_display_into(&src, &params, opts, &mut dest)
+                .unwrap();
+            uncached = uncached.min(t.elapsed().as_secs_f64() * 1e3);
+        }
+        let mut cached = f64::MAX;
+        for _ in 0..8 {
+            let t = Instant::now();
+            gpu.pipeline
+                .render_display_into(&src, &params, opts, &mut dest)
+                .unwrap();
+            cached = cached.min(t.elapsed().as_secs_f64() * 1e3);
+        }
+        println!(
+            "[{}] {w}×{h} {name} render_display_into: cached {cached:.1} ms, uncached {uncached:.1} ms",
+            gpu.ctx.backend_name()
+        );
+    }
+    gpu.pipeline.release_cached();
+
     // 24 MP float render (export).
     let (w, h) = (6000usize, 4000usize);
     let big = synthetic_negative(w, h);
