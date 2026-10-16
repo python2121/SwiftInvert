@@ -30,10 +30,17 @@ use crate::controls::{SidebarAction, SidebarInput, SidebarPrefs, SidebarState, c
 use crate::engine::{Cmd, Engine, Evt};
 use crate::library::{LibraryAction, LibraryState, library_panel};
 use crate::loupe::{
-    BarAction, BarInput, CanvasAction, CanvasColor, CanvasInput, CpuPresenter, FramePresenter,
-    LoupeState, canvas, control_bar,
+    BarAction, BarInput, CanvasAction, CanvasColor, CanvasInput, FramePresenter, LoupeState,
+    canvas, control_bar,
 };
 use crate::theme::Tokens;
+// --- U2: tools & dialogs ---
+use crate::dialogs::{DialogAction, DialogState};
+use crate::engine::ExportItem;
+use crate::tools::{self, AnalysisTool, CropTool, ToolAction, ToolState};
+use negsession::ExportOptions;
+use negsession::profiles::PersistedProfiles;
+// --- end U2 ---
 
 /// Sidecar save debounce (AppModel.swift:928).
 pub const SAVE_DEBOUNCE: Duration = Duration::from_secs(1);
@@ -53,6 +60,12 @@ pub struct AppPrefs {
     pub sidebar: SidebarPrefs,
     /// Collapsed folder identities per root (Qt: `collapsed/<root>`).
     pub collapsed: HashMap<String, Vec<String>>,
+    // --- U2: tools & dialogs ---
+    /// Sticky export sheet (`UserDefaults["exportOptions"]`, Swift field semantics).
+    pub export: ExportOptions,
+    /// User profiles + the active id (`settingsProfiles` / `activeProfileID`).
+    pub profiles: PersistedProfiles,
+    // --- end U2 ---
 }
 
 impl Default for AppPrefs {
@@ -64,6 +77,9 @@ impl Default for AppPrefs {
             library_width: 320.0,
             sidebar: SidebarPrefs::default(),
             collapsed: HashMap::new(),
+            // --- U2: tools & dialogs ---
+            export: crate::dialogs::export::default_export_options(),
+            profiles: PersistedProfiles::default(),
         }
     }
 }
@@ -124,6 +140,11 @@ pub enum Command {
     ClearAnalysis,
     Escape,
     TestStrip,
+    // --- U2: tools & dialogs ---
+    /// Commit the open tool (crop: box + angle; analysis: leave) — Return.
+    ApplyTool,
+    /// Leave the open tool discarding it (crop: restore the entry snapshot).
+    CancelTool,
 }
 
 const fn sc(m: Modifiers, k: Key) -> KeyboardShortcut {
@@ -336,6 +357,10 @@ pub struct NegApp {
     perf: Perf,
     frames_rendered: u64,
     open_failed: Option<String>,
+    // --- U2: tools & dialogs ---
+    tools: ToolState,
+    dialogs: DialogState,
+    export_generation: u64,
 }
 
 struct FolderDialog {
@@ -357,10 +382,23 @@ impl NegApp {
         let renderer = options
             .renderer
             .unwrap_or_else(|| shared_or_default_renderer(cc));
+        // --- U2: tools & dialogs --- the zero-copy presenter when the device is shared
+        let (presenter, texture_sink) = match options.presenter {
+            Some(p) => (p, None),
+            None => {
+                crate::presenter_gpu::choose_presenter(cc.wgpu_render_state.as_ref(), &renderer)
+            }
+        };
+        // --- end U2 ---
         let ctx = cc.egui_ctx.clone();
         let engine = Engine::spawn(Arc::clone(&backend), renderer, move || {
             ctx.request_repaint()
         });
+        // --- U2 ---
+        if let Some(sink) = texture_sink {
+            engine.send(Cmd::UseTextureTarget(sink));
+        }
+        // --- end U2 ---
         let ctx = cc.egui_ctx.clone();
         let library = LibraryState::new(Arc::clone(&backend), move || ctx.request_repaint());
         let mut app = NegApp {
@@ -371,11 +409,9 @@ impl NegApp {
                 ..Default::default()
             },
             loupe: LoupeState::default(),
-            presenter: options
-                .presenter
-                .unwrap_or_else(|| Box::new(CpuPresenter::default())),
+            presenter,
+            profiles: ProfileStore::from_persisted(prefs.profiles.clone()),
             prefs,
-            profiles: ProfileStore::new(),
             autosave: options.autosave,
             persist: options.persist,
             selection: None,
@@ -406,6 +442,9 @@ impl NegApp {
             perf: Perf::default(),
             frames_rendered: 0,
             open_failed: None,
+            tools: ToolState::default(),
+            dialogs: DialogState::default(),
+            export_generation: 0,
         };
         let folder = options
             .initial_folder
@@ -747,15 +786,16 @@ impl NegApp {
                     .unwrap_or_default();
                 self.folder_dialog = Some(FolderDialog { text });
             }
-            Command::ChooseDefaults => {
-                self.status_message =
-                    Some("Default-settings profiles arrive in a later wave".into())
-            }
+            // --- U2: tools & dialogs ---
+            Command::ChooseDefaults => self.dialogs.open_profiles(&self.profiles),
             Command::Export => {
                 if has_sel {
-                    self.status_message = Some("Export arrives in a later wave".into());
+                    self.open_export_sheet();
                 }
             }
+            Command::ApplyTool => self.apply_tool(),
+            Command::CancelTool => self.cancel_tool(),
+            // --- end U2 ---
             Command::ShowInFileManager => {
                 if let Some(p) = self.selection.clone() {
                     show_in_file_manager(&p);
@@ -855,9 +895,18 @@ impl NegApp {
                     self.settings.flip_horizontal = !self.settings.flip_horizontal;
                 }
             }
-            Command::ToggleCrop | Command::ToggleAnalysis => {
-                self.status_message = Some("Canvas tools arrive in a later wave".into());
+            // --- U2: tools & dialogs ---
+            Command::ToggleCrop => {
+                if has_sel {
+                    self.toggle_crop_tool();
+                }
             }
+            Command::ToggleAnalysis => {
+                if has_sel {
+                    self.toggle_analysis_tool();
+                }
+            }
+            // --- end U2 ---
             Command::ClearCropAndStraighten => {
                 if has_sel {
                     let had_crop = self.settings.crop_rect.is_some();
@@ -880,6 +929,15 @@ impl NegApp {
                 }
             }
             Command::Escape => {
+                // --- U2: tools & dialogs --- dialogs first, then the crop tool cancels
+                if self.dialogs.escape() {
+                    return;
+                }
+                if self.tool_mode == ToolMode::Crop {
+                    self.cancel_tool();
+                    return;
+                }
+                // --- end U2 ---
                 if self.tool_mode != ToolMode::None {
                     self.tool_mode = ToolMode::None;
                     self.hq.refresh(f64::from(self.canvas_zoom), true, false);
@@ -955,6 +1013,13 @@ impl NegApp {
                         self.perf.latency_ms
                     );
                 }
+                // --- U2: tools & dialogs ---
+                evt @ (Evt::ExportProgress { .. } | Evt::ExportFinished { .. }) => {
+                    if let Some(status) = self.dialogs.on_engine_event(&evt) {
+                        self.status_message = Some(status);
+                    }
+                }
+                // --- end U2 ---
                 Evt::RenderFailed {
                     path,
                     generation,
@@ -1414,7 +1479,7 @@ impl eframe::App for NegApp {
                     baseline_held: self.baseline_held,
                     can_undo,
                     can_redo,
-                    is_exporting: false,
+                    is_exporting: self.dialogs.exporting(),
                 };
                 let mut sidebar = std::mem::take(&mut self.sidebar);
                 sidebar_actions = controls_sidebar(ui, &mut sidebar, &mut self.settings, input);
@@ -1481,7 +1546,11 @@ impl eframe::App for NegApp {
                     tool_mode: self.tool_mode,
                     frame_label: None,
                 };
-                canvas_actions = canvas(ui, canvas_rect, &mut self.loupe, &input);
+                // --- U2: tools & dialogs ---
+                let mut overlays = self.tools.overlays();
+                canvas_actions = canvas(ui, canvas_rect, &mut self.loupe, &input, &mut overlays);
+                drop(overlays);
+                // --- end U2 ---
                 let mut bar_ui = ui.new_child(
                     egui::UiBuilder::new()
                         .max_rect(bar_rect)
@@ -1591,6 +1660,9 @@ impl eframe::App for NegApp {
                 BarAction::CanvasColor(c) => self.prefs.canvas_color = c,
             }
         }
+        // --- U2: tools & dialogs ---
+        cmds.extend(self.tools_and_dialogs_frame(&ctx));
+        // --- end U2 ---
         for c in cmds {
             self.run(c);
         }
@@ -1667,3 +1739,278 @@ fn show_in_file_manager(path: &Path) {
         log::warn!("show in file manager: {e}");
     }
 }
+
+// --- U2: tools & dialogs ---
+impl NegApp {
+    /// The orientation-only proxy frame dims of the last render (the crop-geometry base).
+    fn frame_v2(&self) -> negkit::V2 {
+        let (w, h) = self.loupe.frame_size;
+        [w as f64, h as f64]
+    }
+
+    /// Enter/leave a tool: re-resolve HQ (tools suppress Auto) and re-render the tool preview.
+    fn set_tool_mode(&mut self, mode: ToolMode) {
+        if self.set_tool_mode_quiet(mode) {
+            self.schedule_render();
+        }
+    }
+
+    /// [`Self::set_tool_mode`] without the render (a settings commit that renders follows).
+    /// Returns whether the mode changed.
+    fn set_tool_mode_quiet(&mut self, mode: ToolMode) -> bool {
+        if self.tool_mode == mode {
+            return false;
+        }
+        self.tool_mode = mode;
+        if mode == ToolMode::Crop {
+            // Crop & Straighten pins the canvas to fit.
+            self.loupe.reset_zoom();
+            self.canvas_zoom = 1.0;
+        }
+        let (zoom, has_sel) = (f64::from(self.canvas_zoom), self.selection.is_some());
+        self.hq.refresh(zoom, has_sel, mode != ToolMode::None);
+        true
+    }
+
+    /// ⌘K: enter Crop & Straighten (snapshot for Cancel), or commit it when it is up.
+    fn toggle_crop_tool(&mut self) {
+        if self.tool_mode == ToolMode::Crop {
+            self.apply_tool();
+            return;
+        }
+        if self.tool_mode == ToolMode::AnalysisRegion {
+            self.leave_tool();
+        }
+        let frame = self.frame_v2();
+        if !(frame[0] > 0.0 && frame[1] > 0.0) {
+            return;
+        }
+        self.tools.crop = Some(CropTool::new(&self.settings, frame));
+        self.set_tool_mode(ToolMode::Crop);
+    }
+
+    /// ⇧⌘K: enter/leave Crop for Analysis (entering from crop commits the crop first).
+    fn toggle_analysis_tool(&mut self) {
+        match self.tool_mode {
+            ToolMode::AnalysisRegion => self.leave_tool(),
+            ToolMode::Crop => {
+                self.apply_tool();
+                self.enter_analysis_tool();
+            }
+            ToolMode::None => self.enter_analysis_tool(),
+        }
+    }
+
+    fn enter_analysis_tool(&mut self) {
+        self.tools.analysis = Some(AnalysisTool::new(&self.settings));
+        self.set_tool_mode(ToolMode::AnalysisRegion);
+    }
+
+    /// Leave whatever tool is up without committing anything.
+    fn leave_tool(&mut self) {
+        self.tools.clear();
+        self.set_tool_mode(ToolMode::None);
+    }
+
+    /// Leave the tool and set `next` as the settings with `label` armed, committing ONE history
+    /// entry now (tool commits are discrete actions, not slider drags). One render follows.
+    fn commit_tool_settings(&mut self, next: ExposureSettings, label: Option<&str>) {
+        self.tools.clear();
+        if next == self.settings {
+            self.set_tool_mode(ToolMode::None);
+            return;
+        }
+        self.set_tool_mode_quiet(ToolMode::None);
+        // An in-flight (coalescing) edit gets its own entry first, so Undo of the tool commit
+        // undoes only the tool.
+        if self.pending.is_armed() {
+            self.pending.cancel();
+            self.commit_history();
+        }
+        if let Some(l) = label {
+            self.arm_label(l);
+        }
+        self.settings = next;
+        self.settings_changed();
+        self.pending.cancel();
+        self.commit_history();
+    }
+
+    /// Return / Apply: crop commits box + angle (`commitCrop` + `commitFineRotation`); the
+    /// analysis tool just leaves.
+    fn apply_tool(&mut self) {
+        match self.tools.crop.take() {
+            Some(mut c) => {
+                c.sync(&self.settings, self.frame_v2());
+                let mut next = self.settings.clone();
+                let label = c.apply(&mut next);
+                self.commit_tool_settings(next, label);
+            }
+            None => self.leave_tool(),
+        }
+    }
+
+    /// Esc / Cancel: crop restores its entry snapshot ("Cancel crop" if anything moved).
+    fn cancel_tool(&mut self) {
+        match self.tools.crop.take() {
+            Some(c) => {
+                let mut next = self.settings.clone();
+                c.cancel(&mut next);
+                self.commit_tool_settings(next, Some(labels::CANCEL_CROP));
+            }
+            None => self.leave_tool(),
+        }
+    }
+
+    /// The analysis tool's release: `commitSelection` (rect + the angle it was drawn at, the
+    /// same rule as `Session::commit_analysis_region`), then leave the tool.
+    fn commit_analysis(&mut self, rect: negkit::NormalizedRect) {
+        let mut next = self.settings.clone();
+        tools::commit_analysis_region(&mut next, rect);
+        self.commit_tool_settings(next, Some(labels::ANALYSIS_REGION));
+    }
+
+    /// ⌘E: the sheet over the multi-selection in library order (the open frame at least).
+    fn open_export_sheet(&mut self) {
+        if self.dialogs.exporting() {
+            self.status_message = Some("An export is already running".into());
+            return;
+        }
+        let mut targets: Vec<PathBuf> = self
+            .library
+            .flat
+            .iter()
+            .filter(|p| self.multi.contains(*p))
+            .cloned()
+            .collect();
+        if targets.is_empty()
+            && let Some(sel) = self.selection.clone()
+        {
+            targets.push(sel);
+        }
+        self.dialogs.open_export(self.prefs.export.clone(), targets);
+    }
+
+    /// `performExport`: sticky options saved, the open frame's pending sidecar flushed, then
+    /// the engine job (each frame its own session; the open frame with the live settings).
+    fn start_export(&mut self, options: ExportOptions, targets: Vec<PathBuf>) {
+        self.prefs.export = options.clone();
+        self.flush_save();
+        self.export_generation += 1;
+        let generation = self.export_generation;
+        let items: Vec<ExportItem> = targets
+            .into_iter()
+            .map(|path| ExportItem {
+                settings: (Some(path.as_path()) == self.selection.as_deref())
+                    .then(|| self.settings.clone()),
+                path,
+            })
+            .collect();
+        let cancel = self.dialogs.start_job(generation, items.len());
+        self.engine.send(Cmd::Export {
+            items,
+            default_settings: self.profiles.default_settings(),
+            options,
+            generation,
+            cancel,
+        });
+    }
+
+    /// Per-frame glue: keep the tool state in step with `tool_mode`, act on overlay/dialog
+    /// requests, Return in a tool, keep repainting while an export runs.
+    fn tools_and_dialogs_frame(&mut self, ctx: &egui::Context) -> Vec<Command> {
+        let mut cmds = Vec::new();
+        // a navigation or the existing Escape path may have dropped the mode
+        if self.tool_mode == ToolMode::None && self.tools.active() {
+            self.tools.clear();
+        }
+        let frame = self.frame_v2();
+        if let Some(c) = &mut self.tools.crop {
+            c.sync(&self.settings, frame);
+        }
+        for a in self.tools.take_actions() {
+            match a {
+                ToolAction::ApplyCrop => cmds.push(Command::ApplyTool),
+                ToolAction::CancelCrop => cmds.push(Command::CancelTool),
+                ToolAction::CommitAnalysis(r) => self.commit_analysis(r),
+            }
+        }
+        if self.tool_mode != ToolMode::None
+            && !self.dialogs.is_modal_open()
+            && !ctx.egui_wants_keyboard_input()
+            && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter))
+        {
+            cmds.push(Command::ApplyTool);
+        }
+        let current = self.selection.is_some().then(|| self.settings.clone());
+        for a in self.dialogs.ui(ctx, &mut self.profiles, current.as_ref()) {
+            match a {
+                DialogAction::StartExport { options, targets } => {
+                    self.start_export(options, targets)
+                }
+                DialogAction::ProfilesChanged => self.prefs.profiles = self.profiles.persisted(),
+                DialogAction::Status(s) => self.status_message = Some(s),
+            }
+        }
+        if self.dialogs.exporting() {
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
+        cmds
+    }
+
+    // ── selftest / bench hooks ──
+
+    /// Developing or analysing (the canvas is about to change).
+    pub fn busy(&self) -> bool {
+        self.developing || self.analyzing
+    }
+
+    /// The tier of the frame on screen.
+    pub fn rendered_tier(&self) -> RenderTier {
+        self.loupe.tier
+    }
+
+    /// Crop tool state (selftest: draw a box / set an angle).
+    pub fn crop_tool_mut(&mut self) -> Option<&mut CropTool> {
+        self.tools.crop.as_mut()
+    }
+
+    /// The current tool mode.
+    pub fn tool_mode(&self) -> ToolMode {
+        self.tool_mode
+    }
+
+    /// Export synchronously-scheduled through the engine with `options` for the open frame
+    /// (selftest); returns false when nothing is open or a job runs.
+    pub fn start_export_for_selection(&mut self, options: ExportOptions) -> bool {
+        let Some(sel) = self.selection.clone() else {
+            return false;
+        };
+        if self.dialogs.exporting() {
+            return false;
+        }
+        self.start_export(options, vec![sel]);
+        true
+    }
+
+    /// Whether a batch export is running.
+    pub fn exporting(&self) -> bool {
+        self.dialogs.exporting()
+    }
+
+    /// The sidebar status line.
+    pub fn status_message(&self) -> Option<&str> {
+        self.status_message.as_deref()
+    }
+
+    /// The sticky export options.
+    pub fn export_options(&self) -> &ExportOptions {
+        &self.prefs.export
+    }
+
+    /// The persisted preferences.
+    pub fn prefs(&self) -> &AppPrefs {
+        &self.prefs
+    }
+}
+// --- end U2 ---

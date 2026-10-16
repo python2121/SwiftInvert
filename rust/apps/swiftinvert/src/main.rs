@@ -21,8 +21,21 @@ use eframe::wgpu;
 const APP_NAME: &str = "SwiftInvert";
 
 fn usage() -> ExitCode {
-    eprintln!("usage: swiftinvert [folder]\n       swiftinvert --selftest <out.png> [folder]");
+    eprintln!(
+        "usage: swiftinvert [folder]\n       swiftinvert --selftest <out.png> [folder] [--crop] [--dialogs] [--export <dir>] [--latency]"
+    );
     ExitCode::from(2)
+}
+
+/// The device request both the window and the selftest harness use: the OS backend, limits
+/// raised so the full tier and full-size export fit (the engine shares this device).
+fn device_descriptor()
+-> Arc<dyn Fn(&wgpu::Adapter) -> wgpu::DeviceDescriptor<'static> + Send + Sync> {
+    Arc::new(|adapter: &wgpu::Adapter| wgpu::DeviceDescriptor {
+        label: Some("swiftinvert"),
+        required_limits: neggpu::context::required_limits(&adapter.limits()),
+        ..Default::default()
+    })
 }
 
 fn main() -> ExitCode {
@@ -32,15 +45,40 @@ fn main() -> ExitCode {
         let Some(out) = args.get(1) else {
             return usage();
         };
-        let folder = args
-            .get(2)
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Pictures")));
+        // --- U2: tools & dialogs --- `[folder]` then flags
+        let mut extra = negui::selftest::SelftestOptions::default();
+        let mut folder: Option<PathBuf> = None;
+        let mut rest = args.iter().skip(2);
+        while let Some(a) = rest.next() {
+            match a.as_str() {
+                "--crop" => extra.crop = true,
+                "--dialogs" => extra.dialogs = true,
+                "--latency" => extra.latency = true,
+                "--export" => match rest.next() {
+                    Some(d) => extra.export_dir = Some(PathBuf::from(d)),
+                    None => return usage(),
+                },
+                f if !f.starts_with("--") && folder.is_none() => folder = Some(PathBuf::from(f)),
+                _ => return usage(),
+            }
+        }
+        if std::env::var("NEG_GPU")
+            .ok()
+            .is_none_or(|v| !v.eq_ignore_ascii_case("off"))
+        {
+            let mut setup = eframe::egui_wgpu::WgpuSetupCreateNew::without_display_handle();
+            setup.instance_descriptor.backends = neggpu::context::default_backends();
+            setup.device_descriptor = device_descriptor();
+            extra.wgpu_setup = Some(WgpuSetup::CreateNew(setup));
+        }
+        let folder =
+            folder.or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Pictures")));
         let Some(folder) = folder else { return usage() };
-        return match negui::selftest::run_selftest(
+        return match negui::selftest::run_selftest_with(
             std::path::Path::new(out),
             folder,
             Duration::from_secs(120),
+            extra,
         ) {
             Ok([w, h]) => {
                 println!("selftest: wrote {out} ({w}×{h})");
@@ -60,11 +98,7 @@ fn main() -> ExitCode {
     let mut wgpu_options = WgpuConfiguration::default();
     if let WgpuSetup::CreateNew(n) = &mut wgpu_options.wgpu_setup {
         n.instance_descriptor.backends = neggpu::context::default_backends();
-        n.device_descriptor = Arc::new(|adapter: &wgpu::Adapter| wgpu::DeviceDescriptor {
-            label: Some("swiftinvert"),
-            required_limits: neggpu::context::required_limits(&adapter.limits()),
-            ..Default::default()
-        });
+        n.device_descriptor = device_descriptor();
     }
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,

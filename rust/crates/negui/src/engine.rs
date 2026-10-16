@@ -19,6 +19,22 @@ use negkit::ExposureSettings;
 use negsession::renderer::Renderer;
 use negsession::{RawBackend, RenderOutput, RenderRequest, Session, SessionInfo, ToolMode};
 
+// --- U2: tools & dialogs ---
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use negsession::{ExportOptions, Exporter, Frame, SidecarStore};
+
+use crate::presenter_gpu::{TextureRing, TextureSink};
+
+/// One frame of a batch export: `settings` is the live mirror for the open frame, `None` for
+/// the others (their sidecar, else the default profile, is read on the export thread).
+#[derive(Clone, Debug)]
+pub struct ExportItem {
+    pub path: PathBuf,
+    pub settings: Option<ExposureSettings>,
+}
+// --- end U2 ---
+
 /// Sessions kept warm (`AppModel.sessionLRU`): the active one plus the one navigated from.
 pub const SESSION_LRU: usize = 2;
 
@@ -52,6 +68,23 @@ pub enum Cmd {
     /// Drop every session (folder change).
     ClearSessions,
     Shutdown,
+    // --- U2: tools & dialogs ---
+    /// Batch export (`AppModel.performExport`) on its own thread so the canvas keeps rendering:
+    /// each frame opens its own [`Session`] (its sidecar or `default_settings` unless the item
+    /// carries the live settings), renders at full resolution and is written per `options`.
+    /// Progress/finish arrive as [`Evt::ExportProgress`] / [`Evt::ExportFinished`]; setting
+    /// `cancel` stops before the next frame. Never writes a sidecar.
+    Export {
+        items: Vec<ExportItem>,
+        default_settings: ExposureSettings,
+        options: ExportOptions,
+        generation: u64,
+        cancel: Arc<AtomicBool>,
+    },
+    /// Present display renders through GPU textures shared with the window (the zero-copy
+    /// loupe, [`crate::presenter_gpu`]) instead of RGBA8 readbacks.
+    UseTextureTarget(TextureSink),
+    // --- end U2 ---
 }
 
 /// Worker → UI.
@@ -81,6 +114,23 @@ pub enum Evt {
         generation: u64,
         error: String,
     },
+    // --- U2: tools & dialogs ---
+    /// Export started frame `done + 1` of `total`.
+    ExportProgress {
+        generation: u64,
+        done: usize,
+        total: usize,
+        current: PathBuf,
+    },
+    /// The batch ended (finished or cancelled).
+    ExportFinished {
+        generation: u64,
+        total: usize,
+        written: Vec<PathBuf>,
+        failed: Vec<(PathBuf, String)>,
+        cancelled: bool,
+    },
+    // --- end U2 ---
 }
 
 /// The UI's handle: a sender, a receiver and the thread.
@@ -111,6 +161,8 @@ impl Engine {
                     sessions: Vec::new(),
                     evt_tx,
                     repaint: Box::new(repaint),
+                    export_jobs: Vec::new(),
+                    texture: None,
                 };
                 worker.run(cmd_rx);
             })
@@ -159,6 +211,9 @@ struct Worker {
     sessions: Vec<Session>,
     evt_tx: Sender<Evt>,
     repaint: Box<dyn Fn() + Send>,
+    // --- U2: tools & dialogs ---
+    export_jobs: Vec<(Arc<AtomicBool>, JoinHandle<()>)>,
+    texture: Option<TextureRing>,
 }
 
 impl Worker {
@@ -202,6 +257,16 @@ impl Worker {
         match cmd {
             Cmd::Shutdown => return false,
             Cmd::ClearSessions => self.sessions.clear(),
+            // --- U2: tools & dialogs ---
+            Cmd::Export {
+                items,
+                default_settings,
+                options,
+                generation,
+                cancel,
+            } => self.spawn_export(items, default_settings, options, generation, cancel),
+            Cmd::UseTextureTarget(sink) => self.enable_texture_target(sink),
+            // --- end U2 ---
             Cmd::ReleaseEnhanced { path } => {
                 if let Some(s) = self.session_mut(&path) {
                     s.release_enhanced_tiers();
@@ -311,6 +376,11 @@ impl Worker {
                 generation,
             });
         }
+        // --- U2: tools & dialogs ---
+        if let Some(out) = self.render_to_target(path, &variant, tool, request) {
+            return out;
+        }
+        // --- end U2 ---
         let Some(s) = self.session_mut(path) else {
             return Err("session vanished".into());
         };
@@ -329,3 +399,204 @@ impl Worker {
         Ok((output, info, render_time))
     }
 }
+
+// --- U2: tools & dialogs ---
+impl Worker {
+    fn spawn_export(
+        &mut self,
+        items: Vec<ExportItem>,
+        default_settings: ExposureSettings,
+        options: ExportOptions,
+        generation: u64,
+        cancel: Arc<AtomicBool>,
+    ) {
+        self.export_jobs.retain(|(_, h)| !h.is_finished());
+        let backend = Arc::clone(&self.backend);
+        let renderer = Arc::clone(&self.renderer);
+        let tx = self.evt_tx.clone();
+        let flag = Arc::clone(&cancel);
+        let spawned = std::thread::Builder::new()
+            .name("negui-export".into())
+            .spawn(move || {
+                run_export(
+                    &backend,
+                    &renderer,
+                    &items,
+                    &default_settings,
+                    &options,
+                    generation,
+                    &flag,
+                    &tx,
+                )
+            });
+        match spawned {
+            Ok(handle) => self.export_jobs.push((cancel, handle)),
+            Err(e) => {
+                log::error!("export: could not spawn the export thread: {e}");
+                self.emit(Evt::ExportFinished {
+                    generation,
+                    total: 0,
+                    written: Vec::new(),
+                    failed: vec![(PathBuf::new(), e.to_string())],
+                    cancelled: false,
+                });
+            }
+        }
+    }
+
+    fn enable_texture_target(&mut self, sink: TextureSink) {
+        match TextureRing::new(&self.renderer, sink) {
+            Some(ring) => {
+                log::info!("engine: presenting through shared GPU textures");
+                self.texture = Some(ring);
+            }
+            None => log::warn!("engine: texture target refused (not a GPU renderer)"),
+        }
+    }
+
+    /// The zero-readback display path: the frame lands in a texture of the ring (the one not on
+    /// screen) and the returned output carries an EMPTY RGBA8 frame; the presenter picks the
+    /// texture up from the sink. On a size change (the ring's textures are the wrong size) the
+    /// frame comes back through `render_into` once — bytes the presenter uploads — and the ring
+    /// is resized for the next render. `None` when the target is off.
+    fn render_to_target(
+        &mut self,
+        path: &Path,
+        variant: &Option<ExposureSettings>,
+        tool: ToolMode,
+        request: RenderRequest,
+    ) -> Option<Result<(RenderOutput, Option<SessionInfo>, Duration), String>> {
+        let mut ring = self.texture.take()?;
+        let result = self.render_with_ring(&mut ring, path, variant, tool, request);
+        if ring.is_usable() {
+            self.texture = Some(ring);
+        }
+        Some(result)
+    }
+
+    fn render_with_ring(
+        &mut self,
+        ring: &mut TextureRing,
+        path: &Path,
+        variant: &Option<ExposureSettings>,
+        tool: ToolMode,
+        mut request: RenderRequest,
+    ) -> Result<(RenderOutput, Option<SessionInfo>, Duration), String> {
+        let Some(s) = self.session_mut(path) else {
+            return Err("session vanished".into());
+        };
+        // The same snapshot `render_tool_preview` / the baseline branch would render.
+        request.uncropped = tool != ToolMode::None;
+        let settings = match variant {
+            Some(v) => v.clone(),
+            None => {
+                let mut eff = s.settings().clone();
+                if tool == ToolMode::Crop {
+                    eff.fine_rotation = 0.0;
+                }
+                eff
+            }
+        };
+        let t0 = Instant::now();
+        if let Some((slot, texture)) = ring.pick() {
+            let tried = (texture.width(), texture.height());
+            match s.render_to_texture_with(&settings, request, &texture) {
+                Ok(meta) => {
+                    let render_time = t0.elapsed();
+                    ring.deliver(slot, &texture);
+                    let info = s.session_info().ok();
+                    let output = RenderOutput {
+                        frame: Frame::Rgba8(Vec::new()),
+                        meta,
+                    };
+                    return Ok((output, info, render_time));
+                }
+                Err(e) => ring.note_failure(tried, &e.to_string()),
+            }
+        }
+        let mut bytes = Vec::new();
+        let meta = s
+            .render_into_with(&settings, request, &mut bytes)
+            .map_err(|e| e.to_string())?;
+        let render_time = t0.elapsed();
+        ring.resize(meta.width, meta.height);
+        let info = s.session_info().ok();
+        Ok((
+            RenderOutput {
+                frame: Frame::Rgba8(bytes),
+                meta,
+            },
+            info,
+            render_time,
+        ))
+    }
+}
+
+impl Drop for Worker {
+    fn drop(&mut self) {
+        for (cancel, _) in &self.export_jobs {
+            cancel.store(true, Ordering::Relaxed);
+        }
+        for (_, handle) in self.export_jobs.drain(..) {
+            let _ = handle.join();
+        }
+    }
+}
+
+/// The export loop (`performExport`), one frame at a time.
+#[allow(clippy::too_many_arguments)]
+fn run_export(
+    backend: &Arc<dyn RawBackend>,
+    renderer: &Arc<dyn Renderer>,
+    items: &[ExportItem],
+    default_settings: &ExposureSettings,
+    options: &ExportOptions,
+    generation: u64,
+    cancel: &AtomicBool,
+    tx: &Sender<Evt>,
+) {
+    let total = items.len();
+    let mut written = Vec::new();
+    let mut failed = Vec::new();
+    let mut cancelled = false;
+    for (done, item) in items.iter().enumerate() {
+        if cancel.load(Ordering::Relaxed) {
+            cancelled = true;
+            break;
+        }
+        let _ = tx.send(Evt::ExportProgress {
+            generation,
+            done,
+            total,
+            current: item.path.clone(),
+        });
+        let settings = item
+            .settings
+            .clone()
+            .or_else(|| SidecarStore::load(&item.path))
+            .unwrap_or_else(|| default_settings.clone());
+        let outcome = Session::open(&item.path, Arc::clone(backend), Arc::clone(renderer))
+            .and_then(|mut session| {
+                session.set_settings(settings);
+                Exporter::write(&mut session, options)
+            });
+        match outcome {
+            Ok(p) => {
+                log::info!("export: wrote {}", p.display());
+                written.push(p);
+            }
+            Err(e) => {
+                log::warn!("export: {} failed: {e}", item.path.display());
+                failed.push((item.path.clone(), e.to_string()));
+            }
+        }
+    }
+    let _ = tx.send(Evt::ExportFinished {
+        generation,
+        total,
+        written,
+        failed,
+        cancelled,
+    });
+}
+// --- end U2 ---

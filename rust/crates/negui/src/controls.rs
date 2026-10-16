@@ -712,10 +712,9 @@ fn groups(
         ui.spacing_mut().item_spacing.y = 8.0;
         ui.horizontal(|ui| {
             let active = input.tool_mode == ToolMode::AnalysisRegion;
-            if small_button(ui, "▣ Crop for Analysis", false, active)
-                .on_disabled_hover_text(
-                    "The analysis-region tool arrives with the canvas tools (later wave)",
-                )
+            // --- U2: tools & dialogs ---
+            if small_button(ui, "▣ Crop for Analysis", enabled, active)
+                .on_hover_text("Meter only the region you draw (⇧⌘K)")
                 .clicked()
             {
                 actions.push(SidebarAction::ToggleAnalysisTool);
@@ -849,7 +848,7 @@ fn groups(
     ui.add_space(gap);
 
     if small_button(ui, "Export…", enabled && !input.is_exporting, false)
-        .on_hover_text("Export arrives in a later wave (⌘E)")
+        .on_hover_text("Export the selected frames (⌘E)")
         .clicked()
     {
         actions.push(SidebarAction::Export);
@@ -919,10 +918,9 @@ fn crop_rotation_section(
     ui.add_enabled_ui(enabled, |ui| {
         ui.horizontal(|ui| {
             let active = input.tool_mode == ToolMode::Crop;
-            if small_button(ui, "⌗ Crop or Straighten", false, active)
-                .on_disabled_hover_text(
-                    "Crop & Straighten arrives with the canvas tools (later wave, ⌘K)",
-                )
+            // --- U2: tools & dialogs ---
+            if small_button(ui, "⌗ Crop or Straighten", true, active)
+                .on_hover_text("Crop & Straighten (⌘K)")
                 .clicked()
             {
                 actions.push(SidebarAction::ToggleCropTool);

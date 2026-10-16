@@ -15,10 +15,16 @@
 pub mod app;
 pub mod control_spec;
 pub mod controls;
+// --- U2: tools & dialogs ---
+pub mod dialogs;
+// --- end U2 ---
 pub mod engine;
 pub mod histogram;
 pub mod library;
 pub mod loupe;
+// --- U2 ---
+pub mod presenter_gpu;
+// --- end U2 ---
 pub mod selftest;
 pub mod theme;
 pub mod tools;

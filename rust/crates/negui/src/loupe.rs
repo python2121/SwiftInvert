@@ -236,12 +236,51 @@ pub enum CanvasAction {
     Hover(Option<(f32, f32)>),
 }
 
+// --- U2: tools & dialogs ---
+/// Where the canvas laid the frame out this pass — what a [`CanvasOverlay`] draws against.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct OverlayView {
+    /// The whole canvas rect.
+    pub area: Rect,
+    /// The canvas rect minus [`CANVAS_INSET`] (what "fit" fits into).
+    pub inset_area: Rect,
+    /// The ideal display rect of the frame (zoom and pan applied).
+    pub frame_rect: Rect,
+    /// Where the bitmap is painted inside `frame_rect` (its content window).
+    pub bitmap_rect: Rect,
+    /// 1 = fit.
+    pub zoom: f32,
+    pub pan: Vec2,
+    /// The presented bitmap.
+    pub frame: PresentedFrame,
+    /// Orientation-only frame dims of the proxy (the crop-geometry base).
+    pub frame_size: (usize, usize),
+}
+
+/// A tool layer over the canvas (crop box, analysis rect, test strip, zone pins …). The canvas
+/// asks every overlay, in order, to [`CanvasOverlay::handle`] the canvas response before its own
+/// pan/zoom gestures (the first that returns `true` consumes it), then paints them in order over
+/// the bitmap. An overlay that [`CanvasOverlay::takes_over`] pins the canvas to fit, disables
+/// its gestures and paints the bitmap itself (the crop tool rotates it behind the box).
+pub trait CanvasOverlay {
+    /// Pin zoom/pan and skip the loupe's own bitmap paint.
+    fn takes_over(&self) -> bool {
+        false
+    }
+    /// Pointer input on the canvas; `true` = consumed (no pan / double-click zoom).
+    fn handle(&mut self, response: &egui::Response, view: &OverlayView) -> bool;
+    /// Paint (and lay out any in-canvas widgets) over the bitmap.
+    fn paint(&mut self, ui: &mut egui::Ui, view: &OverlayView);
+}
+// --- end U2 ---
+
 /// Draw the canvas into `area`.
 pub fn canvas(
     ui: &mut egui::Ui,
     area: Rect,
     state: &mut LoupeState,
     input: &CanvasInput<'_>,
+    overlays: &mut [&mut dyn CanvasOverlay],
 ) -> Vec<CanvasAction> {
     let t = Tokens::get(ui.ctx());
     let mut actions = Vec::new();
@@ -294,8 +333,36 @@ pub fn canvas(
     let mut pan = state.pan;
     let hover = resp.hover_pos();
 
+    // --- U2: tools & dialogs --- overlays see the input first; a take-over pins the fit.
+    let takeover = overlays.iter().any(|o| o.takes_over());
+    if takeover {
+        zoom = 1.0;
+        pan = Vec2::ZERO;
+    }
+    let mut consumed = false;
+    {
+        let frame_rect = Rect::from_center_size(area.center() + pan, fit.size() * zoom);
+        let view = OverlayView {
+            area,
+            inset_area: area.shrink(CANVAS_INSET),
+            frame_rect,
+            bitmap_rect: content_rect(frame_rect, &state.content_window),
+            zoom,
+            pan,
+            frame,
+            frame_size: state.frame_size,
+        };
+        for o in overlays.iter_mut() {
+            if o.handle(&resp, &view) {
+                consumed = true;
+                break;
+            }
+        }
+    }
+    // --- end U2 ---
+
     // gestures
-    if resp.hovered() {
+    if resp.hovered() && !takeover {
         let mut factor = 1.0f32;
         let mut anchor = hover.unwrap_or(area.center());
         let (pinch, trackpad_pan) = ui.input(|i| (i.zoom_delta(), i.smooth_scroll_delta));
@@ -346,10 +413,10 @@ pub fn canvas(
         }
         ui.input_mut(|i| i.smooth_scroll_delta = Vec2::ZERO);
     }
-    if resp.dragged() && zoom > 1.0 {
+    if resp.dragged() && zoom > 1.0 && !takeover && !consumed {
         pan += resp.drag_delta();
     }
-    if resp.double_clicked() {
+    if resp.double_clicked() && !takeover && !consumed {
         if zoom > 1.001 {
             zoom = 1.0;
             pan = Vec2::ZERO;
@@ -384,15 +451,32 @@ pub fn canvas(
 
     // paint the bitmap at its content window
     let bitmap_rect = content_rect(frame_rect, &state.content_window);
-    painter.image(
-        frame.texture,
-        bitmap_rect,
-        Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)),
-        Color32::WHITE,
-    );
-    if input.show_grid {
-        grid_lines(&painter, frame_rect, input.grid);
+    if !takeover {
+        painter.image(
+            frame.texture,
+            bitmap_rect,
+            Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)),
+            Color32::WHITE,
+        );
+        if input.show_grid {
+            grid_lines(&painter, frame_rect, input.grid);
+        }
     }
+    // --- U2: tools & dialogs ---
+    let view = OverlayView {
+        area,
+        inset_area: area.shrink(CANVAS_INSET),
+        frame_rect,
+        bitmap_rect,
+        zoom,
+        pan,
+        frame,
+        frame_size: state.frame_size,
+    };
+    for o in overlays.iter_mut() {
+        o.paint(ui, &view);
+    }
+    // --- end U2 ---
 
     // hover → content-normalized point (plain presentation only)
     let hover_uv = if input.tool_mode == ToolMode::None && !input.baseline {

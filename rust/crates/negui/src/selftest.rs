@@ -13,6 +13,30 @@ pub const SELFTEST_SIZE: [f32; 2] = [1440.0, 900.0];
 
 /// Run the selftest: returns the written PNG's pixel size.
 pub fn run_selftest(out: &Path, folder: PathBuf, timeout: Duration) -> Result<[u32; 2], String> {
+    run_selftest_with(out, folder, timeout, SelftestOptions::default())
+}
+
+// --- U2: tools & dialogs ---
+/// Extra selftest passes (`--crop`, `--export <dir>`, `--dialogs`, `--latency`) and the wgpu
+/// setup the harness renders with (the app's own, so the engine can share the device and the
+/// zero-copy presenter is the one exercised; `None` = kittest's default lazy renderer).
+#[derive(Default)]
+pub struct SelftestOptions {
+    pub crop: bool,
+    pub export_dir: Option<PathBuf>,
+    pub dialogs: bool,
+    pub latency: bool,
+    pub wgpu_setup: Option<eframe::egui_wgpu::WgpuSetup>,
+}
+// --- end U2 ---
+
+/// [`run_selftest`] with the extra passes.
+pub fn run_selftest_with(
+    out: &Path,
+    folder: PathBuf,
+    timeout: Duration,
+    extra: SelftestOptions,
+) -> Result<[u32; 2], String> {
     if !folder.is_dir() {
         return Err(format!("{} is not a folder", folder.display()));
     }
@@ -23,11 +47,23 @@ pub fn run_selftest(out: &Path, folder: PathBuf, timeout: Duration) -> Result<[u
         renderer: None,
         presenter: None,
     };
-    let mut harness = egui_kittest::Harness::builder()
+    let mut builder = egui_kittest::Harness::builder()
         .with_size(egui::vec2(SELFTEST_SIZE[0], SELFTEST_SIZE[1]))
         .with_pixels_per_point(1.0)
-        .with_max_steps(100_000)
-        .build_eframe(|cc| NegApp::new(cc, options));
+        .with_max_steps(100_000);
+    // --- U2 ---
+    let SelftestOptions {
+        crop,
+        export_dir,
+        dialogs,
+        latency,
+        wgpu_setup,
+    } = extra;
+    if let Some(setup) = wgpu_setup {
+        builder = builder.renderer(egui_kittest::wgpu::WgpuTestRenderer::from_setup(setup));
+    }
+    // --- end U2 ---
+    let mut harness = builder.build_eframe(|cc| NegApp::new(cc, options));
     let start = Instant::now();
     loop {
         harness.step();
@@ -113,11 +149,20 @@ pub fn run_selftest(out: &Path, folder: PathBuf, timeout: Duration) -> Result<[u
         log::info!("selftest: wrote {}", path.display());
     }
     harness.remove_cursor();
+    // --- U2: tools & dialogs ---
+    let passes = crate::tools::selftest::Passes {
+        crop,
+        export_dir,
+        dialogs,
+        latency,
+    };
+    crate::tools::selftest::run(&mut harness, out, &passes)?;
+    // --- end U2 ---
     Ok(size)
 }
 
 /// `<stem><suffix>.<ext>` next to `path`.
-fn sibling(path: &Path, suffix: &str) -> PathBuf {
+pub fn sibling(path: &Path, suffix: &str) -> PathBuf {
     let stem = path
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
