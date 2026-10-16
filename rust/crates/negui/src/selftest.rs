@@ -92,25 +92,27 @@ pub fn run_selftest(out: &Path, folder: PathBuf, timeout: Duration) -> Result<[u
     // Second capture: the controls column scrolled to its end (mixer/grading/tone rows).
     let sidebar = egui::pos2(SELFTEST_SIZE[0] - 145.0, SELFTEST_SIZE[1] * 0.5);
     harness.hover_at(sidebar);
-    for _ in 0..40 {
-        harness.event(egui::Event::MouseWheel {
-            unit: egui::MouseWheelUnit::Line,
-            delta: egui::vec2(0.0, -6.0),
-            modifiers: egui::Modifiers::NONE,
-            phase: egui::TouchPhase::Move,
-        });
-        harness.step();
+    for (notches, suffix) in [(3, "_mid"), (40, "_controls")] {
+        for _ in 0..notches {
+            harness.event(egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Line,
+                delta: egui::vec2(0.0, -6.0),
+                modifiers: egui::Modifiers::NONE,
+                phase: egui::TouchPhase::Move,
+            });
+            harness.step();
+        }
+        for _ in 0..4 {
+            harness.step();
+        }
+        let capture = harness.render()?;
+        let path = sibling(out, suffix);
+        capture
+            .save(&path)
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        log::info!("selftest: wrote {}", path.display());
     }
     harness.remove_cursor();
-    for _ in 0..4 {
-        harness.step();
-    }
-    let controls = harness.render()?;
-    let controls_path = sibling(out, "_controls");
-    controls
-        .save(&controls_path)
-        .map_err(|e| format!("{}: {e}", controls_path.display()))?;
-    log::info!("selftest: wrote {}", controls_path.display());
     Ok(size)
 }
 
