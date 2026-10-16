@@ -16,7 +16,7 @@ Merged and green on `rust-port` (pushed to `origin`, github.com/python2121/Swift
 | `negsession` (engine) + `negcli` | cache tower (ImageSession keys), sidecars, profiles, history, export (ICC), GpuRenderer, test strip, zone placement | 87 + gpu parity |
 | `negui` + `apps/swiftinvert` | the egui SHELL (U1) merged: library, loupe, controls table, histogram, history, menus, selftest | 7 |
 | `negui` tools/dialogs/darkroom (U2b, U3b) | crop & straighten, analysis rect, export dialog + batch, profiles picker, GPU texture presenter (ring of 2), densitometer + zone strip, zone overlay, test strip, zone placement, interactive histogram, selftest flags `--crop --dialogs --export <dir> --latency --teststrip --zones` | 16 + 15 |
-| **Total** | `NEG_RAW_SAMPLE=/home/deck/Pictures/IMG_0420.CR3 cargo test --workspace` | **462 passed** (Linux) |
+| **Total** | `NEG_RAW_SAMPLE=/home/deck/Pictures/IMG_0420.CR3 cargo test --workspace` | **477 passed** (Linux, after the review-8 fixes on `wt/wave4-F`) |
 
 Verified on the Mac (Apple M2, Rust 1.96, via ClaudeShip jobs): whole workspace builds and
 tests pass; `swiftinvert --selftest` renders a real negative headless (first render 71 ms,
@@ -64,6 +64,31 @@ After merging each: `cd rust && cargo fmt --all -- --check && cargo clippy --wor
 13. lib.rs docs: front-end obligations; lenient-sidecar divergence; baseline semantics.
 
 ## What remains after those three merge (PLAN §6 waves 4–5)
+
+**Review 8 (negui) — fixed on `wt/wave4-F`** (each with a test in `crates/negui/tests/`
+`app_rules.rs` / `glyphs.rs` / `darkroom_ui.rs`): sidecar flush on folder change, named-action
+labels armed only on a change, worker `catch_unwind` per command + "engine stopped" pill,
+failed decode reported once ("Couldn't open …"), modal key discipline (Escape closes the dialog
+first; keys blocked under a modal or a focused text field), drag sessions released with the
+pointer, leased texture slots (ring of 3; the texture rides its own `Evt::Rendered`), split
+prefs keys (`swiftinvert.prefs` / `.export` / `.profiles`, legacy blob read once), folder
+browsers list off the UI thread once per path, zone overlay hidden under View Original,
+Hack as the proportional symbol fallback + platform shortcut names in tooltips, test-strip
+caption, Interactive Histogram kept inside the canvas, selftest export hygiene, egui_kittest
+behind the default-on `selftest` feature (`--no-default-features` builds the product without it).
+**Known gaps left open by review 8:**
+- [8] Profile-editor WINDOW mode (shared draft over every frame, no sidecar writes, guards in
+  save/paste/export) — still only the picker + "Update from Current".
+- [10] Quitting mid-export: `on_exit` now sets the batch's cancel flag, so it stops after the
+  frame in progress — but that frame (a full-res decode + render, ~1 s) still finishes before
+  the window closes; per-frame cancellation inside `Exporter::write` would need engine hooks.
+- [13] On HQ tiers the densitometer/zone grid read the proxy probe frame but map through the
+  displayed tier's `content_window` — a sub-pixel mismatch (each tier truncates its ROI).
+- [14] Crop-tool entry: the texture is mapped over the full frame quad ignoring
+  `content_window` (slight stretch), and the first paint after entering shows the previous
+  cropped bitmap as the uncropped 0° frame until the tool render lands.
+- The engine-stopped path (worker thread gone) has no automated test: every command is now
+  caught per command, so only a panic in the queue bookkeeping itself could reach it.
 
 - Wire U2's GPU presenter to S2's `Session::render_to_texture` (zero-copy loupe); measure
   adjust→screen in HQ-on full tier (engine Vec path was ~80 ms at 24 MP; neggpu alone 34 ms).

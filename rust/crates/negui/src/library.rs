@@ -299,7 +299,7 @@ pub fn library_panel(
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui
-                .add(egui::Button::new(egui::RichText::new("◧").size(13.0)).frame(false))
+                .add(egui::Button::new(egui::RichText::new("◧").size(15.0)).frame(false))
                 .on_hover_text(crate::app::with_shortcut(
                     ui.ctx(),
                     "Hide library",
@@ -310,7 +310,7 @@ pub fn library_panel(
                 actions.push(LibraryAction::ToggleLibrary);
             }
             if ui
-                .add(egui::Button::new(egui::RichText::new("▤").size(13.0)).frame(false))
+                .add(egui::Button::new(egui::RichText::new("▤").size(15.0)).frame(false))
                 .on_hover_text(crate::app::with_shortcut(
                     ui.ctx(),
                     "Open folder…",

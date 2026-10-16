@@ -1002,7 +1002,7 @@ fn history_panel(
             if ui
                 .add_enabled(
                     input.can_redo,
-                    egui::Button::new(egui::RichText::new("↷").size(13.0)).frame(false),
+                    egui::Button::new(egui::RichText::new("↷").size(17.0)).frame(false),
                 )
                 .on_hover_text(crate::app::with_shortcut(
                     ui.ctx(),
@@ -1016,7 +1016,7 @@ fn history_panel(
             if ui
                 .add_enabled(
                     input.can_undo,
-                    egui::Button::new(egui::RichText::new("↶").size(13.0)).frame(false),
+                    egui::Button::new(egui::RichText::new("↶").size(17.0)).frame(false),
                 )
                 .on_hover_text(crate::app::with_shortcut(
                     ui.ctx(),
