@@ -32,6 +32,14 @@ impl LogNegativeBounds {
         }
     }
 
+    /// Rec.709-weighted luminance density range (`luminanceDensityRange`): the grade's
+    /// `lumRange` and the Contrast Mask's scale read this from the PRE-offset base bounds.
+    pub fn luminance_density_range(&self) -> f64 {
+        crate::constants::K::LUMA_R * (self.ceils[0] - self.floors[0]).abs()
+            + crate::constants::K::LUMA_G * (self.ceils[1] - self.floors[1]).abs()
+            + crate::constants::K::LUMA_B * (self.ceils[2] - self.floors[2]).abs()
+    }
+
     /// Per-channel range `ceil − floor`.
     pub fn ranges(&self) -> V3 {
         [
