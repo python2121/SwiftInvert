@@ -40,7 +40,6 @@ fn expect_close(got: f64, expected: f64, accuracy: f64, label: &dyn std::fmt::Di
 /// which agent A ports as `negkit::stats`. Wired here so the vectors are not forgotten;
 /// swap the body for `negkit::stats::percentile(&data, q)` once the module lands.
 #[test]
-#[ignore = "needs stats (agent A): replace the body with negkit::stats::percentile"]
 fn percentile() {
     let cs = cases("percentile");
     assert!(!cs.is_empty());
@@ -51,10 +50,15 @@ fn percentile() {
             .iter()
             .map(|v| v.as_f64().unwrap() as f32)
             .collect();
-        let _q = num(c, "q");
-        let _out = num(c, "out");
+        let q = num(c, "q");
+        let out = num(c, "out");
         assert!(!data.is_empty());
-        // expect_close(negkit::stats::percentile(&data, _q), _out, 1e-6, c);
+        expect_close(
+            negkit::stats::percentile(&data, q).expect("non-empty"),
+            out,
+            1e-6,
+            c,
+        );
     }
 }
 
