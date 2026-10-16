@@ -3,8 +3,9 @@
 //!
 //! Rules: RAW files per folder (`negraw::is_raw_file`), name-sorted with a natural
 //! (digit-aware, case-insensitive) order — `localizedStandardCompare`'s useful core — hidden
-//! entries skipped, a folder's own files before its subfolders, RAW-less branches pruned, depth
-//! capped at 8 below the root. `flatten` is the depth-first order behind index numbers, ←/→
+//! entries skipped, symlinked DIRECTORIES skipped (Swift's `isDirectoryKey` is false for a
+//! link), a folder's own files before its subfolders, RAW-less branches pruned, depth capped
+//! at 8 below the root. `flatten` is the depth-first order behind index numbers, ←/→
 //! navigation and shift-click ranges. Thumbnails are the embedded camera JPEG bytes
 //! ([`thumbnail`]); the UI decodes them.
 
@@ -105,13 +106,16 @@ fn build_at(dir: &Path, depth: usize) -> Option<FolderNode> {
         if is_hidden(&p) {
             continue;
         }
-        // `metadata` follows symlinks, like URLResourceKey's isDirectory.
-        let Ok(meta) = std::fs::metadata(&p) else {
+        // `symlink_metadata` does NOT follow links: Swift's `.isDirectoryKey` is false for a
+        // symlink, so `AppModel.buildTree` never descends into linked folders (a link to an
+        // ancestor would otherwise recurse to the depth cap, listing files many times over). A
+        // symlinked RAW FILE still lists — Swift filters files by extension alone.
+        let Ok(meta) = std::fs::symlink_metadata(&p) else {
             continue;
         };
         if meta.is_dir() {
             dirs.push(p);
-        } else if meta.is_file() && negraw::is_raw_file(&p) {
+        } else if !meta.is_dir() && negraw::is_raw_file(&p) && p.is_file() {
             files.push(p);
         }
     }

@@ -60,11 +60,14 @@ fn opens_renders_and_exports_a_real_raw() {
 
     // JPEG, sRGB, resized to 3000 — the sheet's sticky default when resize is on.
     let jpeg_opts = ExportOptions {
-        format: ExportFormat::Jpeg { quality: 0.92 },
-        colorspace: ExportColorSpace::Srgb,
-        resize_long_edge: Some(3000),
-        destination: ExportDestination::Folder(dir.clone()),
-    };
+        format: ExportFormat::Jpeg,
+        jpeg_quality: 0.92,
+        color_space: ExportColorSpace::Srgb,
+        resize: true,
+        max_long_edge: 3000,
+        ..Default::default()
+    }
+    .with_destination(ExportDestination::Folder(dir.clone()));
     let jpeg_path = Exporter::write(&mut session, &jpeg_opts).unwrap();
     assert_eq!(jpeg_path.extension().unwrap(), "jpg");
     let mut dec = image::codecs::jpeg::JpegDecoder::new(BufReader::new(
@@ -84,10 +87,11 @@ fn opens_renders_and_exports_a_real_raw() {
     // TIFF-16, Adobe RGB, full size: the decoder's oriented dims.
     let tiff_opts = ExportOptions {
         format: ExportFormat::Tiff16,
-        colorspace: ExportColorSpace::AdobeRgb,
-        resize_long_edge: None,
-        destination: ExportDestination::Folder(dir.clone()),
-    };
+        color_space: ExportColorSpace::AdobeRgb,
+        resize: false,
+        ..Default::default()
+    }
+    .with_destination(ExportDestination::Folder(dir.clone()));
     let tiff_path = Exporter::write(&mut session, &tiff_opts).unwrap();
     let mut dec = image::codecs::tiff::TiffDecoder::new(BufReader::new(
         std::fs::File::open(&tiff_path).unwrap(),

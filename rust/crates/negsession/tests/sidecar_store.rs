@@ -182,3 +182,48 @@ fn missing_keys_decode_to_defaults() {
     assert!(v.get("version").is_none());
     assert_eq!(v["grade"], serde_json::json!(115.0));
 }
+
+/// Two saves of ONE source racing from different threads (the debounced save vs an export
+/// flush) must each produce a complete file: per-call temp names (review 7, finding 1).
+#[test]
+fn concurrent_saves_never_corrupt_the_sidecar() {
+    let dir = common::scratch_dir("sidecar-race");
+    let source = source_in(&dir);
+    let threads: Vec<_> = (0..8)
+        .map(|t| {
+            let source = source.clone();
+            std::thread::spawn(move || {
+                for i in 0..40 {
+                    let mut s = ExposureSettings::default();
+                    s.grade = 60.0 + (t * 40 + i) as f64;
+                    SidecarStore::save(&s, &source).unwrap();
+                    // Every observation in between is a complete, decodable envelope.
+                    assert!(
+                        SidecarStore::load(&source).is_some(),
+                        "partial sidecar observed"
+                    );
+                }
+            })
+        })
+        .collect();
+    for t in threads {
+        t.join().unwrap();
+    }
+    let loaded = SidecarStore::load(&source).unwrap();
+    assert!((60.0..=380.0).contains(&loaded.grade));
+    let names: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        names,
+        vec!["IMG_0001.swiftinvert.json".to_owned()],
+        "{names:?}"
+    );
+    // The temp names themselves: unique per call, beside the target.
+    let target = SidecarStore::sidecar_path(&source);
+    let a = negsession::atomic::temp_path(&target);
+    let b = negsession::atomic::temp_path(&target);
+    assert_ne!(a, b);
+    assert_eq!(a.parent(), target.parent());
+}

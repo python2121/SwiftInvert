@@ -341,7 +341,7 @@ fn medium_tier_and_source_lifecycle() {
     assert!(gpu.stats().sources.is_empty());
     // The zero-allocation handoff writes the same bytes as the allocating path.
     let out = g.render(req).unwrap();
-    let Frame::Rgba8(expected) = out.frame else {
+    let Frame::Rgba8(expected) = &out.frame else {
         panic!()
     };
     let mut dest = vec![0u8; expected.len()];
@@ -360,7 +360,7 @@ fn medium_tier_and_source_lifecycle() {
         .render_display_into(&src, &params, &opts, &mut dest)
         .unwrap()
         .unwrap();
-    assert_eq!(dest, expected);
+    assert_eq!(&dest, expected);
     assert_eq!(Some(hist), out.histogram);
     let mut short = vec![0u8; 16];
     assert!(

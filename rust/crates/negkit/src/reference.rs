@@ -539,6 +539,94 @@ pub fn srgb_from_encoded(e: [f32; 3]) -> [f32; 3] {
     out
 }
 
+/// Linear sRGB (D65) → XYZ, row-major — the PUBLISHED inverse of [`SRGB_FROM_XYZ`]
+/// (IEC 61966-2-1), agreeing with it to ~1e-7 per entry; [`encoded_from_srgb_f64`] inverts the
+/// forward matrix numerically instead, so its round trip is exact.
+pub const XYZ_FROM_SRGB: [V3; 3] = [
+    [0.4124564, 0.3575761, 0.1804375],
+    [0.2126729, 0.7151522, 0.0721750],
+    [0.0193339, 0.1191920, 0.9503041],
+];
+
+/// Inverse of the piecewise sRGB OETF ([`srgb_oetf`]), in `f64` (see [`encoded_from_srgb`]).
+#[inline]
+pub fn srgb_eotf(e: f64) -> f64 {
+    if e <= 0.04045 {
+        e / 12.92
+    } else {
+        ((e + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// Inverse of [`srgb_from_encoded`]: an sRGB-encoded display triplet back to the Adobe-RGB
+/// working encode — inverse piecewise OETF → XYZ ([`XYZ_FROM_SRGB`]) → linear Adobe RGB
+/// ([`lab::TO_RGB`]) → the pure-power TRC. For a front end that shows sRGB bytes (no
+/// ColorSync) and wants to read density off them. The math runs in `f64` and narrows once at
+/// the end, so against an f64 forward the round trip is exact to ≤ 1e-6; against the kernels'
+/// own `f32` forward it holds to ≤ 1e-5 — the residual is the forward's f32 cancellation in the
+/// gamut matrix on a dark channel beside a bright one, amplified by the inverse TRC's slope
+/// near black (≈ ×16 at e = 0.05); on 8-bit display bytes it is invisible. In-gamut colours only
+/// (the forward clamp admits nothing else back); negative linear values clamp at 0 before the
+/// TRC.
+#[inline]
+pub fn encoded_from_srgb(s: [f32; 3]) -> [f32; 3] {
+    let w = encoded_from_srgb_f64([f64::from(s[0]), f64::from(s[1]), f64::from(s[2])]);
+    // Boundary narrowing: the display path is f32.
+    [w[0] as f32, w[1] as f32, w[2] as f32]
+}
+
+/// The `f64` core of [`encoded_from_srgb`]. Exact to ≤ 1e-6 against an `f64` forward because
+/// it inverts the FORWARD's own matrices numerically ([`inverse3`]) rather than using the
+/// published rounded inverses ([`XYZ_FROM_SRGB`], [`lab::TO_RGB`]): those agree with the
+/// forward only to ~1e-7 per entry, which a bright channel turns into ~1e-7 absolute in a dark
+/// channel's tiny linear value — 2.8e-6 after the inverse TRC. The `f32` interface's own
+/// rounding costs about as much again, hence the ≤ 1e-5 bound on [`encoded_from_srgb`].
+#[inline]
+pub fn encoded_from_srgb_f64(s: [f64; 3]) -> [f64; 3] {
+    let xyz_from_srgb = inverse3(&SRGB_FROM_XYZ);
+    let rgb_from_xyz = inverse3(&lab::TO_XYZ);
+    let lin = [srgb_eotf(s[0]), srgb_eotf(s[1]), srgb_eotf(s[2])];
+    let mut xyz = [0.0f64; 3];
+    for (o, row) in xyz.iter_mut().zip(&xyz_from_srgb) {
+        *o = row[0] * lin[0] + row[1] * lin[1] + row[2] * lin[2];
+    }
+    let mut out = [0.0f64; 3];
+    for (o, row) in out.iter_mut().zip(&rgb_from_xyz) {
+        let a = row[0] * xyz[0] + row[1] * xyz[1] + row[2] * xyz[2];
+        *o = a.max(0.0).powf(1.0 / WorkingOetf::GAMMA);
+    }
+    out
+}
+
+/// Exact inverse of a 3×3 row-major matrix (adjugate ÷ determinant). The colour matrices are
+/// well conditioned; a singular input (never these constants) returns the identity rather than
+/// NaNs.
+pub fn inverse3(m: &[V3; 3]) -> [V3; 3] {
+    let [[a, b, c], [d, e, f], [g, h, i]] = *m;
+    let det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+    if det == 0.0 || !det.is_finite() {
+        return [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+    }
+    let inv = 1.0 / det;
+    [
+        [
+            (e * i - f * h) * inv,
+            (c * h - b * i) * inv,
+            (b * f - c * e) * inv,
+        ],
+        [
+            (f * g - d * i) * inv,
+            (a * i - c * g) * inv,
+            (c * d - a * f) * inv,
+        ],
+        [
+            (d * h - e * g) * inv,
+            (b * g - a * h) * inv,
+            (a * e - b * d) * inv,
+        ],
+    ]
+}
+
 /// Working-space OETF encode over a whole buffer (final engine step), with the optional
 /// per-channel display-domain levels anchors (interactive histogram). Each channel's anchors
 /// narrow to `f32` once, as the Swift. The output is Adobe-RGB-encoded working space — the

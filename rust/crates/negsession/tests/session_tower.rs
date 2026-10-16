@@ -370,16 +370,31 @@ fn full_tier_retention_follows_the_hq_rules() {
         2,
         "orientation change re-orients, never re-decodes"
     );
-    // release_enhanced_tiers drops full AND medium; the proxy tower stays warm.
+    // release_enhanced_tiers drops the full tier and the medium tier's DERIVED copies, keeps
+    // the medium base; the proxy tower stays warm.
     let prepares = s.stats().prepares;
     let resident = s.bytes_resident();
     s.release_enhanced_tiers();
-    assert!(!s.has_full_tier() && !s.has_medium_tier());
+    assert!(!s.has_full_tier());
+    assert!(s.has_medium_tier(), "the free medium buffer survives");
     assert!(s.bytes_resident() < resident);
     s.render(proxy()).unwrap();
     assert_eq!(s.stats().prepares, prepares);
-    // With no medium tier, MediumIfFree resolves to Full.
+    // With a medium tier, MediumIfFree still resolves to the medium tier (no decode).
+    let decodes = s.stats().full_decodes;
     let out = s
+        .render(RenderRequest {
+            tier: RenderTier::MediumIfFree,
+            ..proxy()
+        })
+        .unwrap();
+    assert_eq!(out.tier, RenderTier::MediumIfFree);
+    assert_eq!(s.stats().full_decodes, decodes);
+    // A body without a medium tier: MediumIfFree resolves to Full.
+    let small = RgbImage::new_with(1200, 800, |d| d.fill(0.3)).unwrap();
+    let mut s2 = Session::synthetic("small.CR3", small, None, Arc::new(CpuRenderer));
+    assert!(!s2.has_medium_tier());
+    let out = s2
         .render(RenderRequest {
             tier: RenderTier::MediumIfFree,
             ..proxy()
@@ -642,4 +657,154 @@ fn hq_mode_chooses_the_right_source() {
     }
     // Must sit above fit (or Auto is just On) and within the gesture's range.
     const { assert!(HQ_AUTO_ZOOM_THRESHOLD > 1.0 && HQ_AUTO_ZOOM_THRESHOLD <= 8.0) };
+}
+
+// ───────────────────────────── review 7 follow-ups ─────────────────────────────
+
+/// HQ Off → Auto after the LRU released a session's enhanced tiers must render the medium
+/// tier without a full decode — `HqMode::Auto` never triggers one (review 7, finding 3).
+#[test]
+fn auto_after_release_never_triggers_the_full_decode() {
+    let mut s = session();
+    s.render(proxy()).unwrap(); // HQ off: the proxy
+    s.release_enhanced_tiers(); // the LRU navigated away and back
+    let tier = HqMode::Auto.render_tier(true);
+    let out = s
+        .render(RenderRequest {
+            tier,
+            retain_full: true,
+            ..proxy()
+        })
+        .unwrap();
+    assert_eq!(out.tier, RenderTier::MediumIfFree);
+    assert_eq!((out.width, out.height), (1600, 1066));
+    assert_eq!(s.stats().full_decodes, 0, "Auto must never decode");
+    // release_full_tier is the full-tier drop; the medium base is untouched by it too.
+    s.render(RenderRequest {
+        tier: RenderTier::Full,
+        ..proxy()
+    })
+    .unwrap();
+    assert!(s.has_full_tier());
+    s.release_full_tier();
+    assert!(!s.has_full_tier() && s.has_medium_tier());
+}
+
+/// Tool previews render on the CALLER's tier like the Mac: HQ On ⇒ the full tier uncropped
+/// (review 7, finding 4).
+#[test]
+fn tool_preview_takes_the_resolved_tier() {
+    let mut s = session();
+    s.update_settings(|st| st.crop_rect = Some(NormalizedRect::new(0.25, 0.25, 0.5, 0.5)));
+    let full = s
+        .render_tool_preview(
+            ToolMode::Crop,
+            RenderRequest {
+                tier: HqMode::On.render_tier(true),
+                retain_full: true,
+                ..proxy()
+            },
+        )
+        .unwrap();
+    assert_eq!(full.tier, RenderTier::Full);
+    assert_eq!(
+        (full.width, full.height),
+        (3200, 2132),
+        "whole frame, full tier"
+    );
+    assert_eq!(s.stats().full_decodes, 1);
+    let proxy_tool = s
+        .render_tool_preview(ToolMode::AnalysisRegion, proxy())
+        .unwrap();
+    assert_eq!(proxy_tool.tier, RenderTier::Proxy);
+    assert_eq!((proxy_tool.width, proxy_tool.height), (1536, 1023));
+}
+
+/// `render_into` writes the same bytes `render` returns and reuses the caller's allocation on
+/// steady-state ticks (review 7, finding 5); `render_to_texture` is GPU-only.
+#[test]
+fn render_into_matches_render_and_does_not_reallocate() {
+    let mut s = session();
+    let req = RenderRequest {
+        srgb: true,
+        ..proxy()
+    };
+    let owned = s.render(req).unwrap();
+    let mut dest = Vec::new();
+    let meta = s.render_into(req, &mut dest).unwrap();
+    assert_eq!(meta, owned.meta);
+    assert_eq!(dest.as_slice(), owned.frame.rgba8().unwrap());
+    let cap = dest.capacity();
+    let ptr = dest.as_ptr();
+    for i in 0..4 {
+        s.update_settings(|st| st.density = 1.0 + 0.05 * (i as f64 + 1.0));
+        let m = s.render_into(req, &mut dest).unwrap();
+        assert_eq!((m.width, m.height), (1536, 1023));
+        assert_eq!(dest.capacity(), cap, "steady state must not reallocate");
+        assert_eq!(dest.as_ptr(), ptr);
+        let check = s.render(req).unwrap();
+        assert_eq!(dest.as_slice(), check.frame.rgba8().unwrap());
+    }
+    // A size change (crop) resizes once, then holds again.
+    s.update_settings(|st| st.crop_rect = Some(NormalizedRect::new(0.0, 0.0, 0.5, 0.5)));
+    let m = s.render_into(req, &mut dest).unwrap();
+    assert_eq!(dest.len(), m.width * m.height * 4);
+    let cap2 = dest.capacity();
+    s.update_settings(|st| st.density = 0.9);
+    s.render_into(req, &mut dest).unwrap();
+    assert_eq!(dest.capacity(), cap2);
+    // Histogram follows the request flag.
+    let m = s
+        .render_into(
+            RenderRequest {
+                compute_histogram: false,
+                ..req
+            },
+            &mut dest,
+        )
+        .unwrap();
+    assert!(m.histogram.is_none());
+}
+
+/// `needs_preparation_for` answers for the snapshot about to be rendered — the baseline hold
+/// with HQ On re-orients the full tier, which the current-settings form cannot see (review 7,
+/// finding 10).
+#[test]
+fn needs_preparation_for_asks_about_the_snapshot() {
+    let mut s = session();
+    s.update_settings(|st| st.fine_rotation = 4.0);
+    s.render(RenderRequest {
+        tier: RenderTier::Full,
+        ..proxy()
+    })
+    .unwrap();
+    assert!(!s.needs_preparation(RenderTier::Full));
+    let baseline = baseline_settings(s.settings());
+    assert_eq!(baseline.fine_rotation, 0.0);
+    assert!(
+        s.needs_preparation_for(&baseline, RenderTier::Full),
+        "the hold re-orients the full tier"
+    );
+    assert!(
+        !s.needs_preparation_for(&baseline, RenderTier::Proxy),
+        "a proxy re-orient is cheap"
+    );
+    // A snapshot with a new crop needs the heavy stage on any tier.
+    let mut cropped = s.settings().clone();
+    cropped.crop_rect = Some(NormalizedRect::new(0.1, 0.1, 0.8, 0.8));
+    assert!(s.needs_preparation_for(&cropped, RenderTier::Proxy));
+    assert_eq!(
+        s.needs_preparation(RenderTier::Proxy),
+        s.needs_preparation_for(s.settings(), RenderTier::Proxy)
+    );
+}
+
+/// A huge pin radius clamps to the frame instead of overflowing (review 7, finding 15).
+#[test]
+fn zone_pin_radius_is_checked() {
+    let mut s = session();
+    let pin = s.sample_zone_pin(0.5, 0.5, usize::MAX).unwrap();
+    assert!(pin.val_luma.is_finite());
+    let whole = s.sample_zone_pin(0.5, 0.5, 4096).unwrap();
+    assert_eq!(pin, whole, "both average the whole frame");
 }

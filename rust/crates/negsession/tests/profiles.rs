@@ -196,3 +196,47 @@ fn new_profile_ids_are_uuid_shaped_and_unique() {
     ));
     assert!(!negsession::profiles::is_reserved_profile_id(&a));
 }
+
+/// One malformed entry is skipped; the rest and `activeProfileID` survive (review 7, finding
+/// 12 — Swift reads the two keys independently). Ids must be UUID-shaped on insert.
+#[test]
+fn malformed_profile_entries_are_skipped_not_fatal() {
+    let good = new_profile_id();
+    let json = format!(
+        r#"{{"settingsProfiles":[{{"id":"{good}","name":"Warm","settings":{{"vibrance":1.4}}}},{{"id":"broken"}},{{"id":"","name":"Empty id","settings":{{}}}},42],"activeProfileID":"{good}"}}"#
+    );
+    let store = ProfileStore::from_json(&json);
+    assert_eq!(store.user_profiles().len(), 1);
+    assert_eq!(store.user_profiles()[0].name, "Warm");
+    assert_eq!(store.user_profiles()[0].settings.vibrance, 1.4);
+    assert_eq!(store.active_id(), good);
+    // Missing list, present active id → None active, no crash.
+    let store =
+        ProfileStore::from_json(r#"{"activeProfileID":"00000000-0000-0000-0000-000000000001"}"#);
+    assert_eq!(store.active_id(), BUILTIN_PROFILE_ID);
+    assert!(ProfileStore::from_json("[]").user_profiles().is_empty());
+
+    let mut store = ProfileStore::new();
+    for bad in [
+        "",
+        "not-a-uuid",
+        "12345678-1234-1234-1234-12345678901",
+        "zzzzzzzz-1234-1234-1234-123456789012",
+    ] {
+        assert!(
+            !store.upsert(SettingsProfile {
+                id: bad.to_owned(),
+                name: "x".into(),
+                settings: ExposureSettings::default()
+            }),
+            "accepted id {bad:?}"
+        );
+    }
+    assert!(store.upsert(SettingsProfile {
+        id: "12345678-1234-4234-8234-123456789ABC".to_owned(),
+        name: "ok".into(),
+        settings: ExposureSettings::default()
+    }));
+    assert!(negsession::profiles::is_uuid_shaped(&new_profile_id()));
+    assert!(!negsession::profiles::is_uuid_shaped(""));
+}

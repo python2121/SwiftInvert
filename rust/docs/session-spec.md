@@ -148,6 +148,8 @@ logical grid (:48-63). Always the proxy tier.
 | render call | `session.render(settings, uncropped: toolMode != .none, tier: renderTier(hqMode, hqActive), retainFull: hqMode != .off)` | :870-884 |
 | LRU | `sessionLRU` holds 2 sessions (active + previous); on open: reuse by URL (move to back) else new; evict oldest beyond 2; `releaseEnhancedTiers()` on every retained session except the one opened; cleared when `folderURL` changes | :342-343,658-674,13-19 |
 | Strip / placement entry | an explicit `.on` is demoted to `.off` before building (proxy renders only) | :1012,1124 |
+| Tool modes and tiers (RUST RULE IN FORCE) | `Session::render_tool_preview` renders on the tier the CALLER resolved (`HqMode::render_tier`), like the Mac — HQ On shows the full tier uncropped in Crop/Analysis; Auto is already suppressed in tools by `resolve`. The bridge/Qt forced the proxy; not copied | AppModel.swift:736-749,870-884 |
+| `release_enhanced_tiers` (RUST RULE IN FORCE) | drops the FULL tier and the medium tier's derived copies, KEEPS the medium base (Swift clears it): the medium buffer is free (≤ 20 MP) and unrebuildable, and `.auto` must never trigger the full decode. `release_full_tier` is the only other full-tier drop | ImageSession.swift:433-436 (diverged) |
 
 ## 6. AppModel engine state machine
 

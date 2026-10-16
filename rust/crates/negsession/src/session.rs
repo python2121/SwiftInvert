@@ -29,6 +29,7 @@
 
 use std::borrow::Cow;
 use std::collections::HashSet;
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -46,7 +47,7 @@ use negraw::RawBackend;
 use crate::densitometer::{self, NegativeCharacter};
 use crate::geometry;
 use crate::mask::{self, MaskPlane};
-use crate::renderer::{RenderOptions, RenderSource, Renderer};
+use crate::renderer::{GpuRenderer, RenderOptions, RenderSource, Renderer, rgba8_into};
 use crate::{Result, SessionError};
 
 /// Long edge of the analysis proxy (ImageSession.swift:265).
@@ -156,10 +157,11 @@ impl Frame {
     }
 }
 
-/// `ImageSession.RenderOutput`.
-#[derive(Clone, Debug)]
-pub struct RenderOutput {
-    pub frame: Frame,
+/// Everything a render reports besides its pixels (`ImageSession.RenderOutput` minus the
+/// image) — what the zero-copy paths ([`Session::render_into`], [`Session::render_to_texture`])
+/// return, and what [`RenderOutput`] derefs to.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RenderMeta {
     pub width: usize,
     pub height: usize,
     /// 4 × 256 raw counts (R, G, B, luma) when requested. Consumers draw SHAPE only.
@@ -174,6 +176,22 @@ pub struct RenderOutput {
     pub density_range: f64,
     /// The tier that was actually rendered (`MediumIfFree` resolved).
     pub tier: RenderTier,
+}
+
+/// `ImageSession.RenderOutput`: the pixels plus their [`RenderMeta`] (reachable through
+/// `Deref`, so `output.width` and friends read as before).
+#[derive(Clone, Debug)]
+pub struct RenderOutput {
+    pub frame: Frame,
+    pub meta: RenderMeta,
+}
+
+impl Deref for RenderOutput {
+    type Target = RenderMeta;
+
+    fn deref(&self) -> &RenderMeta {
+        &self.meta
+    }
 }
 
 /// `si_session_info` + the negative-character row.
@@ -475,7 +493,13 @@ pub fn aliases_meter_preview(fine_rotation: f64, meter_angle: f64) -> bool {
 }
 
 /// The View-Original hold: stock settings with the CURRENT geometry that defines the frame
-/// (`AppModel.baselineSettings`) — compare must show the same picture, not the same crop-less one.
+/// (`AppModel.baselineSettings`) — compare must show the same picture, not the same crop-less
+/// one. Kept: rotation, flip, crop, analysis region. Reset: the fine rotation (as Swift — the
+/// hold shows the un-straightened frame; since a crop is normalised on the fine-rotated frame
+/// this covers a slightly different window on a straightened image, inherited). Divergence:
+/// the analysis region's DRAWN ANGLE is kept too (Swift drops it) — it keys the meter image,
+/// so dropping it would re-meter on every hold-and-release for no visible gain, and keeping it
+/// shows the conversion the region was actually drawn for.
 pub fn baseline_settings(current: &ExposureSettings) -> ExposureSettings {
     ExposureSettings {
         analysis_rect: current.analysis_rect,
@@ -524,6 +548,19 @@ fn crop_arc(image: &Arc<RgbImage>, rect: &NormalizedRect) -> Arc<RgbImage> {
         Cow::Borrowed(_) => Arc::clone(image),
         Cow::Owned(img) => Arc::new(img),
     }
+}
+
+/// A render staged by [`Session::stage`]: the source for the resolved tier, the derived
+/// params, the per-call options (mask plane included) and the geometry the meta needs.
+struct Staged {
+    source: RenderSource,
+    params: negkit::RenderParams,
+    options: RenderOptions,
+    roi: Option<PixelRoi>,
+    oriented_dims: (usize, usize),
+    tier_base: (usize, usize),
+    analysis: ExposureAnalysis,
+    resolved: RenderTier,
 }
 
 /// Per-image engine state: the cache tower + settings + render entry points.
@@ -729,14 +766,21 @@ impl Session {
         total
     }
 
-    /// Drop the full AND medium tiers while keeping the proxy tower warm (`releaseEnhancedTiers`):
-    /// for sessions the LRU retains but isn't showing, and when HQ is switched off.
+    /// Release what a session the LRU retains but isn't showing should not hold
+    /// (`releaseEnhancedTiers`): the full-resolution tier (hundreds of MB, re-decodable on
+    /// demand) and the medium tier's DERIVED copies (its oriented buffer and uploads). The
+    /// medium BASE stays — divergence from Swift, which clears it: it is the native preview
+    /// buffer the preview decode produced for free (≤ 20 MP), the only source `HqMode::Auto`
+    /// draws on, and it cannot be rebuilt without a decode; dropping it would turn the next
+    /// Auto swap into the full decode the mode promises never to trigger (review 7 finding 3).
+    /// The proxy tower stays warm either way.
     pub fn release_enhanced_tiers(&mut self) {
         self.full.clear(&*self.renderer);
-        self.medium.clear(&*self.renderer);
+        self.medium.invalidate_orientation(&*self.renderer);
     }
 
-    /// Drop only the full tier (`clearFull`).
+    /// Drop only the full tier (`clearFull`) — HQ switched off, and the only way the full
+    /// tier is ever dropped besides a non-`retain_full` proxy/medium render.
     pub fn release_full_tier(&mut self) {
         self.full.clear(&*self.renderer);
     }
@@ -837,7 +881,13 @@ impl Session {
     /// indicator). Fine-rotation-only changes are a cheap re-orient → false; the medium tier
     /// never flashes it; the full tier does while undecoded or orientation-stale.
     pub fn needs_preparation(&self, tier: RenderTier) -> bool {
-        let s = &self.settings;
+        self.needs_preparation_for(&self.settings, tier)
+    }
+
+    /// [`Session::needs_preparation`] for the SNAPSHOT a front end is about to render — the
+    /// baseline settings during a View-Original hold, the tool preview's settings, the
+    /// mid-straighten `fine_rotation = 0` (Swift's `needsPreparation(settings:tier:)`).
+    pub fn needs_preparation_for(&self, s: &ExposureSettings, tier: RenderTier) -> bool {
         if self.resolve_tier(tier) == RenderTier::Full
             && (self.full.base.is_none()
                 || self.full.oriented.is_none()
@@ -1017,6 +1067,137 @@ impl Session {
         settings: &ExposureSettings,
         request: RenderRequest,
     ) -> Result<RenderOutput> {
+        let staged = self.stage(settings, request)?;
+        let renderer = Arc::clone(&self.renderer);
+        let (frame, width, height, histogram) = match request.output {
+            OutputKind::Rgba8 => {
+                let r = renderer.render_display(&staged.source, &staged.params, &staged.options)?;
+                (Frame::Rgba8(r.rgba8), r.width, r.height, r.histogram)
+            }
+            OutputKind::Float => {
+                let r = renderer.render(&staged.source, &staged.params, &staged.options)?;
+                let (w, h) = (r.image.width, r.image.height);
+                (Frame::Float(r.image), w, h, r.histogram)
+            }
+        };
+        self.stats.renders += 1;
+        let meta = self.meta(
+            settings,
+            request.uncropped,
+            width,
+            height,
+            histogram,
+            &staged,
+        );
+        Ok(RenderOutput { frame, meta })
+    }
+
+    /// The zero-allocation display path (`si_render_into` / `GpuRenderer::render_display_into`)
+    /// through the cache tower: the packed RGBA8 frame of the current settings lands in `dest`,
+    /// which is resized ONLY when the frame size changes (steady-state slider ticks reuse the
+    /// caller's allocation; on the GPU the bytes are copied straight from the mapped readback,
+    /// on the CPU quantized straight into `dest`). `request.output` is ignored (always RGBA8).
+    pub fn render_into(
+        &mut self,
+        request: RenderRequest,
+        dest: &mut Vec<u8>,
+    ) -> Result<RenderMeta> {
+        let settings = self.settings.clone();
+        self.render_into_with(&settings, request, dest)
+    }
+
+    /// [`Session::render_into`] for explicit settings.
+    pub fn render_into_with(
+        &mut self,
+        settings: &ExposureSettings,
+        request: RenderRequest,
+        dest: &mut Vec<u8>,
+    ) -> Result<RenderMeta> {
+        let staged = self.stage(settings, request)?;
+        let (w, h) = (staged.source.width(), staged.source.height());
+        let len = w
+            .checked_mul(h)
+            .and_then(|n| n.checked_mul(4))
+            .ok_or(SessionError::Invalid("frame too large"))?;
+        if dest.len() != len {
+            // The only (re)allocation: a tier swap, a crop, a rotation. Zero-filled here, fully
+            // overwritten below.
+            dest.resize(len, 0);
+        }
+        let renderer = Arc::clone(&self.renderer);
+        let histogram = match renderer
+            .as_any()
+            .and_then(|a| a.downcast_ref::<GpuRenderer>())
+        {
+            Some(gpu) => {
+                let h = gpu
+                    .render_display_into(&staged.source, &staged.params, &staged.options, dest)?
+                    .ok_or(SessionError::Invalid("render_into: destination too short"))?;
+                request.compute_histogram.then_some(h)
+            }
+            None => {
+                let r = renderer.render(&staged.source, &staged.params, &staged.options)?;
+                rgba8_into(&r.image, dest);
+                r.histogram
+            }
+        };
+        self.stats.renders += 1;
+        Ok(self.meta(settings, request.uncropped, w, h, histogram, &staged))
+    }
+
+    /// The no-readback display path for the egui app (`GpuRenderer::render_display_to_texture`)
+    /// through the cache tower: the frame is copied on the GPU into `texture` — `Rgba8Unorm`,
+    /// `COPY_DST`, exactly the rendered size (`meta.width × meta.height`; ask with
+    /// [`Session::render_into`] or a previous render when the size may have changed). Only the
+    /// histogram's 4 KB is read back. `Err(SessionError::Unsupported)` on the CPU renderer.
+    pub fn render_to_texture(
+        &mut self,
+        request: RenderRequest,
+        texture: &wgpu::Texture,
+    ) -> Result<RenderMeta> {
+        let settings = self.settings.clone();
+        self.render_to_texture_with(&settings, request, texture)
+    }
+
+    /// [`Session::render_to_texture`] for explicit settings.
+    pub fn render_to_texture_with(
+        &mut self,
+        settings: &ExposureSettings,
+        request: RenderRequest,
+        texture: &wgpu::Texture,
+    ) -> Result<RenderMeta> {
+        let renderer = Arc::clone(&self.renderer);
+        let Some(gpu) = renderer
+            .as_any()
+            .and_then(|a| a.downcast_ref::<GpuRenderer>())
+        else {
+            return Err(SessionError::Unsupported(
+                "render_to_texture needs the GPU renderer",
+            ));
+        };
+        let staged = self.stage(settings, request)?;
+        let (w, h) = (staged.source.width(), staged.source.height());
+        let histogram = gpu.render_display_to_texture(
+            &staged.source,
+            &staged.params,
+            &staged.options,
+            texture,
+        )?;
+        self.stats.renders += 1;
+        Ok(self.meta(
+            settings,
+            request.uncropped,
+            w,
+            h,
+            request.compute_histogram.then_some(histogram),
+            &staged,
+        ))
+    }
+
+    /// Everything a render needs besides the renderer call: the tower run for `settings`, the
+    /// tier resolved and its source built/retrieved, the params derived, the mask plane
+    /// fetched — shared by the owned, the `_into` and the texture paths so they can never drift.
+    fn stage(&mut self, settings: &ExposureSettings, request: RenderRequest) -> Result<Staged> {
         let (preview, analysis) = self.prepare(settings)?;
         let params = derive_render_params(settings, &analysis);
         let resolved = self.resolve_tier(request.tier);
@@ -1068,36 +1249,43 @@ impl Session {
         // Proxy-built whatever the tier: the same plane samples up under the normalized
         // mapping, so a tier swap cannot move the mask.
         let mask_plane = self.mask_plane(&preview, settings, request.uncropped, &analysis);
-        let options = RenderOptions {
-            srgb: request.srgb,
-            compute_histogram: request.compute_histogram,
-            mask_plane,
-        };
-        let (frame, width, height, histogram) = match request.output {
-            OutputKind::Rgba8 => {
-                let r = renderer.render_display(&source, &params, &options)?;
-                (Frame::Rgba8(r.rgba8), r.width, r.height, r.histogram)
-            }
-            OutputKind::Float => {
-                let r = renderer.render(&source, &params, &options)?;
-                let (w, h) = (r.image.width, r.image.height);
-                (Frame::Float(r.image), w, h, r.histogram)
-            }
-        };
-        self.stats.renders += 1;
-        Ok(self.output(
-            settings,
-            request.uncropped,
-            frame,
-            width,
-            height,
-            histogram,
+        Ok(Staged {
+            source,
+            params,
+            options: RenderOptions {
+                srgb: request.srgb,
+                compute_histogram: request.compute_histogram,
+                mask_plane,
+            },
             roi,
             oriented_dims,
             tier_base,
-            &analysis,
+            analysis,
             resolved,
-        ))
+        })
+    }
+
+    fn meta(
+        &self,
+        settings: &ExposureSettings,
+        uncropped: bool,
+        width: usize,
+        height: usize,
+        histogram: Option<Histogram256>,
+        staged: &Staged,
+    ) -> RenderMeta {
+        self.output(
+            settings,
+            uncropped,
+            width,
+            height,
+            histogram,
+            staged.roi,
+            staged.oriented_dims,
+            staged.tier_base,
+            &staged.analysis,
+            staged.resolved,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1105,7 +1293,6 @@ impl Session {
         &self,
         settings: &ExposureSettings,
         uncropped: bool,
-        frame: Frame,
         width: usize,
         height: usize,
         histogram: Option<Histogram256>,
@@ -1114,7 +1301,7 @@ impl Session {
         tier_base: (usize, usize),
         analysis: &ExposureAnalysis,
         tier: RenderTier,
-    ) -> RenderOutput {
+    ) -> RenderMeta {
         let radians = applied_radians(settings.fine_rotation);
         let crop = if uncropped {
             None
@@ -1125,8 +1312,7 @@ impl Session {
         let tier_frame = oriented_frame_size(tier_base, settings.rotation);
         // Pixel counts → f64 (exact).
         let f = |d: (usize, usize)| [d.0 as f64, d.1 as f64];
-        RenderOutput {
-            frame,
+        RenderMeta {
             width,
             height,
             histogram,
@@ -1145,9 +1331,12 @@ impl Session {
     }
 
     /// A tool-mode render (`AppModel.scheduleRender` with `toolMode != .none`): the whole frame
-    /// outside the crop, proxy tier; the crop tool also shows the UNROTATED frame (the Mac
-    /// substitutes `fineRotation = 0` only in Crop & Straighten — the analysis tool keeps the
-    /// live angle, and `commit_analysis_region` records it). `None` renders normally.
+    /// outside the crop on the tier the CALLER resolved — the Mac passes
+    /// `renderTier(hqMode, hqActive)` in tool modes too, so HQ On shows the full tier uncropped
+    /// (Auto is suppressed there by `HqMode::resolve`); the bridge/Qt forced the proxy. The crop
+    /// tool also shows the UNROTATED frame (the Mac substitutes `fineRotation = 0` only in Crop
+    /// & Straighten — the analysis tool keeps the live angle, and `commit_analysis_region`
+    /// records it). `None` renders normally.
     pub fn render_tool_preview(
         &mut self,
         mode: ToolMode,
@@ -1155,9 +1344,6 @@ impl Session {
     ) -> Result<RenderOutput> {
         let mut settings = self.settings.clone();
         request.uncropped = mode != ToolMode::None;
-        if mode != ToolMode::None {
-            request.tier = RenderTier::Proxy;
-        }
         if mode == ToolMode::Crop {
             settings.fine_rotation = 0.0;
         }
@@ -1226,10 +1412,9 @@ impl Session {
         self.renderer.forget_source(source.id);
         let r = r?;
         self.stats.renders += 1;
-        Ok(self.output(
+        let meta = self.output(
             settings,
             false,
-            Frame::Rgba8(r.rgba8),
             r.width,
             r.height,
             r.histogram,
@@ -1238,7 +1423,11 @@ impl Session {
             self.proxy_size(),
             &analysis,
             RenderTier::Proxy,
-        ))
+        );
+        Ok(RenderOutput {
+            frame: Frame::Rgba8(r.rgba8),
+            meta,
+        })
     }
 
     /// Full-resolution export render (`exportRender`): a full decode (the retained HQ tier when
@@ -1331,8 +1520,14 @@ impl Session {
         // Truncating casts like Swift's `Int(...)`; NaN → 0; clamped to the frame.
         let cx = ((cu * w as f64) as i64).clamp(0, (w - 1) as i64) as usize;
         let cy = ((cv * h as f64) as i64).clamp(0, (h - 1) as i64) as usize;
-        let (x0, x1) = (cx.saturating_sub(radius), (cx + radius).min(w - 1));
-        let (y0, y1) = (cy.saturating_sub(radius), (cy + radius).min(h - 1));
+        let (x0, x1) = (
+            cx.saturating_sub(radius),
+            cx.saturating_add(radius).min(w - 1),
+        );
+        let (y0, y1) = (
+            cy.saturating_sub(radius),
+            cy.saturating_add(radius).min(h - 1),
+        );
         let mut sum = [0f64; 3];
         let mut n = 0f64;
         for y in y0..=y1 {

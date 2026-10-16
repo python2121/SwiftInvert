@@ -17,7 +17,8 @@ use std::path::Path;
 use negkit::ExposureSettings;
 use serde::{Deserialize, Serialize};
 
-use crate::{Result, SessionError};
+use crate::Result;
+use crate::atomic;
 
 /// "None" — stock settings, first in the list, the default active choice.
 pub const NONE_PROFILE_ID: &str = "00000000-0000-0000-0000-000000000000";
@@ -76,6 +77,17 @@ pub fn builtin_default_settings() -> ExposureSettings {
         pre_saturation: 1.25,
         ..ExposureSettings::default()
     }
+}
+
+/// Whether `id` is a UUID-shaped string (`8-4-4-4-12` hex, any case) — the only ids the store
+/// accepts, so a blob can't smuggle an empty or colliding key in.
+pub fn is_uuid_shaped(id: &str) -> bool {
+    let groups: Vec<&str> = id.split('-').collect();
+    groups.len() == 5
+        && groups
+            .iter()
+            .zip([8usize, 4, 4, 4, 12])
+            .all(|(g, n)| g.len() == n && g.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
 /// Whether `id` names one of the two reserved rows.
@@ -194,11 +206,31 @@ impl ProfileStore {
         store
     }
 
-    /// Parse a persisted blob; garbage → an empty store (the Swift `try?` recovery).
+    /// Parse a persisted blob leniently, the way Swift reads its two UserDefaults keys
+    /// independently: a malformed profile entry is skipped (the rest and `activeProfileID`
+    /// survive — one bad row must not make the next save persist an empty list); a blob that
+    /// is not a JSON object → an empty store.
     pub fn from_json(json: &str) -> Self {
-        serde_json::from_str::<PersistedProfiles>(json)
-            .map(Self::from_persisted)
-            .unwrap_or_default()
+        let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(json)
+        else {
+            return Self::new();
+        };
+        let settings_profiles = match map.get("settingsProfiles") {
+            Some(serde_json::Value::Array(items)) => items
+                .iter()
+                .filter_map(|v| serde_json::from_value::<SettingsProfile>(v.clone()).ok())
+                .filter(|p| is_uuid_shaped(&p.id))
+                .collect(),
+            _ => Vec::new(),
+        };
+        let active_profile_id = map
+            .get("activeProfileID")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned);
+        Self::from_persisted(PersistedProfiles {
+            settings_profiles,
+            active_profile_id,
+        })
     }
 
     /// Load from a file; missing or corrupt → an empty store.
@@ -221,15 +253,10 @@ impl ProfileStore {
         Ok(serde_json::to_string_pretty(&self.persisted())?)
     }
 
-    /// Save to a file (atomic: temp + rename).
+    /// Save to a file (atomic: a per-call temp beside it, fsync, rename — [`crate::atomic`]).
     pub fn save(&self, path: &Path) -> Result<()> {
         let text = self.to_json()?;
-        let tmp = path.with_extension(format!("tmp-{}", std::process::id()));
-        std::fs::write(&tmp, text).map_err(|e| SessionError::io(&tmp, e))?;
-        std::fs::rename(&tmp, path).map_err(|e| {
-            let _ = std::fs::remove_file(&tmp);
-            SessionError::io(path, e)
-        })
+        atomic::write_atomic(path, text.as_bytes())
     }
 
     /// None, then the built-in default, then user profiles in creation order.
@@ -281,9 +308,9 @@ impl ProfileStore {
     }
 
     /// Insert or update a user profile (geometry stripped here, so no caller can persist a crop
-    /// into a profile). Reserved ids are refused (`false`).
+    /// into a profile). Reserved ids and ids that are not UUID-shaped are refused (`false`).
     pub fn upsert(&mut self, profile: SettingsProfile) -> bool {
-        if is_reserved_profile_id(&profile.id) {
+        if is_reserved_profile_id(&profile.id) || !is_uuid_shaped(&profile.id) {
             return false;
         }
         let mut stripped = profile;
