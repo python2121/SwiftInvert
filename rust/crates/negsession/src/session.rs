@@ -397,7 +397,12 @@ fn applied_radians(fine_rotation: f64) -> f64 {
 }
 
 /// `base.oriented(...)` as an `Arc`: a borrowed (unchanged) result shares the base's buffer.
-fn orient_arc(base: &Arc<RgbImage>, rotation: i32, flip: bool, fine_rotation: f64) -> Arc<RgbImage> {
+fn orient_arc(
+    base: &Arc<RgbImage>,
+    rotation: i32,
+    flip: bool,
+    fine_rotation: f64,
+) -> Arc<RgbImage> {
     match base.oriented_with_fine_rotation(rotation, flip, fine_rotation) {
         Cow::Borrowed(_) => Arc::clone(base),
         Cow::Owned(img) => Arc::new(img),
@@ -639,7 +644,10 @@ impl Session {
 
     /// Decode + orient + prepare once per key state; finalize when the analysis is missing.
     /// Returns the proxy render input and the analysis.
-    fn prepare(&mut self, settings: &ExposureSettings) -> Result<(Arc<RgbImage>, ExposureAnalysis)> {
+    fn prepare(
+        &mut self,
+        settings: &ExposureSettings,
+    ) -> Result<(Arc<RgbImage>, ExposureAnalysis)> {
         // Analysis ignores the CURRENT fine rotation; 90° steps and flips reshuffle pixels
         // without changing the content set. A manual region pins the angle it was drawn at.
         let m_key = MeterKey::of(settings);
@@ -811,7 +819,12 @@ impl Session {
         stats: &mut SessionStats,
         settings: &ExposureSettings,
         uncropped: bool,
-    ) -> Result<(RenderSource, Option<PixelRoi>, Arc<RgbImage>, (usize, usize))> {
+    ) -> Result<(
+        RenderSource,
+        Option<PixelRoi>,
+        Arc<RgbImage>,
+        (usize, usize),
+    )> {
         let base = tier
             .base
             .as_ref()
@@ -834,7 +847,14 @@ impl Session {
             .oriented
             .clone()
             .ok_or(SessionError::Invalid("display tier not oriented"))?;
-        let (source, roi) = Self::source_in(&mut tier.slots, next_id, stats, &oriented, settings, uncropped);
+        let (source, roi) = Self::source_in(
+            &mut tier.slots,
+            next_id,
+            stats,
+            &oriented,
+            settings,
+            uncropped,
+        );
         Ok((source, roi, oriented, base_dims))
     }
 
@@ -968,7 +988,19 @@ impl Session {
             }
         };
         self.stats.renders += 1;
-        Ok(self.output(settings, request.uncropped, frame, width, height, histogram, roi, oriented_dims, tier_base, &analysis, resolved))
+        Ok(self.output(
+            settings,
+            request.uncropped,
+            frame,
+            width,
+            height,
+            histogram,
+            roi,
+            oriented_dims,
+            tier_base,
+            &analysis,
+            resolved,
+        ))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1003,7 +1035,13 @@ impl Session {
             histogram,
             frame_size,
             display_aspect: geometry::display_aspect(f(frame_size), radians, crop),
-            content_window: geometry::content_window(f(tier_frame), radians, crop, f(oriented_dims), roi),
+            content_window: geometry::content_window(
+                f(tier_frame),
+                radians,
+                crop,
+                f(oriented_dims),
+                roi,
+            ),
             density_range: analysis.base_bounds.luminance_density_range(),
             tier,
         }
@@ -1013,7 +1051,11 @@ impl Session {
     /// outside the crop, proxy tier; the crop tool also shows the UNROTATED frame (the Mac
     /// substitutes `fineRotation = 0` only in Crop & Straighten — the analysis tool keeps the
     /// live angle, and `commit_analysis_region` records it). `None` renders normally.
-    pub fn render_tool_preview(&mut self, mode: ToolMode, mut request: RenderRequest) -> Result<RenderOutput> {
+    pub fn render_tool_preview(
+        &mut self,
+        mode: ToolMode,
+        mut request: RenderRequest,
+    ) -> Result<RenderOutput> {
         let mut settings = self.settings.clone();
         request.uncropped = mode != ToolMode::None;
         if mode != ToolMode::None {
@@ -1028,11 +1070,17 @@ impl Session {
     /// The straighten 0°-base precompute (`renderDetached`): the same chain as `render` but
     /// touching NONE of the cache tower — the cached analysis is reused read-only when both its
     /// keys match, else computed afresh and dropped; proxy only, cropped, no tier bookkeeping.
-    pub fn render_detached(&mut self, settings: &ExposureSettings, srgb: bool) -> Result<RenderOutput> {
+    pub fn render_detached(
+        &mut self,
+        settings: &ExposureSettings,
+        srgb: bool,
+    ) -> Result<RenderOutput> {
         let m_key = MeterKey::of(settings);
         let p_key = PreparedKey::of(settings);
         let analysis = match &self.analysis {
-            Some(a) if self.meter_key == Some(m_key) && self.prepared_key == Some(p_key) => a.clone(),
+            Some(a) if self.meter_key == Some(m_key) && self.prepared_key == Some(p_key) => {
+                a.clone()
+            }
             _ => {
                 let meter = orient_arc(
                     &self.base_preview,
@@ -1213,8 +1261,14 @@ impl std::fmt::Debug for Session {
         f.debug_struct("Session")
             .field("path", &self.path)
             .field("proxy", &self.proxy_size())
-            .field("medium", &self.medium.base.as_ref().map(|b| (b.width, b.height)))
-            .field("full", &self.full.base.as_ref().map(|b| (b.width, b.height)))
+            .field(
+                "medium",
+                &self.medium.base.as_ref().map(|b| (b.width, b.height)),
+            )
+            .field(
+                "full",
+                &self.full.base.as_ref().map(|b| (b.width, b.height)),
+            )
             .field("stats", &self.stats)
             .finish()
     }

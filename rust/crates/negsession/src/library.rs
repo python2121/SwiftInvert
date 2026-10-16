@@ -51,8 +51,9 @@ pub fn natural_cmp(a: &str, b: &str) -> Ordering {
             if ord != Ordering::Equal {
                 return ord;
             }
-            // Same value: more leading zeros sorts first (a stable, deterministic tie-break).
-            let ord = (i - si).cmp(&(j - sj));
+            // Same value: more leading zeros sorts first (`01` before `1`, as the Finder's
+            // character fallback orders them) — a deterministic tie-break.
+            let ord = (j - sj).cmp(&(i - si));
             if ord != Ordering::Equal {
                 return ord;
             }
@@ -69,7 +70,10 @@ pub fn natural_cmp(a: &str, b: &str) -> Ordering {
 }
 
 fn trim_zeros(digits: &[u8]) -> &[u8] {
-    let first = digits.iter().position(|&d| d != b'0').unwrap_or(digits.len());
+    let first = digits
+        .iter()
+        .position(|&d| d != b'0')
+        .unwrap_or(digits.len());
     &digits[first..]
 }
 
@@ -113,10 +117,7 @@ fn build_at(dir: &Path, depth: usize) -> Option<FolderNode> {
     }
     files.sort_by(|a, b| natural_cmp(&file_name(a), &file_name(b)));
     dirs.sort_by(|a, b| natural_cmp(&file_name(a), &file_name(b)));
-    let subfolders: Vec<FolderNode> = dirs
-        .iter()
-        .filter_map(|d| build_at(d, depth + 1))
-        .collect();
+    let subfolders: Vec<FolderNode> = dirs.iter().filter_map(|d| build_at(d, depth + 1)).collect();
     if files.is_empty() && subfolders.is_empty() {
         return None;
     }

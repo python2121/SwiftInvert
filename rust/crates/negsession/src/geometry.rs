@@ -13,8 +13,8 @@
 //! from the CONTINUOUS aspect and places each bitmap at the window it really covers, so both
 //! tiers put the same content on the same screen point.
 
-use negkit::rect::{NormalizedRect, PixelRoi};
 use negkit::RgbImage;
+use negkit::rect::{NormalizedRect, PixelRoi};
 
 /// Continuous inscribed-rect size of a `frame` rotated by `radians` (the straighten auto-crop);
 /// the frame itself below 1e-9 rad (`CropGeometry.inscribedSize`).
@@ -81,12 +81,7 @@ pub fn content_window(
         && crop.height > 0.0
     {
         // Pixel counts → f64 (exact below 2^53).
-        let (x0, y0, x1, y1) = (
-            roi.x0 as f64,
-            roi.y0 as f64,
-            roi.x1 as f64,
-            roi.y1 as f64,
-        );
+        let (x0, y0, x1, y1) = (roi.x0 as f64, roi.y0 as f64, roi.x1 as f64, roi.y1 as f64);
         origin[0] += size[0] * (x0 / oriented_pixels[0]);
         origin[1] += size[1] * (y0 / oriented_pixels[1]);
         size[0] *= (x1 - x0) / oriented_pixels[0];

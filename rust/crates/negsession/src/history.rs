@@ -234,38 +234,94 @@ pub fn history_label(a: &ExposureSettings, b: &ExposureSettings) -> String {
 
     add("Brightness", a.density != b.density, f2(2.0 - b.density));
     add("Grade", a.grade != b.grade, format!("{:.0}", b.grade));
-    add("Exposure", a.exposure_stops != b.exposure_stops, f2s(b.exposure_stops));
-    add("Contrast", a.overall_contrast != b.overall_contrast, f2(b.overall_contrast));
+    add(
+        "Exposure",
+        a.exposure_stops != b.exposure_stops,
+        f2s(b.exposure_stops),
+    );
+    add(
+        "Contrast",
+        a.overall_contrast != b.overall_contrast,
+        f2(b.overall_contrast),
+    );
     add("Shadows", a.shadows != b.shadows, f2(b.shadows));
-    add("Shadow contrast", a.shadow_contrast != b.shadow_contrast, f2(b.shadow_contrast));
-    add("Dark shadows", a.dark_shadows != b.dark_shadows, f2(b.dark_shadows));
+    add(
+        "Shadow contrast",
+        a.shadow_contrast != b.shadow_contrast,
+        f2(b.shadow_contrast),
+    );
+    add(
+        "Dark shadows",
+        a.dark_shadows != b.dark_shadows,
+        f2(b.dark_shadows),
+    );
     add("Highlights", a.highlights != b.highlights, f2(b.highlights));
     add(
         "Highlight contrast",
         a.highlight_contrast != b.highlight_contrast,
         f2(b.highlight_contrast),
     );
-    add("Pre-saturation", a.pre_saturation != b.pre_saturation, f2(b.pre_saturation));
-    add("Print saturation", a.print_saturation != b.print_saturation, f2(b.print_saturation));
+    add(
+        "Pre-saturation",
+        a.pre_saturation != b.pre_saturation,
+        f2(b.pre_saturation),
+    );
+    add(
+        "Print saturation",
+        a.print_saturation != b.print_saturation,
+        f2(b.print_saturation),
+    );
     add(
         "Separation damping",
         a.separation_damping != b.separation_damping,
         f2(b.separation_damping),
     );
-    add("Contrast mask", a.contrast_mask != b.contrast_mask, f2(b.contrast_mask));
-    add("Mask spacer", a.mask_spacer != b.mask_spacer, f2(b.mask_spacer));
+    add(
+        "Contrast mask",
+        a.contrast_mask != b.contrast_mask,
+        f2(b.contrast_mask),
+    );
+    add(
+        "Mask spacer",
+        a.mask_spacer != b.mask_spacer,
+        f2(b.mask_spacer),
+    );
     add("Hue trim", a.hue_trim != b.hue_trim, f2(b.hue_trim));
     add("Vibrance", a.vibrance != b.vibrance, f2(b.vibrance));
-    add("Skin protection", a.skin_protection != b.skin_protection, f2(b.skin_protection));
+    add(
+        "Skin protection",
+        a.skin_protection != b.skin_protection,
+        f2(b.skin_protection),
+    );
     add("Saturation", a.saturation != b.saturation, f2(b.saturation));
     add("Red hue", a.red_hue != b.red_hue, f2s(b.red_hue));
-    add("Red saturation", a.red_saturation != b.red_saturation, f2(b.red_saturation));
-    add("Yellow hue", a.yellow_hue != b.yellow_hue, f2s(b.yellow_hue));
-    add("Yellow saturation", a.yellow_saturation != b.yellow_saturation, f2(b.yellow_saturation));
+    add(
+        "Red saturation",
+        a.red_saturation != b.red_saturation,
+        f2(b.red_saturation),
+    );
+    add(
+        "Yellow hue",
+        a.yellow_hue != b.yellow_hue,
+        f2s(b.yellow_hue),
+    );
+    add(
+        "Yellow saturation",
+        a.yellow_saturation != b.yellow_saturation,
+        f2(b.yellow_saturation),
+    );
     add("Green hue", a.green_hue != b.green_hue, f2s(b.green_hue));
-    add("Green saturation", a.green_saturation != b.green_saturation, f2(b.green_saturation));
+    add(
+        "Green saturation",
+        a.green_saturation != b.green_saturation,
+        f2(b.green_saturation),
+    );
     add("Blue hue", a.blue_hue != b.blue_hue, f2s(b.blue_hue));
-    add("Blue saturation", a.blue_saturation != b.blue_saturation, f2(b.blue_saturation));
+    add(
+        "Blue saturation",
+        a.blue_saturation != b.blue_saturation,
+        f2(b.blue_saturation),
+    );
     add(
         "Cast strength",
         a.cast_removal_strength != b.cast_removal_strength,
@@ -273,11 +329,23 @@ pub fn history_label(a: &ExposureSettings, b: &ExposureSettings) -> String {
     );
     add("Temp", a.temp != b.temp, f2(b.temp));
     add("Tint", a.tint != b.tint, f2(b.tint));
-    add("Shadow color", a.color_shadows != b.color_shadows, none.clone());
+    add(
+        "Shadow color",
+        a.color_shadows != b.color_shadows,
+        none.clone(),
+    );
     add("Mid color", a.color_mids != b.color_mids, none.clone());
-    add("Highlight color", a.color_highs != b.color_highs, none.clone());
+    add(
+        "Highlight color",
+        a.color_highs != b.color_highs,
+        none.clone(),
+    );
     add("Red levels", a.levels_red != b.levels_red, none.clone());
-    add("Green levels", a.levels_green != b.levels_green, none.clone());
+    add(
+        "Green levels",
+        a.levels_green != b.levels_green,
+        none.clone(),
+    );
     add("Blue levels", a.levels_blue != b.levels_blue, none.clone());
     add(
         "WB trim",
@@ -287,16 +355,36 @@ pub fn history_label(a: &ExposureSettings, b: &ExposureSettings) -> String {
     add("Toe", a.toe != b.toe, f2(b.toe));
     add("Toe width", a.toe_width != b.toe_width, f2(b.toe_width));
     add("Shoulder", a.shoulder != b.shoulder, f2(b.shoulder));
-    add("Shoulder width", a.shoulder_width != b.shoulder_width, f2(b.shoulder_width));
-    add("White point", a.white_point_offset != b.white_point_offset, f3(b.white_point_offset));
-    add("Black point", a.black_point_offset != b.black_point_offset, f3(b.black_point_offset));
-    add("Auto exposure", a.auto_exposure != b.auto_exposure, on(b.auto_exposure));
+    add(
+        "Shoulder width",
+        a.shoulder_width != b.shoulder_width,
+        f2(b.shoulder_width),
+    );
+    add(
+        "White point",
+        a.white_point_offset != b.white_point_offset,
+        f3(b.white_point_offset),
+    );
+    add(
+        "Black point",
+        a.black_point_offset != b.black_point_offset,
+        f3(b.black_point_offset),
+    );
+    add(
+        "Auto exposure",
+        a.auto_exposure != b.auto_exposure,
+        on(b.auto_exposure),
+    );
     add(
         "Auto contrast",
         a.auto_normalize_contrast != b.auto_normalize_contrast,
         on(b.auto_normalize_contrast),
     );
-    add("Paper white", a.paper_dmin != b.paper_dmin, on(b.paper_dmin));
+    add(
+        "Paper white",
+        a.paper_dmin != b.paper_dmin,
+        on(b.paper_dmin),
+    );
     add("True black", a.true_black != b.true_black, on(b.true_black));
     add("Rotate", a.rotation != b.rotation, none.clone());
     add(
@@ -306,7 +394,11 @@ pub fn history_label(a: &ExposureSettings, b: &ExposureSettings) -> String {
     );
     add("Flip", a.flip_horizontal != b.flip_horizontal, none.clone());
     add(
-        if b.crop_rect.is_none() { "Crop cleared" } else { "Crop" },
+        if b.crop_rect.is_none() {
+            "Crop cleared"
+        } else {
+            "Crop"
+        },
         a.crop_rect != b.crop_rect,
         none.clone(),
     );

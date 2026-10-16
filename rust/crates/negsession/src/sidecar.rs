@@ -54,12 +54,7 @@ fn sorted(value: Value) -> Value {
         Value::Object(map) => {
             let mut entries: Vec<(String, Value)> = map.into_iter().collect();
             entries.sort_by(|a, b| a.0.cmp(&b.0));
-            Value::Object(
-                entries
-                    .into_iter()
-                    .map(|(k, v)| (k, sorted(v)))
-                    .collect(),
-            )
+            Value::Object(entries.into_iter().map(|(k, v)| (k, sorted(v))).collect())
         }
         Value::Array(items) => Value::Array(items.into_iter().map(sorted).collect()),
         other => other,
@@ -79,9 +74,12 @@ impl SidecarStore {
 
     /// The first of (current, legacy) that exists AND decodes; `None` otherwise.
     pub fn load(source: &Path) -> Option<ExposureSettings> {
-        [Self::sidecar_path(source), Self::legacy_sidecar_path(source)]
-            .iter()
-            .find_map(|p| std::fs::read(p).ok().and_then(|bytes| Self::parse(&bytes)))
+        [
+            Self::sidecar_path(source),
+            Self::legacy_sidecar_path(source),
+        ]
+        .iter()
+        .find_map(|p| std::fs::read(p).ok().and_then(|bytes| Self::parse(&bytes)))
     }
 
     /// Decode an envelope; `None` on any error (the Swift `try?`).
@@ -105,7 +103,9 @@ impl SidecarStore {
 
     /// Bare settings as sorted-key JSON (the bridge's `si_sidecar_load` shape / `si_default_settings`).
     pub fn encode_settings(settings: &ExposureSettings) -> Result<String> {
-        Ok(serde_json::to_string_pretty(&sorted(serde_json::to_value(settings)?))?)
+        Ok(serde_json::to_string_pretty(&sorted(
+            serde_json::to_value(settings)?,
+        ))?)
     }
 
     /// Write the sidecar atomically (temp sibling + rename), then remove a legacy file.

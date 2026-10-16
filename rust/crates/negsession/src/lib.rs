@@ -41,8 +41,8 @@ pub use mask::MaskPlane;
 pub use profiles::{ProfileStore, SettingsGeometry, SettingsProfile};
 pub use renderer::{CpuRenderer, Renderer};
 pub use session::{
-    Frame, OutputKind, RenderOutput, RenderRequest, RenderTier, Session, SessionInfo,
-    SessionStats, ToolMode,
+    Frame, OutputKind, RenderOutput, RenderRequest, RenderTier, Session, SessionInfo, SessionStats,
+    ToolMode,
 };
 pub use sidecar::SidecarStore;
 

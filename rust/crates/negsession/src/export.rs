@@ -175,10 +175,9 @@ impl ExportOptions {
             .unwrap_or_default();
         let dir = match &self.destination {
             ExportDestination::Folder(dir) => dir.clone(),
-            ExportDestination::NextToSource => source
-                .parent()
-                .map(Path::to_path_buf)
-                .unwrap_or_default(),
+            ExportDestination::NextToSource => {
+                source.parent().map(Path::to_path_buf).unwrap_or_default()
+            }
         };
         let mut name = stem;
         name.push(".");
@@ -277,7 +276,8 @@ impl Exporter {
             ExportFormat::Jpeg { quality } => {
                 // 0…1 → the encoder's 1…100 integer scale (rounded).
                 let q = (quality.clamp(0.01, 1.0) * 100.0).round() as u8;
-                let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, q.max(1));
+                let mut enc =
+                    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, q.max(1));
                 enc.set_icc_profile(icc.as_ref().clone())
                     .map_err(|e| SessionError::Encode(e.to_string()))?;
                 enc.write_image(&rgb8_bytes(&image), w, h, ExtendedColorType::Rgb8)

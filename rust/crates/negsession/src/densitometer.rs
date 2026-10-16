@@ -159,7 +159,9 @@ impl DensitometerState {
         self.reading = None;
         match bitmap {
             Some((bytes, w, h))
-                if w > 0 && h > 0 && w.checked_mul(h).and_then(|n| n.checked_mul(4)) == Some(bytes.len()) =>
+                if w > 0
+                    && h > 0
+                    && w.checked_mul(h).and_then(|n| n.checked_mul(4)) == Some(bytes.len()) =>
             {
                 self.bytes = Some(bytes);
                 self.width = w;
@@ -196,9 +198,7 @@ impl DensitometerState {
 
     /// The adopted bitmap (bytes, width, height) — the zone overlay reads the same bytes.
     pub fn bitmap(&self) -> Option<(&[u8], usize, usize)> {
-        self.bytes
-            .as_deref()
-            .map(|b| (b, self.width, self.height))
+        self.bytes.as_deref().map(|b| (b, self.width, self.height))
     }
 
     fn read_at(&self, u: f64, v: f64) -> Option<Reading> {

@@ -147,7 +147,7 @@ impl SettingsGeometry for ExposureSettings {
 pub struct PersistedProfiles {
     #[serde(default)]
     pub settings_profiles: Vec<SettingsProfile>,
-    #[serde(default)]
+    #[serde(default, rename = "activeProfileID")]
     pub active_profile_id: Option<String>,
 }
 
@@ -264,7 +264,9 @@ impl ProfileStore {
 
     /// Look a profile up by id (reserved rows included).
     pub fn find(&self, id: &str) -> Option<SettingsProfile> {
-        self.all().into_iter().find(|p| p.id.eq_ignore_ascii_case(id))
+        self.all()
+            .into_iter()
+            .find(|p| p.id.eq_ignore_ascii_case(id))
     }
 
     /// Make `id` the default look; `false` (unchanged) when it names no profile.
@@ -304,7 +306,8 @@ impl ProfileStore {
             return false;
         }
         let before = self.user_profiles.len();
-        self.user_profiles.retain(|p| !p.id.eq_ignore_ascii_case(id));
+        self.user_profiles
+            .retain(|p| !p.id.eq_ignore_ascii_case(id));
         if self.active_id.eq_ignore_ascii_case(id) {
             self.active_id = NONE_PROFILE_ID.to_owned();
         }

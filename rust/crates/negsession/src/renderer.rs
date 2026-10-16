@@ -96,7 +96,12 @@ pub struct CpuRenderer;
 impl CpuRenderer {
     /// Run the chain into a fresh buffer. The histogram is binned on the working encode BEFORE
     /// the optional sRGB re-expression, which is exactly what the GPU's `histogram` kernel sees.
-    fn run(&self, source: &RenderSource, params: &RenderParams, options: &RenderOptions) -> RenderResult {
+    fn run(
+        &self,
+        source: &RenderSource,
+        params: &RenderParams,
+        options: &RenderOptions,
+    ) -> RenderResult {
         let mut image = (*source.image).clone();
         let mask: Option<&dyn reference::MaskSampler> = options
             .mask_plane
