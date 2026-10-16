@@ -39,7 +39,6 @@ use crate::dialogs::{DialogAction, DialogState};
 use crate::engine::ExportItem;
 use crate::tools::{self, AnalysisTool, CropTool, ToolAction, ToolState};
 use negsession::ExportOptions;
-use negsession::profiles::PersistedProfiles;
 // --- end U2 ---
 
 /// Sidecar save debounce (AppModel.swift:928).
@@ -63,8 +62,11 @@ pub struct AppPrefs {
     // --- U2: tools & dialogs ---
     /// Sticky export sheet (`UserDefaults["exportOptions"]`, Swift field semantics).
     pub export: ExportOptions,
-    /// User profiles + the active id (`settingsProfiles` / `activeProfileID`).
-    pub profiles: PersistedProfiles,
+    /// User profiles + the active id, as the engine's JSON blob (`settingsProfiles` /
+    /// `activeProfileID`; parsed leniently by `ProfileStore::from_json`). A JSON string rather
+    /// than nested RON: `ExposureSettings`' lenient decoder reads through `serde_json::Value`,
+    /// which RON's struct notation does not round-trip.
+    pub profiles: String,
     // --- end U2 ---
 }
 
@@ -79,7 +81,7 @@ impl Default for AppPrefs {
             collapsed: HashMap::new(),
             // --- U2: tools & dialogs ---
             export: crate::dialogs::export::default_export_options(),
-            profiles: PersistedProfiles::default(),
+            profiles: String::new(),
         }
     }
 }
@@ -410,7 +412,7 @@ impl NegApp {
             },
             loupe: LoupeState::default(),
             presenter,
-            profiles: ProfileStore::from_persisted(prefs.profiles.clone()),
+            profiles: ProfileStore::from_json(&prefs.profiles),
             prefs,
             autosave: options.autosave,
             persist: options.persist,
@@ -1948,7 +1950,10 @@ impl NegApp {
                 DialogAction::StartExport { options, targets } => {
                     self.start_export(options, targets)
                 }
-                DialogAction::ProfilesChanged => self.prefs.profiles = self.profiles.persisted(),
+                DialogAction::ProfilesChanged => match self.profiles.to_json() {
+                    Ok(json) => self.prefs.profiles = json,
+                    Err(e) => self.status_message = Some(format!("Couldn't save profiles: {e}")),
+                },
                 DialogAction::Status(s) => self.status_message = Some(s),
             }
         }

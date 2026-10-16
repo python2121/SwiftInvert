@@ -882,7 +882,14 @@ pub mod selftest {
             }
             std::thread::sleep(Duration::from_millis(2));
         }
-        Err(format!("selftest: timed out after {timeout:?}"))
+        let a = h.state();
+        Err(format!(
+            "selftest: timed out after {timeout:?} (frames {}, busy {}, tool {:?}, status {:?})",
+            a.frames_rendered(),
+            a.busy(),
+            a.tool_mode(),
+            a.status_message()
+        ))
     }
 
     fn capture(h: &mut Harness<'_, NegApp>, out: &Path, suffix: &str) -> Result<PathBuf, String> {
@@ -963,15 +970,18 @@ pub mod selftest {
         if h.state().settings() != &before {
             return Err("selftest: undo did not restore the pre-crop settings".into());
         }
-        // Enter + cancel leaves the settings untouched.
+        // Enter + cancel leaves the settings untouched (latest-wins may fold its two renders).
+        let frames = h.state().frames_rendered();
         h.state_mut().run(Command::ToggleCrop);
         settle(h, 2);
         h.state_mut().run(Command::Escape);
-        settle(h, 2);
         if h.state().settings() != &before || h.state().tool_mode() != ToolMode::None {
             return Err("selftest: crop cancel changed the settings".into());
         }
-        next_frame(h).map(|_| ())
+        wait(h, Duration::from_secs(60), |a| {
+            a.frames_rendered() > frames && !a.busy()
+        })
+        .map(|_| ())
     }
 
     fn analysis_pass(h: &mut Harness<'_, NegApp>, out: &Path) -> Result<(), String> {
