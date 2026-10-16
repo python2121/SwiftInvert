@@ -1715,8 +1715,8 @@ name = "negcli"
 version = "0.1.0"
 dependencies = [
  "env_logger",
+ "image",
  "log",
- "neggpu",
  "negkit",
  "negraw",
  "negsession",
