@@ -21,6 +21,7 @@ pub mod library;
 pub mod loupe;
 pub mod selftest;
 pub mod theme;
+pub mod tools;
 
 pub use app::{AppOptions, AppPrefs, NegApp};
 pub use loupe::{CpuPresenter, FramePresenter, PresentedFrame};
