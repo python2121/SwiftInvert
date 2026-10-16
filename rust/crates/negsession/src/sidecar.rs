@@ -14,7 +14,8 @@ use negkit::ExposureSettings;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{Result, SessionError};
+use crate::Result;
+use crate::atomic;
 
 /// The envelope's `version`.
 pub const SIDECAR_VERSION: u32 = 1;
@@ -108,16 +109,13 @@ impl SidecarStore {
         ))?)
     }
 
-    /// Write the sidecar atomically (temp sibling + rename), then remove a legacy file.
+    /// Write the sidecar atomically (a per-call temp beside it, fsync, rename — see
+    /// [`crate::atomic`]), then remove a legacy file. Callers debounce (1 s) and never save
+    /// while restoring a frame or in the profile editor (crate docs).
     pub fn save(settings: &ExposureSettings, source: &Path) -> Result<()> {
         let target = Self::sidecar_path(source);
         let text = Self::encode(settings)?;
-        let tmp = target.with_extension(format!("json.tmp-{}", std::process::id()));
-        std::fs::write(&tmp, text).map_err(|e| SessionError::io(&tmp, e))?;
-        if let Err(e) = std::fs::rename(&tmp, &target) {
-            let _ = std::fs::remove_file(&tmp);
-            return Err(SessionError::io(&target, e));
-        }
+        atomic::write_atomic(&target, text.as_bytes())?;
         // A stale legacy sidecar would shadow nothing (new wins on load), but remove it so
         // edits don't fork across two files. Its absence is not an error.
         let _ = std::fs::remove_file(Self::legacy_sidecar_path(source));

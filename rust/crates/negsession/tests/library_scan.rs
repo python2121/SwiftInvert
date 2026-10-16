@@ -121,3 +121,37 @@ fn rawless_root_is_none_and_depth_is_capped() {
     assert_eq!(tree.total_count, 1);
     assert_eq!(flatten(&tree).len(), 1);
 }
+
+/// Symlinked directories are skipped (Swift's `isDirectoryKey` is false for a link): a loop
+/// terminates and lists nothing twice; a symlinked RAW file still lists (review 7, finding 7).
+#[cfg(unix)]
+#[test]
+fn symlinked_directories_are_skipped() {
+    let root = common::scratch_dir("library-links");
+    touch(&root.join("roll/IMG_1.CR3"));
+    std::os::unix::fs::symlink(&root, root.join("roll/loop")).unwrap();
+    std::os::unix::fs::symlink(root.join("roll"), root.join("alias")).unwrap();
+    std::os::unix::fs::symlink(root.join("roll/IMG_1.CR3"), root.join("linked.CR3")).unwrap();
+    let tree = build_tree(&root).unwrap();
+    let flat = flatten(&tree);
+    let rel: Vec<String> = flat
+        .iter()
+        .map(|p| {
+            p.strip_prefix(&root)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    assert_eq!(rel, ["linked.CR3", "roll/IMG_1.CR3"], "{rel:?}");
+    assert_eq!(tree.total_count, 2);
+    assert_eq!(
+        tree.subfolders.len(),
+        1,
+        "`alias` (a linked dir) is not a subfolder"
+    );
+    assert!(
+        tree.subfolders[0].subfolders.is_empty(),
+        "`loop` was not followed"
+    );
+}

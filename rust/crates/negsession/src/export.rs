@@ -5,7 +5,9 @@
 //! sRGB is requested — the bridge/Vulkan order, `RenderOptions::srgb`) → resize on the ENCODED
 //! output via `RgbImage::downsampled` (the Mac order: resize before quantization) → JPEG 8-bit
 //! (quality 0.92 default) or baseline 16-bit TIFF, each ICC-TAGGED with the requested space's
-//! profile so files are self-describing in every viewer.
+//! profile so files are self-describing in every viewer. The file is encoded into a temp beside
+//! the destination and renamed into place, so a failed encode or a full disk leaves a previous
+//! export of the frame intact (ImageIO writes only at Finalize; review 7 finding 2).
 //!
 //! **Which ICC bytes are embedded.** craft-cms's built-in profiles, serialized by
 //! `Profile::to_bytes()` (a fresh ICC v4 encoding): [`craft_cms::Builtin::Srgb`] ("sRGB
@@ -18,6 +20,12 @@
 //! segments (the `image` crate's `JpegEncoder::set_icc_profile` chunks them per the ICC spec),
 //! TIFF as tag 34675 (`InterColorProfile`). Not ported: the Mac's EXIF/GPS/Make/Model copy
 //! (ImageIO-specific); the TIFF is uncompressed baseline (the Mac writes LZW).
+//!
+//! **Sticky options.** [`ExportOptions`] stores every sheet value independently, exactly like
+//! the Swift struct — `jpegQuality` survives a switch to TIFF, `maxLongEdge` survives turning
+//! resize off, `customDestinationPath` survives choosing next-to-source — and serializes with
+//! the Swift keys (`colorSpace` still spelt `rommRGB` for the wide option) so the Mac's
+//! `UserDefaults["exportOptions"]` blob and ours are interchangeable.
 
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -27,6 +35,7 @@ use image::{ExtendedColorType, ImageEncoder};
 use negkit::RgbImage;
 use serde::{Deserialize, Serialize};
 
+use crate::atomic;
 use crate::session::Session;
 use crate::{Result, SessionError};
 
@@ -41,28 +50,20 @@ pub const LONG_EDGE_RANGE: (u32, u32) = (256, 20_000);
 /// The export sheet's quality range.
 pub const JPEG_QUALITY_RANGE: (f64, f64) = (0.5, 1.0);
 
-/// Output container.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// Output container (`ExportFormat`; the JPEG quality lives on [`ExportOptions`], as in Swift).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ExportFormat {
-    /// 8-bit JPEG at `quality` (0…1; the slider shows it as a percentage).
-    Jpeg { quality: f64 },
-    /// 16-bit baseline TIFF.
+    #[default]
+    Jpeg,
     Tiff16,
-}
-
-impl Default for ExportFormat {
-    fn default() -> Self {
-        ExportFormat::Jpeg {
-            quality: DEFAULT_JPEG_QUALITY,
-        }
-    }
 }
 
 impl ExportFormat {
     /// File extension (`jpg` / `tiff`).
     pub fn extension(self) -> &'static str {
         match self {
-            ExportFormat::Jpeg { .. } => "jpg",
+            ExportFormat::Jpeg => "jpg",
             ExportFormat::Tiff16 => "tiff",
         }
     }
@@ -70,20 +71,22 @@ impl ExportFormat {
     /// The picker label.
     pub fn label(self) -> &'static str {
         match self {
-            ExportFormat::Jpeg { .. } => "JPEG",
+            ExportFormat::Jpeg => "JPEG",
             ExportFormat::Tiff16 => "TIFF (16-bit)",
         }
     }
 }
 
-/// Output colour space.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+/// Output colour space (`ExportColorSpace`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ExportColorSpace {
     /// NegPy's default: correct everywhere, including profile-ignorant viewers.
     #[default]
+    #[serde(rename = "sRGB", alias = "srgb")]
     Srgb,
-    /// The Adobe RGB (1998) working space, tagged directly (the Swift case still NAMED `rommRGB`
-    /// in sticky JSON — see [`ExportOptions::from_sticky_json`]).
+    /// The Adobe RGB (1998) working space, tagged directly. The Swift case is still NAMED
+    /// `rommRGB` (kept for sticky-JSON compatibility since the b3490eb working-space move).
+    #[serde(rename = "rommRGB", alias = "adobe", alias = "adobeRGB")]
     AdobeRgb,
 }
 
@@ -110,7 +113,7 @@ impl ExportColorSpace {
     }
 }
 
-/// Where the file goes.
+/// Where the file goes — a VIEW over [`ExportOptions`]' two destination fields.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum ExportDestination {
     /// Next to each source (the default).
@@ -120,51 +123,85 @@ pub enum ExportDestination {
     Folder(PathBuf),
 }
 
-/// User-facing export options (the sheet). Defaults are deliberately high quality.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct ExportOptions {
-    pub format: ExportFormat,
-    pub colorspace: ExportColorSpace,
-    /// `Some(n)` = cap the long edge at `n` after rendering; `None` = full size (the sheet's
-    /// resize toggle defaults off with [`DEFAULT_MAX_LONG_EDGE`] in the field).
-    pub resize_long_edge: Option<u32>,
-    pub destination: ExportDestination,
-}
-
-/// The Swift sticky-options JSON (`UserDefaults["exportOptions"]`), kept readable both ways.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct StickyOptions {
-    #[serde(default = "sticky_format")]
-    format: String,
-    #[serde(default = "sticky_quality")]
-    jpeg_quality: f64,
-    #[serde(default)]
-    resize: bool,
-    #[serde(default = "sticky_long_edge")]
-    max_long_edge: u32,
-    #[serde(default = "sticky_colorspace")]
-    color_space: String,
-    #[serde(default)]
-    use_custom_destination: bool,
-    #[serde(default)]
-    custom_destination_path: Option<String>,
-}
-
-fn sticky_format() -> String {
-    "jpeg".to_owned()
-}
-fn sticky_quality() -> f64 {
+fn default_quality() -> f64 {
     DEFAULT_JPEG_QUALITY
 }
-fn sticky_long_edge() -> u32 {
+fn default_long_edge() -> u32 {
     DEFAULT_MAX_LONG_EDGE
 }
-fn sticky_colorspace() -> String {
-    "sRGB".to_owned()
+
+/// User-facing export options (the sheet) — field for field the Swift `ExportOptions`, with
+/// its sticky-JSON keys. Defaults: JPEG · 0.92 · resize off / 3000 · sRGB · next to source.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportOptions {
+    #[serde(default)]
+    pub format: ExportFormat,
+    /// 0…1 (the slider shows a percentage); kept whatever `format` is.
+    #[serde(default = "default_quality")]
+    pub jpeg_quality: f64,
+    /// Cap the long edge at `max_long_edge` after rendering.
+    #[serde(default)]
+    pub resize: bool,
+    /// Remembered even while `resize` is off.
+    #[serde(default = "default_long_edge")]
+    pub max_long_edge: u32,
+    #[serde(default)]
+    pub color_space: ExportColorSpace,
+    /// Write into `custom_destination_path` (when it is set) instead of next to the source.
+    #[serde(default)]
+    pub use_custom_destination: bool,
+    /// Remembered even while `use_custom_destination` is off.
+    #[serde(default)]
+    pub custom_destination_path: Option<PathBuf>,
+}
+
+impl Default for ExportOptions {
+    fn default() -> Self {
+        Self {
+            format: ExportFormat::Jpeg,
+            jpeg_quality: DEFAULT_JPEG_QUALITY,
+            resize: false,
+            max_long_edge: DEFAULT_MAX_LONG_EDGE,
+            color_space: ExportColorSpace::Srgb,
+            use_custom_destination: false,
+            custom_destination_path: None,
+        }
+    }
 }
 
 impl ExportOptions {
+    /// The effective resize: `Some(n)` when resizing is on.
+    pub fn resize_long_edge(&self) -> Option<u32> {
+        self.resize.then_some(self.max_long_edge)
+    }
+
+    /// The effective destination: the custom folder only when the flag is on AND a path is
+    /// set (the persisted blob can hold the flag without a path — falls back to next-to-source).
+    pub fn destination(&self) -> ExportDestination {
+        match (&self.use_custom_destination, &self.custom_destination_path) {
+            (true, Some(p)) => ExportDestination::Folder(p.clone()),
+            _ => ExportDestination::NextToSource,
+        }
+    }
+
+    /// Set the destination (a folder also becomes the remembered path).
+    pub fn set_destination(&mut self, destination: ExportDestination) {
+        match destination {
+            ExportDestination::NextToSource => self.use_custom_destination = false,
+            ExportDestination::Folder(p) => {
+                self.use_custom_destination = true;
+                self.custom_destination_path = Some(p);
+            }
+        }
+    }
+
+    /// Builder form of [`ExportOptions::set_destination`].
+    pub fn with_destination(mut self, destination: ExportDestination) -> Self {
+        self.set_destination(destination);
+        self
+    }
+
     /// Output path for one source (`destinationURL(for:)`): the chosen folder or the source's
     /// directory, the source's stem, the format's extension. Overwrites a previous export of the
     /// same frame by construction.
@@ -173,8 +210,8 @@ impl ExportOptions {
             .file_stem()
             .map(|s| s.to_os_string())
             .unwrap_or_default();
-        let dir = match &self.destination {
-            ExportDestination::Folder(dir) => dir.clone(),
+        let dir = match self.destination() {
+            ExportDestination::Folder(dir) => dir,
             ExportDestination::NextToSource => {
                 source.parent().map(Path::to_path_buf).unwrap_or_default()
             }
@@ -185,65 +222,22 @@ impl ExportOptions {
         dir.join(name)
     }
 
-    /// Whether the options can export (the sheet disables Export when a custom folder is chosen
-    /// but empty — unrepresentable here, so this only rejects a non-finite quality).
+    /// Whether the sheet's Export button is enabled: a custom destination needs a path, and
+    /// the quality must be a number.
     pub fn is_valid(&self) -> bool {
-        match self.format {
-            ExportFormat::Jpeg { quality } => quality.is_finite(),
-            ExportFormat::Tiff16 => true,
-        }
+        self.jpeg_quality.is_finite()
+            && !(self.use_custom_destination && self.custom_destination_path.is_none())
     }
 
-    /// The Swift sticky JSON for these options.
+    /// The Swift sticky JSON for these options (`UserDefaults["exportOptions"]`).
     pub fn to_sticky_json(&self) -> Result<String> {
-        let (format, jpeg_quality) = match self.format {
-            ExportFormat::Jpeg { quality } => ("jpeg", quality),
-            ExportFormat::Tiff16 => ("tiff16", DEFAULT_JPEG_QUALITY),
-        };
-        let (use_custom_destination, custom_destination_path) = match &self.destination {
-            ExportDestination::NextToSource => (false, None),
-            ExportDestination::Folder(dir) => (true, Some(dir.to_string_lossy().into_owned())),
-        };
-        let sticky = StickyOptions {
-            format: format.to_owned(),
-            jpeg_quality,
-            resize: self.resize_long_edge.is_some(),
-            max_long_edge: self.resize_long_edge.unwrap_or(DEFAULT_MAX_LONG_EDGE),
-            color_space: match self.colorspace {
-                ExportColorSpace::Srgb => "sRGB".to_owned(),
-                ExportColorSpace::AdobeRgb => "rommRGB".to_owned(),
-            },
-            use_custom_destination,
-            custom_destination_path,
-        };
-        Ok(serde_json::to_string(&sticky)?)
+        Ok(serde_json::to_string(self)?)
     }
 
-    /// Decode the Swift sticky JSON; `None` on a broken blob (callers fall back to defaults).
-    /// `rommRGB` (the case name kept for compatibility) and `adobe` both mean Adobe RGB; a custom
-    /// destination flag without a path falls back to next-to-source.
+    /// Decode the Swift sticky JSON; `None` on a broken blob (callers fall back to defaults);
+    /// missing keys take their defaults.
     pub fn from_sticky_json(json: &str) -> Option<Self> {
-        let s: StickyOptions = serde_json::from_str(json).ok()?;
-        let format = match s.format.as_str() {
-            "tiff16" | "tiff" => ExportFormat::Tiff16,
-            _ => ExportFormat::Jpeg {
-                quality: s.jpeg_quality,
-            },
-        };
-        let colorspace = match s.color_space.as_str() {
-            "rommRGB" | "adobe" | "adobeRGB" => ExportColorSpace::AdobeRgb,
-            _ => ExportColorSpace::Srgb,
-        };
-        let destination = match (s.use_custom_destination, s.custom_destination_path) {
-            (true, Some(p)) => ExportDestination::Folder(PathBuf::from(p)),
-            _ => ExportDestination::NextToSource,
-        };
-        Some(Self {
-            format,
-            colorspace,
-            resize_long_edge: s.resize.then_some(s.max_long_edge),
-            destination,
-        })
+        serde_json::from_str(json).ok()
     }
 }
 
@@ -256,43 +250,48 @@ impl Exporter {
     /// output.
     pub fn write(session: &mut Session, options: &ExportOptions) -> Result<PathBuf> {
         let dest = options.destination_path(session.path());
-        let encoded = session.export_render(options.colorspace == ExportColorSpace::Srgb)?;
+        let encoded = session.export_render(options.color_space == ExportColorSpace::Srgb)?;
         Self::write_encoded(&encoded, &dest, options)?;
         Ok(dest)
     }
 
     /// Write an already ENCODED buffer (in the options' colour space's own encoding) to `dest`:
-    /// resize if asked, quantize, tag. Render-free, so tests and other front ends can drive it.
+    /// resize if asked, quantize, tag — into a temp beside `dest`, renamed into place only
+    /// after a successful encode + fsync. Render-free, so tests and other front ends can drive it.
     pub fn write_encoded(encoded: &RgbImage, dest: &Path, options: &ExportOptions) -> Result<()> {
-        let image = match options.resize_long_edge {
+        let image = match options.resize_long_edge() {
             Some(n) if n >= MIN_RESIZE_LONG_EDGE => encoded.downsampled(n as usize),
             _ => std::borrow::Cow::Borrowed(encoded),
         };
         let (w, h) = dims_u32(&image)?;
-        let icc = options.colorspace.icc_profile();
-        let file = std::fs::File::create(dest).map_err(|e| SessionError::io(dest, e))?;
-        let mut out = BufWriter::new(file);
-        match options.format {
-            ExportFormat::Jpeg { quality } => {
-                // 0…1 → the encoder's 1…100 integer scale (rounded).
-                let q = (quality.clamp(0.01, 1.0) * 100.0).round() as u8;
-                let mut enc =
-                    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, q.max(1));
-                enc.set_icc_profile(icc.as_ref().clone())
-                    .map_err(|e| SessionError::Encode(e.to_string()))?;
-                enc.write_image(&rgb8_bytes(&image), w, h, ExtendedColorType::Rgb8)
-                    .map_err(|e| SessionError::Encode(e.to_string()))?;
-            }
-            ExportFormat::Tiff16 => {
-                let mut enc = image::codecs::tiff::TiffEncoder::new(&mut out);
-                enc.set_icc_profile(icc.as_ref().clone())
-                    .map_err(|e| SessionError::Encode(e.to_string()))?;
-                enc.write_image(&rgb16_bytes(&image), w, h, ExtendedColorType::Rgb16)
-                    .map_err(|e| SessionError::Encode(e.to_string()))?;
-            }
+        if !options.jpeg_quality.is_finite() {
+            return Err(SessionError::Invalid("JPEG quality is not a number"));
         }
-        out.flush().map_err(|e| SessionError::io(dest, e))?;
-        Ok(())
+        let icc = options.color_space.icc_profile();
+        atomic::write_atomic_with(dest, |file| {
+            let mut out = BufWriter::new(file);
+            let encode_err = |e: image::ImageError| std::io::Error::other(e.to_string());
+            match options.format {
+                ExportFormat::Jpeg => {
+                    // 0…1 → the encoder's 1…100 integer scale (rounded).
+                    let q = (options.jpeg_quality.clamp(0.01, 1.0) * 100.0).round() as u8;
+                    let mut enc =
+                        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, q.max(1));
+                    enc.set_icc_profile(icc.as_ref().clone())
+                        .map_err(|e| std::io::Error::other(e.to_string()))?;
+                    enc.write_image(&rgb8_bytes(&image), w, h, ExtendedColorType::Rgb8)
+                        .map_err(encode_err)?;
+                }
+                ExportFormat::Tiff16 => {
+                    let mut enc = image::codecs::tiff::TiffEncoder::new(&mut out);
+                    enc.set_icc_profile(icc.as_ref().clone())
+                        .map_err(|e| std::io::Error::other(e.to_string()))?;
+                    enc.write_image(&rgb16_bytes(&image), w, h, ExtendedColorType::Rgb16)
+                        .map_err(encode_err)?;
+                }
+            }
+            out.flush()
+        })
     }
 }
 

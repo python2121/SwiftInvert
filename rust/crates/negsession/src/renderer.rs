@@ -174,6 +174,19 @@ pub fn rgba8_from_encoded(image: &RgbImage) -> Vec<u8> {
     px.into_flattened()
 }
 
+/// [`rgba8_from_encoded`] into a caller-owned buffer (the `render_into` path on the CPU):
+/// `dest` must hold exactly `width × height × 4` bytes; extra bytes are left alone.
+pub fn rgba8_into(image: &RgbImage, dest: &mut [u8]) {
+    dest.par_chunks_exact_mut(4)
+        .zip(image.data.par_chunks_exact(3))
+        .for_each(|(d, p)| {
+            d[0] = neggpu::pack_unorm8(p[0]);
+            d[1] = neggpu::pack_unorm8(p[1]);
+            d[2] = neggpu::pack_unorm8(p[2]);
+            d[3] = 255;
+        });
+}
+
 impl Renderer for CpuRenderer {
     fn name(&self) -> String {
         "cpu (negkit::reference)".to_owned()

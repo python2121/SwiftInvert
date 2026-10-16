@@ -59,41 +59,82 @@ struct Args {
     flags: Vec<(String, Option<String>)>,
 }
 
+/// Flags that take a value.
+const VALUE_FLAGS: [&str; 8] = [
+    "o",
+    "out",
+    "sidecar",
+    "set",
+    "tier",
+    "runs",
+    "long-edge",
+    "quality",
+];
+/// Boolean flags.
+const BOOL_FLAGS: [&str; 8] = [
+    "full",
+    "srgb",
+    "uncropped",
+    "stock",
+    "jpeg",
+    "tiff",
+    "adobe",
+    "help",
+];
+
 impl Args {
-    fn parse(argv: &[String]) -> Option<Args> {
+    /// Strict: an unknown flag, or a value flag with no value, is an error (a typo like
+    /// `--tif` must not silently become a default run).
+    fn parse(argv: &[String]) -> std::result::Result<Args, String> {
         let mut it = argv.iter();
-        let command = it.next()?.clone();
+        let command = it.next().ok_or_else(|| USAGE.to_owned())?.clone();
         let mut positional = Vec::new();
         let mut flags = Vec::new();
         let rest: Vec<&String> = it.collect();
         let mut i = 0;
         while i < rest.len() {
             let a = rest[i].as_str();
-            if let Some(name) = a.strip_prefix("--") {
-                let takes_value = matches!(
-                    name,
-                    "o" | "out" | "sidecar" | "set" | "tier" | "runs" | "long-edge" | "quality"
-                );
-                if takes_value && i + 1 < rest.len() {
-                    flags.push((name.to_owned(), Some(rest[i + 1].clone())));
-                    i += 2;
+            let name = match a.strip_prefix("--") {
+                Some(name) => name,
+                None if a == "-o" => "o",
+                None if a == "-h" => "help",
+                None if a.starts_with('-') && a.len() > 1 => {
+                    return Err(format!("unknown flag `{a}`\n{USAGE}"));
+                }
+                None => {
+                    positional.push(a.to_owned());
+                    i += 1;
                     continue;
                 }
-                flags.push((name.to_owned(), None));
-            } else if a == "-o" && i + 1 < rest.len() {
-                flags.push(("o".to_owned(), Some(rest[i + 1].clone())));
+            };
+            if VALUE_FLAGS.contains(&name) {
+                let Some(value) = rest.get(i + 1) else {
+                    return Err(format!("--{name} needs a value\n{USAGE}"));
+                };
+                flags.push((name.to_owned(), Some((*value).clone())));
                 i += 2;
-                continue;
+            } else if BOOL_FLAGS.contains(&name) {
+                flags.push((name.to_owned(), None));
+                i += 1;
             } else {
-                positional.push(a.to_owned());
+                return Err(format!("unknown flag `--{name}`\n{USAGE}"));
             }
-            i += 1;
         }
-        Some(Args {
+        Ok(Args {
             command,
             positional,
             flags,
         })
+    }
+
+    /// A numeric flag, naming the flag in the error.
+    fn number<T: std::str::FromStr>(&self, name: &str, default: T) -> Result<T> {
+        match self.value(name) {
+            None => Ok(default),
+            Some(v) => v
+                .parse::<T>()
+                .map_err(|_| format!("--{name}: `{v}` is not a valid number").into()),
+        }
     }
 
     fn has(&self, name: &str) -> bool {
@@ -133,9 +174,12 @@ impl Args {
 fn main() -> ExitCode {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     let argv: Vec<String> = std::env::args().skip(1).collect();
-    let Some(args) = Args::parse(&argv) else {
-        eprintln!("{USAGE}");
-        return ExitCode::from(2);
+    let args = match Args::parse(&argv) {
+        Ok(args) => args,
+        Err(e) => {
+            eprintln!("negcli: {e}");
+            return ExitCode::from(2);
+        }
     };
     let run = match args.command.as_str() {
         "decode" => cmd_decode(&args),
@@ -181,6 +225,10 @@ fn settings_for(args: &Args, raw: &Path) -> Result<ExposureSettings> {
             serde_json::Value::Object(m) => m,
             _ => return Err("settings did not encode as an object".into()),
         };
+        // The two optional rects are omitted when absent; seed them so a --set can type-check.
+        for rect_key in ["cropRect", "analysisRect"] {
+            map.entry(rect_key).or_insert(serde_json::Value::Null);
+        }
         for kv in sets {
             let (k, v) = kv
                 .split_once('=')
@@ -188,12 +236,48 @@ fn settings_for(args: &Args, raw: &Path) -> Result<ExposureSettings> {
             if !ExposureSettings::STORED_KEYS.contains(&k) {
                 return Err(format!("unknown settings key `{k}`").into());
             }
-            let value = serde_json::from_str(v).unwrap_or(serde_json::Value::String(v.to_owned()));
+            let value: serde_json::Value = serde_json::from_str(v).map_err(|_| {
+                format!(
+                    "--set {k}: `{v}` is not a JSON value (numbers, true/false, [..], {{..}}, null)"
+                )
+            })?;
+            let Some(current) = map.get(k) else {
+                return Err(format!("--set {k}: unknown key").into());
+            };
+            if !same_json_kind(current, &value) {
+                return Err(
+                    format!("--set {k}: expected {} but got `{v}`", json_kind(current)).into(),
+                );
+            }
             map.insert(k.to_owned(), value);
         }
         settings = serde_json::from_value(serde_json::Value::Object(map))?;
     }
     Ok(settings)
+}
+
+/// Whether `candidate` has the JSON shape `current` has (numbers stay numbers, booleans stay
+/// booleans, arrays arrays; the optional rects accept an object or `null`) — the lenient
+/// sidecar decoder would otherwise silently default a mistyped `--set`.
+fn same_json_kind(current: &serde_json::Value, candidate: &serde_json::Value) -> bool {
+    use serde_json::Value::*;
+    matches!(
+        (current, candidate),
+        (Number(_), Number(_))
+            | (Bool(_), Bool(_))
+            | (Array(_), Array(_))
+            | (Object(_) | Null, Object(_) | Null)
+    )
+}
+
+fn json_kind(v: &serde_json::Value) -> &'static str {
+    match v {
+        serde_json::Value::Number(_) => "a number",
+        serde_json::Value::Bool(_) => "true/false",
+        serde_json::Value::Array(_) => "an array",
+        serde_json::Value::Object(_) | serde_json::Value::Null => "a rect object or null",
+        serde_json::Value::String(_) => "a string",
+    }
 }
 
 fn write_png_rgba8(path: &Path, rgba: &[u8], w: usize, h: usize) -> Result<()> {
@@ -316,9 +400,7 @@ fn cmd_render(args: &Args) -> Result<()> {
             let format = if ext.starts_with("ti") {
                 ExportFormat::Tiff16
             } else {
-                ExportFormat::Jpeg {
-                    quality: negsession::export::DEFAULT_JPEG_QUALITY,
-                }
+                ExportFormat::Jpeg
             };
             let colorspace = if srgb {
                 ExportColorSpace::Srgb
@@ -337,7 +419,7 @@ fn cmd_render(args: &Args) -> Result<()> {
             let image = output.frame.image().ok_or("expected a float frame")?;
             let options = ExportOptions {
                 format,
-                colorspace,
+                color_space: colorspace,
                 ..Default::default()
             };
             Exporter::write_encoded(image, &out, &options)?;
@@ -431,8 +513,7 @@ fn time<T>(f: impl FnOnce() -> T) -> (T, Duration) {
 
 fn cmd_bench(args: &Args) -> Result<()> {
     let raw = args.raw_path()?;
-    let runs: usize = args.value("runs").map_or(Ok(5), str::parse)?;
-    let runs = runs.max(1);
+    let runs: usize = args.number("runs", 5)?.max(1);
     let be = backend();
     let mut rows: Vec<Row> = Vec::new();
 
@@ -634,13 +715,14 @@ fn bench_session(
         format!("{}×{} (retained full tier)", encoded.width, encoded.height),
     );
     let dir = std::env::temp_dir();
-    let out = dir.join(format!("negcli-bench-{}.jpg", std::process::id()));
+    let out = TempFile(dir.join(format!("negcli-bench-{}.jpg", std::process::id())));
     let (w, t_jpeg) = time(|| {
         Exporter::write_encoded(
             &encoded,
-            &out,
+            &out.0,
             &ExportOptions {
-                resize_long_edge: Some(3000),
+                resize: true,
+                max_long_edge: 3000,
                 ..Default::default()
             },
         )
@@ -650,15 +732,23 @@ fn bench_session(
         &mut rows,
         "export write JPEG (3000 px)",
         t_jpeg,
-        out.display().to_string(),
+        out.0.display().to_string(),
     );
-    let _ = std::fs::remove_file(&out);
     rows.push((
         "memory".to_owned(),
         human(session.bytes_resident()),
         format!("{:?}", session.stats()),
     ));
     Ok(rows)
+}
+
+/// A scratch file removed on every exit path (early `?` returns included).
+struct TempFile(PathBuf);
+
+impl Drop for TempFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
 }
 
 type Row = (String, String, String);
@@ -676,39 +766,59 @@ fn human(bytes: usize) -> String {
     }
 }
 
+/// `--quality`: 0.5…1.0 like the export sheet's slider (or the same range as a percentage,
+/// 50…100); anything else is rejected rather than silently rescaled.
+fn parse_quality(q: f64) -> Result<f64> {
+    let (lo, hi) = negsession::export::JPEG_QUALITY_RANGE;
+    if (lo..=hi).contains(&q) {
+        Ok(q)
+    } else if (lo * 100.0..=hi * 100.0).contains(&q) {
+        Ok(q / 100.0)
+    } else {
+        Err(format!(
+            "--quality: {q} is outside {lo}…{hi} (or {}…{} %)",
+            lo * 100.0,
+            hi * 100.0
+        )
+        .into())
+    }
+}
+
 fn cmd_export(args: &Args) -> Result<()> {
     let raw = args.raw_path()?;
     let dir = args.output()?;
     std::fs::create_dir_all(&dir)?;
     let settings = settings_for(args, &raw)?;
-    let quality: f64 = args
-        .value("quality")
-        .map_or(Ok(negsession::export::DEFAULT_JPEG_QUALITY), str::parse)?;
-    let quality = if quality > 1.0 {
-        quality / 100.0
-    } else {
-        quality
-    };
+    let quality = parse_quality(args.number("quality", negsession::export::DEFAULT_JPEG_QUALITY)?)?;
     let format = if args.has("tiff") {
         ExportFormat::Tiff16
     } else {
-        ExportFormat::Jpeg { quality }
+        ExportFormat::Jpeg
     };
     let colorspace = if args.has("adobe") {
         ExportColorSpace::AdobeRgb
     } else {
         ExportColorSpace::Srgb
     };
-    let resize_long_edge = match args.value("long-edge") {
-        Some(v) => Some(v.parse::<u32>()?),
+    let long_edge: Option<u32> = match args.value("long-edge") {
+        Some(_) => Some(args.number("long-edge", 0u32)?),
         None => None,
     };
+    if let Some(n) = long_edge {
+        let (lo, hi) = negsession::export::LONG_EDGE_RANGE;
+        if !(lo..=hi).contains(&n) {
+            return Err(format!("--long-edge: {n} is outside {lo}…{hi}").into());
+        }
+    }
     let options = ExportOptions {
         format,
-        colorspace,
-        resize_long_edge,
-        destination: ExportDestination::Folder(dir),
-    };
+        jpeg_quality: quality,
+        resize: long_edge.is_some(),
+        max_long_edge: long_edge.unwrap_or(negsession::export::DEFAULT_MAX_LONG_EDGE),
+        color_space: colorspace,
+        ..Default::default()
+    }
+    .with_destination(ExportDestination::Folder(dir));
     let mut session = Session::open(&raw, backend(), default_renderer())?;
     session.set_settings(settings);
     let t = Instant::now();
