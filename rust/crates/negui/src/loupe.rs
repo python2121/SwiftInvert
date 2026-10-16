@@ -79,6 +79,18 @@ pub struct PresentedFrame {
 pub trait FramePresenter {
     /// Present `output`; `None` when it carried nothing presentable.
     fn present(&mut self, ctx: &egui::Context, output: &RenderOutput) -> Option<PresentedFrame>;
+    /// Present `output` together with the GPU texture that carries its pixels (the zero-copy
+    /// path; `gpu` is `None` for readback frames). The default ignores the texture — dropping
+    /// it frees its ring slot.
+    fn present_frame(
+        &mut self,
+        ctx: &egui::Context,
+        output: &RenderOutput,
+        gpu: Option<crate::presenter_gpu::GpuFrame>,
+    ) -> Option<PresentedFrame> {
+        drop(gpu);
+        self.present(ctx, output)
+    }
     /// Drop any held texture (selection cleared).
     fn clear(&mut self) {}
 }

@@ -29,4 +29,5 @@ egui_kittest = { workspace = true, features = ["wgpu", "eframe"] }
 eframe = { workspace = true, features = ["wgpu", "persistence", "x11", "wayland"] }
 
 [dev-dependencies]
+negraw = { workspace = true }
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot", "eframe"] }

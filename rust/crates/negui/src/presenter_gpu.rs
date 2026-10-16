@@ -7,92 +7,128 @@
 //! window's `wgpu::Device` (`GpuRenderer::from_existing`, which the app already does when it
 //! can); [`choose_presenter`] checks that and falls back to the [`CpuPresenter`] otherwise.
 //!
-//! **Hand-off.** The worker owns a [`TextureRing`] of [`RING`] textures. Each display render
-//! goes into the slot that is NOT on screen ([`TextureSink::displayed`]), the finished texture
-//! is parked in the sink's inbox, and the usual `Evt::Rendered` follows carrying the metadata
-//! with an EMPTY RGBA8 frame. [`GpuPresenter::present`] takes the parked texture (it must match
-//! the event's size — a newer frame of another size is put back for its own event), registers
-//! it with egui-wgpu once per slot and epoch (`register_native_texture`, then
-//! `update_egui_texture_from_wgpu_texture` when a resize recreated the slot) and marks the slot
-//! displayed. GPU work is ordered on the one queue, so even a slot rewritten while a stale event
-//! is in flight only ever shows a complete frame. A size change (tier swap, crop, rotation)
-//! comes back once through `Session::render_into` (bytes the presenter uploads like the CPU
-//! path) and the ring is recreated at the new size for the next render; a texture failure at
-//! the size the readback then reports disables the ring for good (logged). Frames wider than
-//! the device's `max_texture_dimension_2d` always take the readback path.
+//! **Hand-off — the slot guarantee.** The worker owns a [`TextureRing`] of [`RING`] textures
+//! and a [`SlotPool`] of per-slot busy flags shared with the UI. A display render first ACQUIRES
+//! a free slot (a [`SlotLease`]); the finished texture travels INSIDE its own `Evt::Rendered`
+//! (as a [`GpuFrame`] carrying the lease), so the metadata and the pixels can never pair up
+//! wrongly. [`GpuPresenter`] keeps the lease of the frame on screen; presenting the next frame
+//! drops the previous lease, which frees that slot. A frame the UI discards (stale generation,
+//! dropped channel) drops its lease too. The worker therefore can only ever write a slot that
+//! is neither on screen nor in flight to the UI: with three slots that is the normal case
+//! (one shown, one parked in the channel, one being written); when none is free the render
+//! takes the readback path instead of waiting. GPU work is ordered on the one queue, so a slot
+//! freed after egui last sampled it is rewritten only after that paint. A size change (tier
+//! swap, crop, rotation) comes back once through `Session::render_into` (bytes the presenter
+//! uploads like the CPU path) and the ring is recreated at the new size for the next render (a
+//! leased old texture stays alive through the lease's own handle); a texture failure at the
+//! size the readback then reports disables the ring for good (logged). Frames wider than the
+//! device's `max_texture_dimension_2d` always take the readback path.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use eframe::egui_wgpu;
 use eframe::wgpu;
 use negsession::RenderOutput;
-use negsession::renderer::{GpuRenderer, Renderer};
+use negsession::renderer::{GpuRenderer, Renderer, default_renderer};
 
 use crate::loupe::{CpuPresenter, FramePresenter, PresentedFrame};
 
-/// Textures in the ring (front + back).
-pub const RING: usize = 2;
-/// "No slot on screen".
-const NO_SLOT: usize = usize::MAX;
+/// Textures in the ring: one on screen, one in flight to the UI, one being written.
+pub const RING: usize = 3;
 /// Environment override: `NEGUI_PRESENTER=cpu` forces the readback presenter (A/B timing).
 pub const PRESENTER_ENV: &str = "NEGUI_PRESENTER";
 
-/// A finished frame parked for the presenter.
-#[derive(Clone, Debug)]
+/// Per-slot busy flags shared by the worker (acquire) and the UI (release by dropping the
+/// lease). A slot is busy from the moment the worker picks it until the UI lets go of the frame
+/// (replaced on screen, discarded, or never delivered).
+#[derive(Debug, Default)]
+pub struct SlotPool {
+    busy: [AtomicBool; RING],
+}
+
+impl SlotPool {
+    /// A fresh pool, every slot free.
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    /// Lease the first free slot; `None` when every slot is on screen or in flight.
+    pub fn acquire(self: &Arc<Self>) -> Option<SlotLease> {
+        self.busy.iter().enumerate().find_map(|(slot, flag)| {
+            flag.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .ok()
+                .map(|_| SlotLease {
+                    pool: Arc::clone(self),
+                    slot,
+                })
+        })
+    }
+
+    /// Whether `slot` is leased.
+    pub fn is_busy(&self, slot: usize) -> bool {
+        self.busy
+            .get(slot)
+            .is_some_and(|f| f.load(Ordering::Acquire))
+    }
+}
+
+/// Exclusive use of one ring slot; dropping it frees the slot.
+#[derive(Debug)]
+pub struct SlotLease {
+    pool: Arc<SlotPool>,
+    slot: usize,
+}
+
+impl SlotLease {
+    pub fn slot(&self) -> usize {
+        self.slot
+    }
+}
+
+impl Drop for SlotLease {
+    fn drop(&mut self) {
+        if let Some(f) = self.pool.busy.get(self.slot) {
+            f.store(false, Ordering::Release);
+        }
+    }
+}
+
+/// A finished frame on its way to the presenter (inside its `Evt::Rendered`).
+#[derive(Debug)]
 pub struct GpuFrame {
-    pub slot: usize,
+    /// The slot it occupies; held until the UI lets go of the frame.
+    pub lease: SlotLease,
     /// Bumped whenever the ring recreates its textures.
     pub epoch: u64,
     pub texture: wgpu::Texture,
 }
 
-/// The worker ↔ presenter mailbox.
+impl GpuFrame {
+    pub fn slot(&self) -> usize {
+        self.lease.slot()
+    }
+}
+
+/// The token that switches the engine to texture presentation (`Cmd::UseTextureTarget`): the
+/// slot pool the worker's ring leases from.
 #[derive(Clone, Debug)]
 pub struct TextureSink {
-    inbox: Arc<Mutex<Option<GpuFrame>>>,
-    displayed: Arc<AtomicUsize>,
+    pool: Arc<SlotPool>,
 }
 
 impl Default for TextureSink {
     fn default() -> Self {
         Self {
-            inbox: Arc::new(Mutex::new(None)),
-            displayed: Arc::new(AtomicUsize::new(NO_SLOT)),
+            pool: SlotPool::new(),
         }
     }
 }
 
 impl TextureSink {
-    /// The slot on screen (`None` while a CPU-uploaded frame is).
-    pub fn displayed(&self) -> Option<usize> {
-        match self.displayed.load(Ordering::Acquire) {
-            NO_SLOT => None,
-            s => Some(s),
-        }
-    }
-
-    fn set_displayed(&self, slot: Option<usize>) {
-        self.displayed
-            .store(slot.unwrap_or(NO_SLOT), Ordering::Release);
-    }
-
-    fn park(&self, frame: GpuFrame) {
-        if let Ok(mut inbox) = self.inbox.lock() {
-            *inbox = Some(frame);
-        }
-    }
-
-    fn take(&self) -> Option<GpuFrame> {
-        self.inbox.lock().ok().and_then(|mut i| i.take())
-    }
-
-    fn put_back(&self, frame: GpuFrame) {
-        if let Ok(mut inbox) = self.inbox.lock()
-            && inbox.is_none()
-        {
-            *inbox = Some(frame);
-        }
+    /// The shared pool.
+    pub fn pool(&self) -> &Arc<SlotPool> {
+        &self.pool
     }
 }
 
@@ -114,7 +150,7 @@ impl TextureRing {
         Some(Self {
             sink,
             device: gpu.context().device().clone(),
-            slots: [None, None],
+            slots: [None, None, None],
             epoch: 0,
             size: None,
             failed_at: None,
@@ -122,26 +158,22 @@ impl TextureRing {
         })
     }
 
-    /// The slot to render into (never the one on screen) and its texture; `None` before the
-    /// first size is known or when the frame is too large for a texture.
-    pub fn pick(&self) -> Option<(usize, wgpu::Texture)> {
-        let slot = match self.sink.displayed() {
-            Some(d) => (d + 1) % RING,
-            None => 0,
-        };
-        self.slots
-            .get(slot)
-            .and_then(|t| t.clone())
-            .map(|t| (slot, t))
+    /// Lease a free slot (never one on screen or in flight to the UI) and its texture; `None`
+    /// when every slot is busy, before the first size is known, or when the frame is too large
+    /// for a texture — the caller then takes the readback path.
+    pub fn pick(&self) -> Option<(SlotLease, wgpu::Texture)> {
+        let lease = self.sink.pool().acquire()?;
+        let texture = self.slots.get(lease.slot()).and_then(|t| t.clone())?;
+        Some((lease, texture))
     }
 
-    /// Park the texture just rendered for the presenter.
-    pub fn deliver(&self, slot: usize, texture: &wgpu::Texture) {
-        self.sink.park(GpuFrame {
-            slot,
+    /// Wrap the texture just rendered into `lease`'s slot for its `Evt::Rendered`.
+    pub fn frame(&self, lease: SlotLease, texture: wgpu::Texture) -> GpuFrame {
+        GpuFrame {
+            lease,
             epoch: self.epoch,
-            texture: texture.clone(),
-        });
+            texture,
+        }
     }
 
     /// A texture render failed at `tried`; [`TextureRing::resize`] decides whether the size was
@@ -169,7 +201,7 @@ impl TextureRing {
         self.epoch += 1;
         let max = self.device.limits().max_texture_dimension_2d;
         if w == 0 || h == 0 || w > max || h > max {
-            self.slots = [None, None];
+            self.slots = [None, None, None];
             return;
         }
         for slot in &mut self.slots {
@@ -199,18 +231,19 @@ impl TextureRing {
 /// The UI's side: egui texture ids per slot, plus the CPU presenter for readback frames.
 pub struct GpuPresenter {
     render_state: egui_wgpu::RenderState,
-    sink: TextureSink,
     /// Per slot: (epoch registered, egui id).
     ids: [Option<(u64, egui::TextureId)>; RING],
+    /// The lease of the frame on screen (dropping it frees the slot for the worker).
+    displayed: Option<SlotLease>,
     cpu: CpuPresenter,
 }
 
 impl GpuPresenter {
-    pub fn new(render_state: egui_wgpu::RenderState, sink: TextureSink) -> Self {
+    pub fn new(render_state: egui_wgpu::RenderState) -> Self {
         Self {
             render_state,
-            sink,
-            ids: [None, None],
+            ids: [None, None, None],
+            displayed: None,
             cpu: CpuPresenter::default(),
         }
     }
@@ -219,7 +252,7 @@ impl GpuPresenter {
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        let slot = self.ids.get_mut(frame.slot)?;
+        let slot = self.ids.get_mut(frame.slot())?;
         let mut renderer = self.render_state.renderer.write();
         let id = match *slot {
             Some((epoch, id)) if epoch == frame.epoch => id,
@@ -245,22 +278,30 @@ impl GpuPresenter {
 
 impl FramePresenter for GpuPresenter {
     fn present(&mut self, ctx: &egui::Context, output: &RenderOutput) -> Option<PresentedFrame> {
+        self.present_frame(ctx, output, None)
+    }
+
+    fn present_frame(
+        &mut self,
+        ctx: &egui::Context,
+        output: &RenderOutput,
+        gpu: Option<GpuFrame>,
+    ) -> Option<PresentedFrame> {
         if output.frame.rgba8().is_some_and(|b| !b.is_empty()) {
-            self.sink.set_displayed(None);
+            self.displayed = None;
             return self.cpu.present(ctx, output);
         }
-        let frame = self.sink.take()?;
+        let frame = gpu?;
         let size = (
             frame.texture.width() as usize,
             frame.texture.height() as usize,
         );
         if size != (output.width, output.height) {
-            // A newer frame of another size: it belongs to the next event.
-            self.sink.put_back(frame);
             return None;
         }
         let id = self.texture_id(&frame)?;
-        self.sink.set_displayed(Some(frame.slot));
+        // The previous frame's lease drops here: its slot is free for the worker again.
+        self.displayed = Some(frame.lease);
         Some(PresentedFrame {
             texture: id,
             size: [size.0, size.1],
@@ -269,7 +310,7 @@ impl FramePresenter for GpuPresenter {
 
     fn clear(&mut self) {
         self.cpu.clear();
-        self.sink.set_displayed(None);
+        self.displayed = None;
     }
 }
 
@@ -293,14 +334,36 @@ pub fn choose_presenter(
         Some(rs) if !forced_cpu => {
             let sink = TextureSink::default();
             log::info!("presenter: zero-copy GPU textures");
-            (
-                Box::new(GpuPresenter::new(rs.clone(), sink.clone())),
-                Some(sink),
-            )
+            (Box::new(GpuPresenter::new(rs.clone())), Some(sink))
         }
         _ => {
             log::info!("presenter: CPU readback");
             (Box::new(CpuPresenter::default()), None)
         }
     }
+}
+
+/// The engine's renderer: eframe's wgpu device shared (what makes the zero-copy loupe possible)
+/// when there is one and `NEG_GPU` isn't `off`, else the process default (headless GPU or CPU).
+/// The one place outside `main.rs` that touches the window's device.
+pub fn shared_or_default_renderer(
+    render_state: Option<&egui_wgpu::RenderState>,
+) -> Arc<dyn Renderer> {
+    if std::env::var("NEG_GPU")
+        .ok()
+        .is_some_and(|v| v.eq_ignore_ascii_case("off"))
+    {
+        return default_renderer();
+    }
+    if let Some(rs) = render_state {
+        match GpuRenderer::from_existing(rs.device.clone(), rs.queue.clone(), rs.adapter.get_info())
+        {
+            Ok(gpu) => {
+                log::info!("renderer: {} (sharing the window's device)", gpu.name());
+                return Arc::new(gpu);
+            }
+            Err(e) => log::warn!("renderer: shared device refused ({e}); falling back"),
+        }
+    }
+    default_renderer()
 }

@@ -28,7 +28,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use negsession::{ExportOptions, Exporter, Frame, SidecarStore};
 
-use crate::presenter_gpu::{TextureRing, TextureSink};
+use crate::presenter_gpu::{GpuFrame, TextureRing, TextureSink};
 
 /// One frame of a batch export: `settings` is the live mirror for the open frame, `None` for
 /// the others (their sidecar, else the default profile, is read on the export thread).
@@ -191,6 +191,9 @@ pub enum Evt {
         render_time: Duration,
         /// Wall time since the UI issued the request (queueing included).
         latency: Duration,
+        /// The zero-copy texture holding the pixels (`output`'s RGBA8 frame is then empty);
+        /// dropping it frees its ring slot.
+        gpu: Option<GpuFrame>,
     },
     RenderFailed {
         path: PathBuf,
@@ -229,6 +232,9 @@ pub enum Evt {
         event: DarkroomEvt,
     },
     // --- end U3 ---
+    /// A command that is neither an open nor a render failed inside the worker (a caught
+    /// panic); the worker dropped its sessions and keeps serving.
+    EngineError { message: String },
 }
 
 /// The UI's handle: a sender, a receiver and the thread.
@@ -237,6 +243,8 @@ pub struct Engine {
     rx: Receiver<Evt>,
     thread: Option<JoinHandle<()>>,
     pub renderer_name: String,
+    /// Why the worker is gone (its channel disconnected); `None` while it serves.
+    stopped: Option<String>,
 }
 
 impl Engine {
@@ -261,35 +269,86 @@ impl Engine {
                     repaint: Box::new(repaint),
                     export_jobs: Vec::new(),
                     texture: None,
+                    failed_opens: Vec::new(),
                 };
                 worker.run(cmd_rx);
             })
             .ok();
-        if thread.is_none() {
+        let stopped = if thread.is_none() {
             log::error!("engine: could not spawn the worker thread");
-        }
+            Some("could not start the worker thread".to_owned())
+        } else {
+            None
+        };
         Engine {
             tx,
             rx,
             thread,
             renderer_name,
+            stopped,
         }
     }
 
-    /// Queue a command (dropped silently if the worker is gone).
+    /// Queue a command (dropped if the worker is gone — [`Engine::stopped`] then says why).
     pub fn send(&self, cmd: Cmd) {
         if self.tx.send(cmd).is_err() {
             log::warn!("engine: worker gone; command dropped");
         }
     }
 
-    /// Drain pending events.
-    pub fn poll(&self) -> Vec<Evt> {
+    /// Drain pending events. A disconnected channel means the worker thread ended: that is
+    /// recorded once (with the panic message when there was one) for [`Engine::stopped`].
+    pub fn poll(&mut self) -> Vec<Evt> {
         let mut out = Vec::new();
-        while let Ok(e) = self.rx.try_recv() {
-            out.push(e);
+        loop {
+            match self.rx.try_recv() {
+                Ok(e) => out.push(e),
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    if self.stopped.is_none() {
+                        let reason = match self.thread.take().map(JoinHandle::join) {
+                            Some(Err(payload)) => panic_message(payload.as_ref()),
+                            _ => "the worker thread ended".to_owned(),
+                        };
+                        log::error!("engine stopped: {reason}");
+                        self.stopped = Some(reason);
+                    }
+                    break;
+                }
+            }
         }
         out
+    }
+
+    /// Why the worker is gone, once it is (fatal: nothing renders any more).
+    pub fn stopped(&self) -> Option<&str> {
+        self.stopped.as_deref()
+    }
+}
+
+/// The text of a caught panic payload.
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_owned()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "panic".to_owned()
+    }
+}
+
+impl Cmd {
+    /// The open/render a failure report belongs to.
+    fn failure_target(&self) -> Option<(PathBuf, u64, bool)> {
+        match self {
+            Cmd::Open {
+                path, generation, ..
+            } => Some((path.clone(), *generation, true)),
+            Cmd::Render {
+                path, generation, ..
+            } => Some((path.clone(), *generation, false)),
+            _ => None,
+        }
     }
 }
 
@@ -312,6 +371,9 @@ struct Worker {
     // --- U2: tools & dialogs ---
     export_jobs: Vec<(Arc<AtomicBool>, JoinHandle<()>)>,
     texture: Option<TextureRing>,
+    /// Paths whose last `Open` failed, with the reason: a render/darkroom request for them
+    /// reports that instead of decoding the broken file a second time (a new `Open` retries).
+    failed_opens: Vec<(PathBuf, String)>,
 }
 
 impl Worker {
@@ -359,9 +421,40 @@ impl Worker {
             }
             // --- end U3 ---
             for (cmd, keep) in queue.into_iter().zip(keep) {
-                if keep && !self.handle(cmd) {
+                if keep && !self.handle_guarded(cmd) {
                     return;
                 }
+            }
+        }
+    }
+
+    /// [`Worker::handle`] with a panic turned into a failure event: an open reports
+    /// `Opened(Err)`, a render `RenderFailed`, anything else `EngineError`. The sessions are
+    /// dropped (a half-updated cache tower must not serve again) and the worker keeps serving.
+    fn handle_guarded(&mut self, cmd: Cmd) -> bool {
+        let target = cmd.failure_target();
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.handle(cmd)));
+        match outcome {
+            Ok(go_on) => go_on,
+            Err(payload) => {
+                let message = panic_message(payload.as_ref());
+                log::error!("engine: a command panicked: {message}");
+                self.sessions.clear();
+                let error = format!("engine error: {message}");
+                match target {
+                    Some((path, generation, true)) => self.emit(Evt::Opened {
+                        path,
+                        generation,
+                        result: Err(error),
+                    }),
+                    Some((path, generation, false)) => self.emit(Evt::RenderFailed {
+                        path,
+                        generation,
+                        error,
+                    }),
+                    None => self.emit(Evt::EngineError { message: error }),
+                }
+                true
             }
         }
     }
@@ -370,7 +463,10 @@ impl Worker {
     fn handle(&mut self, cmd: Cmd) -> bool {
         match cmd {
             Cmd::Shutdown => return false,
-            Cmd::ClearSessions => self.sessions.clear(),
+            Cmd::ClearSessions => {
+                self.sessions.clear();
+                self.failed_opens.clear();
+            }
             // --- U2: tools & dialogs ---
             Cmd::Export {
                 items,
@@ -391,7 +487,11 @@ impl Worker {
                 settings,
                 generation,
             } => {
+                self.failed_opens.retain(|(p, _)| p != &path);
                 let result = self.open(&path, settings).map(|_| ());
+                if let Err(e) = &result {
+                    self.failed_opens.push((path.clone(), e.clone()));
+                }
                 self.emit(Evt::Opened {
                     path,
                     generation,
@@ -424,13 +524,14 @@ impl Worker {
             } => {
                 let outcome = self.render(&path, settings, variant, tool, request, generation);
                 match outcome {
-                    Ok((output, info, render_time)) => self.emit(Evt::Rendered {
+                    Ok((output, info, render_time, gpu)) => self.emit(Evt::Rendered {
                         path,
                         generation,
                         output: Box::new(output),
                         info,
                         render_time,
                         latency: requested_at.elapsed(),
+                        gpu,
                     }),
                     Err(error) => self.emit(Evt::RenderFailed {
                         path,
@@ -455,6 +556,9 @@ impl Worker {
     /// Reuse by path (moved to the back) else open; evict beyond the LRU; strip the enhanced
     /// tiers from every retained session except the one opened.
     fn open(&mut self, path: &Path, settings: ExposureSettings) -> Result<&mut Session, String> {
+        if let Some((_, e)) = self.failed_opens.iter().find(|(p, _)| p == path) {
+            return Err(e.clone());
+        }
         if let Some(i) = self.position(path) {
             let s = self.sessions.remove(i);
             self.sessions.push(s);
@@ -488,7 +592,7 @@ impl Worker {
         tool: ToolMode,
         request: RenderRequest,
         generation: u64,
-    ) -> Result<(RenderOutput, Option<SessionInfo>, Duration), String> {
+    ) -> Result<RenderDone, String> {
         if self.position(path).is_none() {
             self.open(path, settings.clone())?;
         }
@@ -525,9 +629,18 @@ impl Worker {
         .map_err(|e| e.to_string())?;
         let render_time = t0.elapsed();
         let info = s.session_info().ok();
-        Ok((output, info, render_time))
+        Ok((output, info, render_time, None))
     }
 }
+
+/// A finished display render: the output, the session read-outs, the render time and (zero-copy
+/// path) the texture holding the pixels.
+type RenderDone = (
+    RenderOutput,
+    Option<SessionInfo>,
+    Duration,
+    Option<GpuFrame>,
+);
 
 // --- U2: tools & dialogs ---
 impl Worker {
@@ -584,8 +697,8 @@ impl Worker {
     }
 
     /// The zero-readback display path for the ENHANCED tiers: the frame lands in a texture of
-    /// the ring (the one not on screen) and the returned output carries an EMPTY RGBA8 frame;
-    /// the presenter picks the texture up from the sink, and an [`Evt::ProbeFrame`] (a proxy
+    /// the ring (a LEASED slot — never one on screen or in flight to the UI) and the returned
+    /// output carries an EMPTY RGBA8 frame; the texture rides the same `Evt::Rendered`, and an [`Evt::ProbeFrame`] (a proxy
     /// readback of the same snapshot, ~6 MB) feeds the densitometer / zone overlay, which read
     /// displayed bytes. The proxy tier keeps the readback path: its bytes ARE the probe, so a
     /// texture would only add a second render. On a size change (the ring's textures are the
@@ -598,7 +711,7 @@ impl Worker {
         tool: ToolMode,
         request: RenderRequest,
         generation: u64,
-    ) -> Option<Result<(RenderOutput, Option<SessionInfo>, Duration), String>> {
+    ) -> Option<Result<RenderDone, String>> {
         if request.tier == negsession::RenderTier::Proxy {
             return None;
         }
@@ -618,7 +731,7 @@ impl Worker {
         tool: ToolMode,
         mut request: RenderRequest,
         generation: u64,
-    ) -> Result<(RenderOutput, Option<SessionInfo>, Duration), String> {
+    ) -> Result<RenderDone, String> {
         let evt_tx = self.evt_tx.clone();
         let Some(s) = self.session_mut(path) else {
             return Err("session vanished".into());
@@ -636,12 +749,12 @@ impl Worker {
             }
         };
         let t0 = Instant::now();
-        if let Some((slot, texture)) = ring.pick() {
+        if let Some((lease, texture)) = ring.pick() {
             let tried = (texture.width(), texture.height());
             match s.render_to_texture_with(&settings, request, &texture) {
                 Ok(meta) => {
                     let render_time = t0.elapsed();
-                    ring.deliver(slot, &texture);
+                    let gpu = ring.frame(lease, texture);
                     // The densitometer's bytes: the same snapshot on the proxy, no histogram.
                     let probe_request = RenderRequest {
                         tier: negsession::RenderTier::Proxy,
@@ -668,7 +781,7 @@ impl Worker {
                         frame: Frame::Rgba8(Vec::new()),
                         meta,
                     };
-                    return Ok((output, info, render_time));
+                    return Ok((output, info, render_time, Some(gpu)));
                 }
                 Err(e) => ring.note_failure(tried, &e.to_string()),
             }
@@ -687,6 +800,7 @@ impl Worker {
             },
             info,
             render_time,
+            None,
         ))
     }
 }

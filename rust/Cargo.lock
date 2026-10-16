@@ -2149,6 +2149,7 @@ dependencies = [
  "image",
  "log",
  "negkit",
+ "negraw",
  "negsession",
  "serde",
  "serde_json",

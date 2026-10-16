@@ -523,8 +523,8 @@ fn export_options_are_sticky_through_app_prefs() {
         .export
         .set_destination(ExportDestination::NextToSource); // path remembered
     let mut storage = MemStorage::default();
-    eframe::set_value(&mut storage, negui::app::PREFS_KEY, &prefs);
-    let back: negui::AppPrefs = eframe::get_value(&storage, negui::app::PREFS_KEY).unwrap();
+    prefs.store(&mut storage);
+    let back = negui::AppPrefs::load(&storage);
     assert_eq!(back.export, prefs.export);
     assert_eq!(
         back.export.custom_destination_path.as_deref(),
@@ -533,7 +533,7 @@ fn export_options_are_sticky_through_app_prefs() {
     // an old blob without the export key → the app default
     let mut old = MemStorage::default();
     old.set_string(negui::app::PREFS_KEY, "(library_visible: false)".into());
-    let back: negui::AppPrefs = eframe::get_value(&old, negui::app::PREFS_KEY).unwrap();
+    let back = negui::AppPrefs::load(&old);
     assert!(!back.library_visible);
     assert_eq!(
         back.export,
@@ -617,8 +617,8 @@ fn profile_picker_rules() {
         ..Default::default()
     };
     let mut storage = MemStorage::default();
-    eframe::set_value(&mut storage, negui::app::PREFS_KEY, &prefs);
-    let back: negui::AppPrefs = eframe::get_value(&storage, negui::app::PREFS_KEY).unwrap();
+    prefs.store(&mut storage);
+    let back = negui::AppPrefs::load(&storage);
     let restored = ProfileStore::from_json(&back.profiles);
     assert_eq!(restored.active_id(), a);
     assert_eq!(restored.user_profiles().len(), 3);
