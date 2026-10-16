@@ -206,7 +206,8 @@ from `CARGO_MANIFEST_DIR`). `.bin` = float32 LE, shape from the manifest. Swift 
 | synthetic64 chain (normalized / curve_linear / output, 3 configs) | negkit/tests/chain.rs | 1e-4 |
 | LabColorTests, HueTrimTests | negkit/tests/lab.rs | per Swift (lab_color fixtures) |
 | ContrastMaskTests | negkit/tests/contrast_mask.rs | fixture gates |
-| OrientationTests, PreprocessRectTests, AuditRectAndGeometryTests, ImagePipelineSeamTests, CropGeometryTests, DisplayAspectTests | negkit/tests/geometry.rs | per Swift |
+| OrientationTests, PreprocessRectTests, AuditRectAndGeometryTests, ImagePipelineSeamTests | negkit/tests/geometry.rs (+ analysis.rs for the prepare-level halves) | per Swift |
+| CropGeometryTests, DisplayAspectTests | negkit/tests/crop_geometry.rs | per Swift |
 | DensitometryTests, ZoneGridTests, AuditZoneGridStrideTests, TestStripTests, ZonePlacementTests | negkit/tests/darkroom.rs | per Swift |
 | SidecarCodecTests (+ HistoryLabelTests' field sweep) | negkit/tests/sidecar.rs | exact |
 | LayoutTests / VulkanLayoutTests | neggpu/tests/layout.rs | exact offsets |
@@ -303,5 +304,9 @@ not installed there, report and stop — no installs on the Mac without the user
 | 1 | R negraw | agent R | done | lcraw default = LibRaw area + bit-depth white; **Mac parity vs LibRaw 0.22.1: per-sample max 6.3e-5, mean 2.7e-5, same dims** (EOS R100 CR3); `libraw` feature builds + tests on the Mac |
 | 1 | review (Opus) | reviewer | done | 1 BUG (pixel_roi debug overflow) + NaN-handling risks, all fixed in 54340ee |
 | 1 | Mac run | orchestrator | done | full default workspace builds, all tests pass on macOS (Rust 1.96) |
-| 2 | B bounds/meters/kernel | agent B | in progress | resumed after a usage-limit interruption |
-| 2 | D reference chain | agent D | in progress | resumed after a usage-limit interruption |
+| 2 | B bounds/meters/kernel | agent B | done | 26 tests; analysis parity 3 configs + synthetic_grid; prepare 13.7 ms / finalize 4.5 ms after the prefilter rework |
+| 2 | D reference chain | agent D | done | 42 tests; full chain ≤ 2.4e-7 vs 1e-4 (fixture AND live analysis); 1536 px render 54 ms (Swift 509) |
+| 2 | reviews (Opus ×2: reference, analysis) | reviewers | done | no bugs; tone controls moved to the GPU's parallel form (Swift CPU was sequential); live-chain test added |
+| 3 | M contrast mask / crop geometry / densitometry / zones / test strip / zone placement | agent M | done | 83 tests; plane 3e-7, masked chain 1.5e-7; negkit now 267 tests, fully ported |
+| 3 | G neggpu | agent G | in progress | |
+| 3 | S negsession + negcli | agent S | in progress | |

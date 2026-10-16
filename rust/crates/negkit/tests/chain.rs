@@ -165,6 +165,47 @@ fn full_chain_expo_cmy() {
     full_chain("expo_cmy");
 }
 
+/// The Swift `fullChain` uses the LIVE analysis (`Synthetic64.analysis`), not the fixture's
+/// JSON: prepare → finalize → derive → render against the three dumped stage boundaries at
+/// 1e-4, so a bounds error just inside the analysis gate can't hide behind 1/range in the
+/// normalized pixels. (Review 2026-10-15, finding 1.)
+fn full_chain_live(name: &str) {
+    let input = synthetic64_input();
+    let j =
+        fixtures::read_json(&format!("synthetic64/{name}/analysis.json")).expect("analysis.json");
+    let analysis = negkit::kernel::analyze(&input, None, None, 0.05).expect("live analysis");
+    let params = derive_render_params(&settings_from(&j), &analysis);
+    let normalized = reference::normalize(&input, &params.final_bounds);
+    expect_image_close(
+        &normalized,
+        &format!("synthetic64/{name}/normalized.bin"),
+        1e-4,
+    );
+    let positive = reference::apply_print_curve(&normalized, &params, None);
+    expect_image_close(
+        &positive,
+        &format!("synthetic64/{name}/curve_linear.bin"),
+        1e-4,
+    );
+    let encoded = reference::encode_output(&positive, &[Vec::new(), Vec::new(), Vec::new()]);
+    expect_image_close(&encoded, &format!("synthetic64/{name}/output.bin"), 1e-4);
+}
+
+#[test]
+fn full_chain_live_default() {
+    full_chain_live("default");
+}
+
+#[test]
+fn full_chain_live_expo_dark() {
+    full_chain_live("expo_dark");
+}
+
+#[test]
+fn full_chain_live_expo_cmy() {
+    full_chain_live("expo_cmy");
+}
+
 /// The in-place entry points are the allocating ones' exact bytes (the big-buffer path the
 /// session renderer takes).
 #[test]

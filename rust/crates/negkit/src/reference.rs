@@ -332,9 +332,15 @@ impl PrintCurve {
                 let w_s = cl::sigmoid(K::TONE_REGION_SHARPNESS * (v - K::SHADOW_TONE_ANCHOR));
                 let w_h = cl::sigmoid(K::TONE_REGION_SHARPNESS * (K::HIGHLIGHT_TONE_ANCHOR - v));
                 let w_ds = cl::sigmoid(K::TONE_REGION_SHARPNESS * (v - K::DARK_SHADOW_TONE_ANCHOR));
-                v += (-self.sh_lift + self.sh_contrast * (v - K::SHADOW_TONE_ANCHOR)) * w_s;
-                v += -self.ds_lift * w_ds;
-                v += (-self.hi_shift + self.hi_contrast * (v - K::HIGHLIGHT_TONE_ANCHOR)) * w_h;
+                // ONE expression on the incoming v, like both GPU kernels (GLSL/MSL). The Swift
+                // CPU reference applied the three terms sequentially, so its highlight contrast
+                // read a v the shadow terms had already moved — up to 0.025 D off the GPU with
+                // shadow and highlight controls on together (found in the 2026-10-15 review; no
+                // fixture combines them). The GPUs are what users saw: the parallel form is the
+                // oracle here.
+                v += (-self.sh_lift + self.sh_contrast * (v - K::SHADOW_TONE_ANCHOR)) * w_s
+                    - self.ds_lift * w_ds
+                    + (-self.hi_shift + self.hi_contrast * (v - K::HIGHLIGHT_TONE_ANCHOR)) * w_h;
             }
 
             // 3-band colour balance on the same tone-region masks (mids = whatever the

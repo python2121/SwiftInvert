@@ -52,10 +52,21 @@ pub fn resolve_analysis_region<'a>(
 /// parity suite passes on Linux against the same fixtures, so the scalar path is pinned).
 pub fn log_image(image: &RgbImage) -> RgbImage {
     let mut out = image.clone();
-    for v in out.data.iter_mut() {
-        *v = v.clamp(1e-6, 1.0).log10();
-    }
+    log_in_place(&mut out);
     out
+}
+
+/// [`log_image`] without the copy: rows in parallel under `rayon` (the same scalar `log10f`
+/// per lane, so the bytes are identical to the serial path). The prefilter was 13 ms of a
+/// 21 ms `prepare` with the serial clone-then-log; this is the one pass that touches every
+/// metered pixel, everything after it runs on the block-median grid.
+pub fn log_in_place(image: &mut RgbImage) {
+    let row_len = image.width * 3;
+    crate::image::for_each_row_mut(&mut image.data, row_len, |_, row| {
+        for v in row.iter_mut() {
+            *v = v.clamp(1e-6, 1.0).log10();
+        }
+    });
 }
 
 /// Centered analysis crop: cut `int(dim · buffer)` from each side (`buffer ≤ 0.3`). Borrowed
@@ -173,6 +184,8 @@ pub fn block_median_grid(img: RgbImage) -> RgbImage {
 /// surviving values are identical either way, and the default 0.10 buffer throws away 36 % of
 /// the frame — no reason to compute logs for pixels the meters never look at (4.6 → 2.9 ms).
 pub fn prefilter_log_grid(image: &RgbImage, analysis_buffer: f64) -> RgbImage {
-    let cropped = analysis_crop(image, analysis_buffer);
-    block_median_grid(log_image(&cropped))
+    // The crop usually yields an owned buffer already; log it in place instead of cloning again.
+    let mut cropped = analysis_crop(image, analysis_buffer).into_owned();
+    log_in_place(&mut cropped);
+    block_median_grid(cropped)
 }
