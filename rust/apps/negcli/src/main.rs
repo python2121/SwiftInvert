@@ -7,8 +7,9 @@
     clippy::unreachable
 )]
 //! `negcli` — headless driver over `negsession` (the port of `Sources/negcli`): decode / thumb /
-//! render / meter / bench / export. `NEG_GPU=off` is honoured (there is only the CPU chain today;
-//! a GPU renderer plugs in behind `negsession::Renderer`).
+//! render / meter / bench / export. `render`/`meter`/`export` use `negsession::default_renderer`
+//! (the GPU when one comes up, else the CPU chain; `NEG_GPU=off` forces the CPU); `bench` runs
+//! the session pass through BOTH and prints them side by side with the adapter's name.
 //!
 //! ```text
 //! negcli decode <raw> [--full] -o out.png
@@ -35,8 +36,8 @@ use negraw::RawBackend;
 use negsession::densitometer::NegativeCharacter;
 use negsession::renderer::default_renderer;
 use negsession::{
-    ExportColorSpace, ExportDestination, ExportFormat, ExportOptions, Exporter, Frame, OutputKind,
-    RenderRequest, RenderTier, Session, SidecarStore,
+    CpuRenderer, ExportColorSpace, ExportDestination, ExportFormat, ExportOptions, Exporter, Frame,
+    GpuRenderer, OutputKind, RenderRequest, RenderTier, Renderer, Session, SidecarStore,
 };
 
 const USAGE: &str = "usage:
@@ -433,10 +434,10 @@ fn cmd_bench(args: &Args) -> Result<()> {
     let runs: usize = args.value("runs").map_or(Ok(5), str::parse)?;
     let runs = runs.max(1);
     let be = backend();
-    let renderer = default_renderer();
     let mut rows: Vec<Row> = Vec::new();
 
-    // Stage timings on the proxy, outside the session (the tower hides them behind its keys).
+    // Stage timings on the proxy, outside the session (the tower hides them behind its keys);
+    // renderer-independent, so they print once.
     let (native, t_decode) = time(|| be.decode_preview(&raw));
     let native = native?.image;
     row(
@@ -472,8 +473,97 @@ fn cmd_bench(args: &Args) -> Result<()> {
     drop(native);
     drop(proxy);
 
-    // The session: open, then renders per tier (first = cold, then the slider-tick average).
-    let (session, t_open) = time(|| Session::open(&raw, Arc::clone(&be), Arc::clone(&renderer)));
+    // The session, once per renderer: CPU always, GPU when one comes up (NEG_GPU=off skips it).
+    let cpu: Arc<dyn Renderer> = Arc::new(CpuRenderer);
+    let gpu: Option<Arc<dyn Renderer>> = match default_renderer() {
+        r if r.as_any().is_some_and(|a| a.is::<GpuRenderer>()) => Some(r),
+        _ => None,
+    };
+    let cpu_rows = bench_session(&raw, &be, &cpu, runs)?;
+    let gpu_rows = gpu
+        .as_ref()
+        .map(|g| bench_session(&raw, &be, g, runs))
+        .transpose()?;
+
+    println!("negcli bench — {} ({} runs)", raw.display(), runs);
+    println!("  cpu: {}", cpu.name());
+    match &gpu {
+        Some(g) => println!("  gpu: {}", g.name()),
+        None => println!(
+            "  gpu: — ({})",
+            neggpu::unavailable_reason().unwrap_or_else(|| "NEG_GPU=off".to_owned())
+        ),
+    }
+    println!();
+    let w0 = rows
+        .iter()
+        .map(|r| r.0.len())
+        .chain(cpu_rows.iter().map(|r| r.0.len()))
+        .max()
+        .unwrap_or(10);
+    let w1 = rows
+        .iter()
+        .map(|r| r.1.len())
+        .chain(cpu_rows.iter().map(|r| r.1.len()))
+        .max()
+        .unwrap_or(8)
+        .max(4);
+    let w2 = gpu_rows
+        .iter()
+        .flatten()
+        .map(|r| r.1.len())
+        .max()
+        .unwrap_or(1)
+        .max(4);
+    let rule = |a: usize, b: usize, c: usize| {
+        println!(
+            "{}  {}  {}  {}",
+            "-".repeat(a),
+            "-".repeat(b),
+            "-".repeat(c),
+            "-".repeat(40)
+        )
+    };
+    println!(
+        "{:<w0$}  {:>w1$}  {:>w2$}  note",
+        "analysis stage", "time", ""
+    );
+    rule(w0, w1, w2);
+    for (s, t, n) in &rows {
+        println!("{s:<w0$}  {t:>w1$}  {:>w2$}  {n}", "");
+    }
+    println!();
+    println!(
+        "{:<w0$}  {:>w1$}  {:>w2$}  note",
+        "session stage", "cpu", "gpu"
+    );
+    rule(w0, w1, w2);
+    for (i, (s, t, n)) in cpu_rows.iter().enumerate() {
+        let (g, gn) = gpu_rows
+            .as_ref()
+            .and_then(|g| g.get(i))
+            .map_or(("—", None), |r| (r.1.as_str(), Some(r.2.as_str())));
+        // The GPU pass's note wins when it differs (its own fps / memory); the CPU's otherwise.
+        let note = match gn {
+            Some(gn) if gn != n && !gn.is_empty() => format!("{n}  ‖ gpu: {gn}"),
+            _ => n.clone(),
+        };
+        println!("{s:<w0$}  {t:>w1$}  {g:>w2$}  {note}");
+    }
+    Ok(())
+}
+
+/// One renderer's session pass: open, per-tier display renders (first = cold, then the
+/// slider-tick average), the export render, the JPEG write, resident memory. The rows come
+/// back in a fixed order so the CPU and GPU passes line up column by column.
+fn bench_session(
+    raw: &Path,
+    be: &Arc<dyn RawBackend>,
+    renderer: &Arc<dyn Renderer>,
+    runs: usize,
+) -> Result<Vec<Row>> {
+    let mut rows: Vec<Row> = Vec::new();
+    let (session, t_open) = time(|| Session::open(raw, Arc::clone(be), Arc::clone(renderer)));
     let mut session = session?;
     row(
         &mut rows,
@@ -544,7 +634,7 @@ fn cmd_bench(args: &Args) -> Result<()> {
         format!("{}×{} (retained full tier)", encoded.width, encoded.height),
     );
     let dir = std::env::temp_dir();
-    let out = dir.join("negcli-bench.jpg");
+    let out = dir.join(format!("negcli-bench-{}.jpg", std::process::id()));
     let (w, t_jpeg) = time(|| {
         Exporter::write_encoded(
             &encoded,
@@ -568,21 +658,7 @@ fn cmd_bench(args: &Args) -> Result<()> {
         human(session.bytes_resident()),
         format!("{:?}", session.stats()),
     ));
-
-    println!(
-        "negcli bench — {} ({}, {} runs)",
-        raw.display(),
-        renderer.name(),
-        runs
-    );
-    let w0 = rows.iter().map(|r| r.0.len()).max().unwrap_or(10);
-    let w1 = rows.iter().map(|r| r.1.len()).max().unwrap_or(8);
-    println!("{:<w0$}  {:>w1$}  note", "stage", "time");
-    println!("{}  {}  {}", "-".repeat(w0), "-".repeat(w1), "-".repeat(40));
-    for (s, t, n) in &rows {
-        println!("{s:<w0$}  {t:>w1$}  {n}");
-    }
-    Ok(())
+    Ok(rows)
 }
 
 type Row = (String, String, String);

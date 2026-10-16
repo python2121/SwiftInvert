@@ -14,6 +14,7 @@ workspace = true
 negkit = { workspace = true }
 negraw = { workspace = true }
 negsession = { workspace = true }
+neggpu = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }
