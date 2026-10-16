@@ -12,11 +12,14 @@ workspace = true
 [dependencies]
 negkit = { workspace = true }
 negraw = { workspace = true }
-neggpu = { workspace = true }
+# `neggpu` is deliberately NOT a dependency yet: the GPU renderer plugs in behind
+# `renderer::Renderer` from the app layer (see rust/PLAN.md §2); keeping this crate GPU-free
+# keeps its tests building without wgpu.
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 log = { workspace = true }
+rayon = { workspace = true }
 image = { workspace = true }
 tiff = { workspace = true }
 craft-cms = { workspace = true }
