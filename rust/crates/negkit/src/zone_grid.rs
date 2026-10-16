@@ -65,16 +65,21 @@ pub fn compute_with_cells(
     bytes_per_row: usize,
     cells: usize,
 ) -> Option<Grid> {
-    if width < 2 || height < 2 || cells == 0 || bytes_per_row < width * 4 {
+    // Checked geometry: these come from a caller's bitmap description (hostile by rule).
+    let row_bytes = width.checked_mul(4)?;
+    if width < 2 || height < 2 || cells == 0 || bytes_per_row < row_bytes {
         return None;
     }
     // Buffer-geometry check up front: the hot loop then reads through `get` anyway.
-    if rgba8.len() < (height - 1) * bytes_per_row + width * 4 {
+    let needed = (height - 1)
+        .checked_mul(bytes_per_row)?
+        .checked_add(row_bytes)?;
+    if rgba8.len() < needed {
         return None;
     }
 
     // Stride subsample (NegPy: step = max(1, min(h, w) // (4 * cells))).
-    let step = (width.min(height) / (4 * cells)).max(1);
+    let step = (width.min(height) / cells.checked_mul(4)?).max(1);
     let sw = width.div_ceil(step);
     let sh = height.div_ceil(step);
 
