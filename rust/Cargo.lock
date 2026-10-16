@@ -1749,9 +1749,11 @@ dependencies = [
 name = "negraw"
 version = "0.1.0"
 dependencies = [
+ "cc",
  "lightcraft-raw",
  "log",
  "negkit",
+ "pkg-config",
  "thiserror 2.0.21",
 ]
 
