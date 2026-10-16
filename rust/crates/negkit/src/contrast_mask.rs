@@ -80,8 +80,8 @@ impl Plane {
     #[inline]
     fn bilinear(&self, px: f32, py: f32) -> f32 {
         // Boundary casts: the plane dims are small (≤ 1024) and exact in f32.
-        let max_x = (self.width - 1) as f32;
-        let max_y = (self.height - 1) as f32;
+        let max_x = self.width.saturating_sub(1) as f32;
+        let max_y = self.height.saturating_sub(1) as f32;
         let lox = px.floor().clamp(0.0, max_x);
         let loy = py.floor().clamp(0.0, max_y);
         let hix = (lox + 1.0).min(max_x);
@@ -198,11 +198,14 @@ pub fn build_plane(
 /// (radius `round(4σ)`), coefficients `exp(−d²/2σ²)` normalized to sum 1 — so the parity
 /// fixture can pin the plane against cv2's own output. Empty for σ ≤ 0 or a zero radius.
 pub fn gaussian_taps(sigma: f64) -> Vec<f32> {
-    if sigma.is_nan() || sigma <= 0.0 {
+    if !sigma.is_finite() || sigma <= 0.0 {
         return Vec::new();
     }
     // `round` = Swift `.rounded()` (half away from zero); ksize is small, the cast is exact.
-    let mut ksize = (8.0 * sigma + 1.0).round().max(0.0) as usize;
+    // Capped: σ comes from a slider (≤ 6 % of a ≤ 1024-px side → ~60 px) but the fn is pub,
+    // so an absurd σ must not turn into a multi-GB allocation.
+    const MAX_KSIZE: usize = 4097;
+    let mut ksize = ((8.0 * sigma + 1.0).round().max(0.0) as usize).min(MAX_KSIZE);
     if ksize.is_multiple_of(2) {
         ksize += 1;
     }

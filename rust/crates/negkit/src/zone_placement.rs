@@ -451,7 +451,13 @@ fn bisect_decreasing(f: impl Fn(f64) -> f64, lo: f64, hi: f64, resolution: f64) 
         return (hi, f_hi > CLAMP_TOL);
     }
     let (mut lo, mut hi) = (lo, hi);
-    while hi - lo > resolution {
+    // 64 halvings exceed f64's resolution on any slider range: the loop is bounded even if a
+    // caller hands over a zero or NaN resolution.
+    for _ in 0..64 {
+        let span = hi - lo;
+        if span.is_nan() || span <= resolution {
+            break;
+        }
         let mid = 0.5 * (lo + hi);
         if f(mid) > 0.0 {
             lo = mid;

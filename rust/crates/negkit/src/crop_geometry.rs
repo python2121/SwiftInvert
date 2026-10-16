@@ -164,7 +164,10 @@ pub fn constrain(
     max_scale: f64,
 ) -> RotatedBox {
     let mut u = rotate(center, -radians);
-    let bound = [frame[0] / 2.0, frame[1] / 2.0];
+    // `f64::clamp` panics on an inverted or NaN range; a hostile frame (negative, NaN) must
+    // not — treat it as zero extent (the box collapses to the centre), like the Swift's
+    // min(max()) would on a negative bound.
+    let bound = [(frame[0] / 2.0).max(0.0), (frame[1] / 2.0).max(0.0)];
     u[0] = u[0].clamp(-bound[0], bound[0]);
     u[1] = u[1].clamp(-bound[1], bound[1]);
     let c = rotate(u, radians);

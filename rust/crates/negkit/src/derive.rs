@@ -178,7 +178,9 @@ pub fn derive_render_params(
     // curvatures scale by (1+k); the pivot shifts by k·v*/s' so the reference tone's print
     // density is unchanged (and the midtone paper S stays centered, anchored at v* too).
     if settings.overall_contrast != 0.0 {
-        let k = settings.overall_contrast * K::OVERALL_CONTRAST_MAX;
+        // Clamped to the slider's −1…+2 (a sidecar could carry −2, where k = −1 zeroes the
+        // slopes and the pivot shift divides by zero).
+        let k = settings.overall_contrast.clamp(-1.0, 2.0) * K::OVERALL_CONTRAST_MAX;
         let v_star = cl::reference_linear_value(d_min, None);
         for ch in 0..3 {
             let scaled = slopes[ch] * (1.0 + k);

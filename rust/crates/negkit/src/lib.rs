@@ -15,7 +15,7 @@
 //!
 //! Pipeline (see `rust/PLAN.md` §4 and the repository `CLAUDE.md`):
 //! decode → orient → **analyze** (CPU: [`prefilter`] → [`bounds`] → [`meters`] → [`kernel`]) →
-//! **derive** ([`derive`], µs) → render ([`reference`] on the CPU; `neggpu` on the GPU) → encode.
+//! **derive** ([`mod@derive`], µs) → render ([`mod@reference`] on the CPU; `neggpu` on the GPU) → encode.
 //!
 //! Precision: analysis and derivation run in `f64` (Swift `Double`); pixels are `f32`.
 //! Every order statistic funnels through [`stats`] (radix sort), never `.sort()` on pixel data.
