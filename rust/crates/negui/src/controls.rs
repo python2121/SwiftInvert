@@ -727,7 +727,11 @@ fn groups(
             let active = input.tool_mode == ToolMode::AnalysisRegion;
             // --- U2: tools & dialogs ---
             if small_button(ui, "▣ Crop for Analysis", enabled, active)
-                .on_hover_text("Meter only the region you draw (⇧⌘K)")
+                .on_hover_text(crate::app::with_shortcut(
+                    ui.ctx(),
+                    "Meter only the region you draw",
+                    crate::app::Command::ToggleAnalysis,
+                ))
                 .clicked()
             {
                 actions.push(SidebarAction::ToggleAnalysisTool);
@@ -784,9 +788,11 @@ fn groups(
         }
         // --- U3: darkroom ---
         if small_button(ui, "▦ Test Strip", enabled, input.test_strip_active)
-            .on_hover_text(
-                "Print the frame as a 5×5 test strip — Brightness across, Grade down (⇧T)",
-            )
+            .on_hover_text(crate::app::with_shortcut(
+                ui.ctx(),
+                "Print the frame as a 5×5 test strip — Brightness across, Grade down",
+                crate::app::Command::TestStrip,
+            ))
             .clicked()
         {
             actions.push(SidebarAction::TestStrip);
@@ -865,7 +871,11 @@ fn groups(
     ui.add_space(gap);
 
     if small_button(ui, "Export…", enabled && !input.is_exporting, false)
-        .on_hover_text("Export the selected frames (⌘E)")
+        .on_hover_text(crate::app::with_shortcut(
+            ui.ctx(),
+            "Export the selected frames",
+            crate::app::Command::Export,
+        ))
         .clicked()
     {
         actions.push(SidebarAction::Export);
@@ -936,8 +946,12 @@ fn crop_rotation_section(
         ui.horizontal(|ui| {
             let active = input.tool_mode == ToolMode::Crop;
             // --- U2: tools & dialogs ---
-            if small_button(ui, "⌗ Crop or Straighten", true, active)
-                .on_hover_text("Crop & Straighten (⌘K)")
+            if small_button(ui, "⛶ Crop or Straighten", true, active)
+                .on_hover_text(crate::app::with_shortcut(
+                    ui.ctx(),
+                    "Crop & Straighten",
+                    crate::app::Command::ToggleCrop,
+                ))
                 .clicked()
             {
                 actions.push(SidebarAction::ToggleCropTool);
@@ -990,7 +1004,11 @@ fn history_panel(
                     input.can_redo,
                     egui::Button::new(egui::RichText::new("↷").size(13.0)).frame(false),
                 )
-                .on_hover_text("Redo (⇧⌘Z)")
+                .on_hover_text(crate::app::with_shortcut(
+                    ui.ctx(),
+                    "Redo",
+                    crate::app::Command::Redo,
+                ))
                 .clicked()
             {
                 actions.push(SidebarAction::Redo);
@@ -1000,7 +1018,11 @@ fn history_panel(
                     input.can_undo,
                     egui::Button::new(egui::RichText::new("↶").size(13.0)).frame(false),
                 )
-                .on_hover_text("Undo (⌘Z)")
+                .on_hover_text(crate::app::with_shortcut(
+                    ui.ctx(),
+                    "Undo",
+                    crate::app::Command::Undo,
+                ))
                 .clicked()
             {
                 actions.push(SidebarAction::Undo);

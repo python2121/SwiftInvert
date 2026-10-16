@@ -604,7 +604,7 @@ pub fn control_bar(ui: &mut egui::Ui, input: &BarInput<'_>) -> Vec<BarAction> {
             if icon_button(ui, "rotate-ccw", 24.0, false, |p, r, c| {
                 rotate_icon(p, r, c, false)
             })
-            .on_hover_text("Rotate left (⌘[)")
+            .on_hover_text(crate::app::with_shortcut(ui.ctx(), "Rotate left", crate::app::Command::RotateLeft))
             .clicked()
             {
                 actions.push(BarAction::RotateCcw);
@@ -612,13 +612,13 @@ pub fn control_bar(ui: &mut egui::Ui, input: &BarInput<'_>) -> Vec<BarAction> {
             if icon_button(ui, "rotate-cw", 24.0, false, |p, r, c| {
                 rotate_icon(p, r, c, true)
             })
-            .on_hover_text("Rotate right (⌘])")
+            .on_hover_text(crate::app::with_shortcut(ui.ctx(), "Rotate right", crate::app::Command::RotateRight))
             .clicked()
             {
                 actions.push(BarAction::RotateCw);
             }
             if icon_button(ui, "flip", 24.0, false, flip_icon)
-                .on_hover_text("Flip horizontal (⇧⌘H)")
+                .on_hover_text(crate::app::with_shortcut(ui.ctx(), "Flip horizontal", crate::app::Command::Flip))
                 .clicked()
             {
                 actions.push(BarAction::Flip);
@@ -636,9 +636,10 @@ pub fn control_bar(ui: &mut egui::Ui, input: &BarInput<'_>) -> Vec<BarAction> {
             }
             let zones = badge(ui, "Zones", input.zones_on, true, &t);
             if zones
-                .on_hover_text(
-                    "Zone system overlay (⇧Z): Adams zones over the preview, same ruler as the densitometer",
-                )
+                .on_hover_text(format!(
+                    "Zone system overlay ({}): Adams zones over the preview, same ruler as the densitometer",
+                    crate::app::shortcut_text(ui.ctx(), crate::app::Command::ToggleZones)
+                ))
                 .clicked()
             {
                 actions.push(BarAction::ToggleZones);

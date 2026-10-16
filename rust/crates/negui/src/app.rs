@@ -282,6 +282,31 @@ fn shortcut_for(cmd: Command) -> Option<KeyboardShortcut> {
     SHORTCUTS.iter().find(|(_, c)| *c == cmd).map(|(s, _)| *s)
 }
 
+/// The key a command answers to, menu shortcuts and the key monitor's bare keys alike.
+fn key_for(cmd: Command) -> Option<KeyboardShortcut> {
+    shortcut_for(cmd).or(match cmd {
+        Command::TestStrip => Some(sc(Modifiers::SHIFT, Key::T)),
+        Command::ToggleZones => Some(sc(Modifiers::SHIFT, Key::Z)),
+        _ => None,
+    })
+}
+
+/// A shortcut in the platform's own spelling (`⇧⌘Z` on macOS, `Ctrl+Shift+Z` elsewhere), as
+/// the menus show it — for tooltips, which must not hard-code the Mac symbols.
+pub fn shortcut_text(ctx: &egui::Context, cmd: Command) -> String {
+    key_for(cmd)
+        .map(|s| ctx.format_shortcut(&s))
+        .unwrap_or_default()
+}
+
+/// `"{label} ({shortcut})"` for a tooltip.
+pub fn with_shortcut(ctx: &egui::Context, label: &str, cmd: Command) -> String {
+    match key_for(cmd) {
+        Some(s) => format!("{label} ({})", ctx.format_shortcut(&s)),
+        None => label.to_owned(),
+    }
+}
+
 /// `AppModel`'s HQ state machine (session-spec §5): the mode, whether HQ is ACTIVE, and the
 /// 350 ms upward debounce (downward swaps are instant). Pure: the caller supplies `now`.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -1368,23 +1393,21 @@ impl NegApp {
                     cmds.push(*c);
                 }
             }
+            if i.consume_key(Modifiers::NONE, Key::ArrowLeft)
+                || i.consume_key(Modifiers::NONE, Key::ArrowUp)
             {
-                if i.consume_key(Modifiers::NONE, Key::ArrowLeft)
-                    || i.consume_key(Modifiers::NONE, Key::ArrowUp)
-                {
-                    cmds.push(Command::Previous);
-                }
-                if i.consume_key(Modifiers::NONE, Key::ArrowRight)
-                    || i.consume_key(Modifiers::NONE, Key::ArrowDown)
-                {
-                    cmds.push(Command::Next);
-                }
-                if i.consume_key(Modifiers::SHIFT, Key::Z) {
-                    cmds.push(Command::ToggleZones);
-                }
-                if i.consume_key(Modifiers::SHIFT, Key::T) {
-                    cmds.push(Command::TestStrip);
-                }
+                cmds.push(Command::Previous);
+            }
+            if i.consume_key(Modifiers::NONE, Key::ArrowRight)
+                || i.consume_key(Modifiers::NONE, Key::ArrowDown)
+            {
+                cmds.push(Command::Next);
+            }
+            if i.consume_key(Modifiers::SHIFT, Key::Z) {
+                cmds.push(Command::ToggleZones);
+            }
+            if i.consume_key(Modifiers::SHIFT, Key::T) {
+                cmds.push(Command::TestStrip);
             }
         });
         cmds
@@ -1409,7 +1432,7 @@ impl NegApp {
         let item =
             |ui: &mut egui::Ui, label: &str, cmd: Command, enabled: bool, checked: bool| -> bool {
                 let mut b = egui::Button::new(if checked {
-                    format!("✓ {label}")
+                    format!("✔ {label}")
                 } else {
                     label.to_owned()
                 });
