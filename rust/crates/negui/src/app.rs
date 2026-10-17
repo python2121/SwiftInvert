@@ -172,6 +172,9 @@ pub struct AppOptions {
     /// Put the menus in the macOS menu bar instead of drawing them in the window. Ignored on
     /// other platforms; off under `--selftest` (no AppKit menu in a headless harness).
     pub native_menu: bool,
+    /// Set the UI in the operating system's own font (SF Pro, the desktop's font), falling back
+    /// to the bundled Inter; off = always Inter (the selftest, so screenshots match across machines).
+    pub system_font: bool,
 }
 
 impl Default for AppOptions {
@@ -184,6 +187,7 @@ impl Default for AppOptions {
             presenter: None,
             backend: None,
             native_menu: false,
+            system_font: true,
         }
     }
 }
@@ -527,7 +531,15 @@ struct FolderDialog {
 impl NegApp {
     /// Build the app (theme, prefs, worker threads, initial folder).
     pub fn new(cc: &eframe::CreationContext<'_>, options: AppOptions) -> Self {
-        crate::theme::install(&cc.egui_ctx);
+        let face = crate::theme::install_with(
+            &cc.egui_ctx,
+            if options.system_font {
+                crate::theme::FontChoice::System
+            } else {
+                crate::theme::FontChoice::Bundled
+            },
+        );
+        log::info!("UI font: {face}");
         let prefs: AppPrefs = if options.persist {
             cc.storage.map(AppPrefs::load).unwrap_or_default()
         } else {

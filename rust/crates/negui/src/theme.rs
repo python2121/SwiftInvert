@@ -128,9 +128,149 @@ impl Tokens {
     }
 }
 
-/// Install the default (dark) theme on `ctx`.
+/// Install the default (dark) theme on `ctx` with the BUNDLED font (Inter) — deterministic, for
+/// tests and the selftest. The app itself calls [`install_with`] with [`FontChoice::System`].
 pub fn install(ctx: &egui::Context) {
     install_tokens(ctx, Tokens::dark());
+    let _ = install_fonts(ctx, FontChoice::Bundled);
+}
+
+/// Which typeface the UI sets in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FontChoice {
+    /// The operating system's own UI font (SF Pro, the desktop's font, Segoe UI), read at
+    /// runtime; Inter when it can't be loaded.
+    System,
+    /// Inter, bundled — the same everywhere (tests, the selftest's screenshots).
+    Bundled,
+}
+
+/// The default theme with the given font; returns a description of the face in use.
+pub fn install_with(ctx: &egui::Context, font: FontChoice) -> String {
+    install_tokens(ctx, Tokens::dark());
+    install_fonts(ctx, font)
+}
+
+/// SF Pro `GRAD` axis value (400 = the font's default, 1000 = max) compensating for egui's
+/// lighter rasterization.
+const SYSTEM_FONT_GRADE: f32 = 600.0;
+
+/// SF Pro `wght` for the medium family (400 regular, 510 Medium, 590 Semibold): a slight step up
+/// for toggle labels and panel titles.
+const SYSTEM_FONT_MEDIUM_WEIGHT: f32 = 510.0;
+
+/// The medium-weight proportional family (see [`Tokens::font_medium`]).
+pub fn medium_family() -> FontFamily {
+    FontFamily::Name("medium".into())
+}
+
+/// The medium weight at `size` — the regular face where the font has no weight axis, and plain
+/// proportional before the theme's fonts are installed (egui panics on an unknown family).
+pub fn font_medium(ctx: &egui::Context, size: f32) -> FontId {
+    let family = medium_family();
+    if ctx.fonts(|f| f.definitions().families.contains_key(&family)) {
+        FontId::new(size, family)
+    } else {
+        FontId::proportional(size)
+    }
+}
+
+/// Inter Regular (SIL OFL 1.1, `rust/assets/fonts/`): the fallback UI font.
+const INTER: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
+
+/// The proportional family, in priority order: the system UI font (when chosen and found), then
+/// bundled Inter, then egui's own faces (Ubuntu Light, Noto Emoji, its emoji/icon font), then
+/// Hack at the very end — it carries the plain symbols the UI draws (`↶ ↷ ▸ ⇧`, geometric
+/// shapes) that the text faces lack, so they don't render as boxes. Monospace is untouched.
+fn install_fonts(ctx: &egui::Context, choice: FontChoice) -> String {
+    let mut fonts = egui::FontDefinitions::default();
+    let mut front: Vec<String> = Vec::new();
+    let mut medium_front: Vec<String> = Vec::new();
+    let mut description = "Inter (bundled)".to_owned();
+    if choice == FontChoice::System
+        && let Some(sys) = crate::system_font::discover()
+    {
+        let mut data = egui::FontData {
+            font: std::borrow::Cow::Owned(sys.bytes),
+            index: sys.index,
+            tweak: Default::default(),
+        };
+        // SF Pro is a variable font with an optical-size axis: pin it to text size so UI labels
+        // get the "SF Text" letterforms AppKit uses at these sizes.
+        let opsz = data
+            .variation_axes()
+            .into_iter()
+            .find(|a| a.tag == egui::epaint::text::Tag::new(b"opsz"))
+            .map(|a| 13.0f32.clamp(a.range.min, a.range.max));
+        if let Some(v) = opsz {
+            data.tweak.coords.push(b"opsz", v);
+        }
+        // egui rasterizes without CoreText's stem darkening, so the same face reads visibly
+        // lighter than in an AppKit app. SF Pro's grade axis thickens strokes WITHOUT changing
+        // advance widths (unlike `wght`), so layout is untouched. SWIFTINVERT_FONT_GRADE
+        // overrides for tuning.
+        let grade = std::env::var("SWIFTINVERT_FONT_GRADE")
+            .ok()
+            .and_then(|v| v.parse::<f32>().ok())
+            .unwrap_or(SYSTEM_FONT_GRADE);
+        if let Some(axis) = data
+            .variation_axes()
+            .into_iter()
+            .find(|a| a.tag == egui::epaint::text::Tag::new(b"GRAD"))
+        {
+            data.tweak
+                .coords
+                .push(b"GRAD", grade.clamp(axis.range.min, axis.range.max));
+        }
+        // The medium face: the same font with its weight axis raised (egui has no bold —
+        // `RichText::strong` only changes colour).
+        if data
+            .variation_axes()
+            .into_iter()
+            .any(|a| a.tag == egui::epaint::text::Tag::new(b"wght"))
+        {
+            let mut medium = data.clone();
+            medium.tweak.coords.push(b"wght", SYSTEM_FONT_MEDIUM_WEIGHT);
+            fonts
+                .font_data
+                .insert("system-ui-medium".to_owned(), std::sync::Arc::new(medium));
+            medium_front.push("system-ui-medium".to_owned());
+        }
+        fonts
+            .font_data
+            .insert("system-ui".to_owned(), std::sync::Arc::new(data));
+        front.push("system-ui".to_owned());
+        description = sys.description;
+    }
+    fonts.font_data.insert(
+        "Inter".to_owned(),
+        std::sync::Arc::new(egui::FontData::from_static(INTER)),
+    );
+    front.push("Inter".to_owned());
+    let hack = fonts
+        .families
+        .get(&FontFamily::Monospace)
+        .and_then(|f| f.first())
+        .cloned();
+    if let Some(prop) = fonts.families.get_mut(&FontFamily::Proportional) {
+        for (i, name) in front.into_iter().enumerate() {
+            prop.insert(i, name);
+        }
+        if let Some(hack) = hack
+            && !prop.contains(&hack)
+        {
+            prop.push(hack);
+        }
+    }
+    // The medium family always exists (an unknown family panics in egui): the medium face when
+    // there is one, then the whole proportional chain.
+    let mut medium_chain = medium_front;
+    if let Some(prop) = fonts.families.get(&FontFamily::Proportional) {
+        medium_chain.extend(prop.iter().cloned());
+    }
+    fonts.families.insert(medium_family(), medium_chain);
+    ctx.set_fonts(fonts);
+    description
 }
 
 /// Install `t` as the active theme: visuals for BOTH egui themes so a system light/dark follow
@@ -205,27 +345,6 @@ pub fn install_tokens(ctx: &egui::Context, t: Tokens) {
             .insert(egui::TextStyle::Heading, FontId::proportional(15.0));
         s.animation_time = 0.12;
     });
-    install_symbol_fallback(ctx);
-}
-
-/// egui's proportional family (Ubuntu Light → Noto Emoji → the emoji icon font) lacks many plain
-/// symbols the UI uses (arrows such as `↑ → ↶ ↷`, `▸`, `⇧`, geometric shapes) — they drew as
-/// boxes. The bundled monospace face (Hack) has them, so it joins the END of the proportional
-/// fallback chain: text still sets in Ubuntu Light, and only otherwise-missing symbols come
-/// from Hack.
-fn install_symbol_fallback(ctx: &egui::Context) {
-    let mut fonts = egui::FontDefinitions::default();
-    let hack = fonts
-        .families
-        .get(&FontFamily::Monospace)
-        .and_then(|f| f.first())
-        .cloned();
-    if let (Some(hack), Some(prop)) = (hack, fonts.families.get_mut(&FontFamily::Proportional))
-        && !prop.contains(&hack)
-    {
-        prop.push(hack);
-        ctx.set_fonts(fonts);
-    }
 }
 
 /// sRGB float triple → `Color32` (the spec's gradient literals are sRGB floats).

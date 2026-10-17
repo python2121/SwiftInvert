@@ -187,7 +187,7 @@ pub fn labeled_slider(
         Align2::LEFT_CENTER,
         spec.label,
         t.font(10.5),
-        text_col(false),
+        text_col(true),
     );
     let caption_w = p
         .layout_no_wrap(spec.label.to_owned(), t.font(10.5), t.text)
@@ -394,7 +394,7 @@ pub fn toggle_row(ui: &mut egui::Ui, label: &str, value: &mut bool, enabled: boo
         pos2(row.left(), row.center().y),
         Align2::LEFT_CENTER,
         label,
-        t.font(11.5),
+        crate::theme::font_medium(ui.ctx(), 12.0),
         if enabled { t.text } else { t.text_disabled },
     );
     let sw = Rect::from_min_size(
@@ -483,12 +483,7 @@ pub fn segmented(ui: &mut egui::Ui, id: &str, labels: &[&str], selected: usize) 
 /// Group box: title above an inset frame.
 fn group<R>(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     let t = Tokens::get(ui.ctx());
-    ui.label(
-        egui::RichText::new(title)
-            .size(10.5)
-            .color(t.text_secondary)
-            .strong(),
-    );
+    ui.label(egui::RichText::new(title).size(10.5).color(t.text).strong());
     egui::Frame::new()
         .fill(t.inset)
         .corner_radius(6.0)
@@ -770,7 +765,11 @@ pub fn controls_sidebar(
                     state.prefs.adjustments_collapsed = !state.prefs.adjustments_collapsed;
                     actions.push(SidebarAction::PrefsChanged);
                 }
-                ui.label(egui::RichText::new("Adjustments").size(12.5).strong());
+                ui.label(
+                    egui::RichText::new("Adjustments")
+                        .font(crate::theme::font_medium(ui.ctx(), 13.5))
+                        .strong(),
+                );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if small_button(ui, "Reset All", enabled, false)
                         .on_hover_text("Reset every adjustment to the default settings")
@@ -1084,7 +1083,11 @@ fn crop_rotation_section(
             state.prefs.crop_rotation_collapsed = !state.prefs.crop_rotation_collapsed;
             actions.push(SidebarAction::PrefsChanged);
         }
-        ui.label(egui::RichText::new("Crop & Rotation").size(12.5).strong());
+        ui.label(
+            egui::RichText::new("Crop & Rotation")
+                .font(crate::theme::font_medium(ui.ctx(), 13.5))
+                .strong(),
+        );
     });
     if state.prefs.crop_rotation_collapsed {
         return;
@@ -1157,7 +1160,11 @@ fn history_panel(
             state.prefs.history_collapsed = !state.prefs.history_collapsed;
             actions.push(SidebarAction::PrefsChanged);
         }
-        ui.label(egui::RichText::new("History").size(12.5).strong());
+        ui.label(
+            egui::RichText::new("History")
+                .font(crate::theme::font_medium(ui.ctx(), 13.5))
+                .strong(),
+        );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui
                 .add_enabled(

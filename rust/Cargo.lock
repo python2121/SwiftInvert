@@ -2191,6 +2191,7 @@ dependencies = [
  "negsession",
  "serde",
  "serde_json",
+ "skrifa",
 ]
 
 [[package]]

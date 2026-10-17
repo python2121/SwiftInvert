@@ -29,6 +29,7 @@ pub mod presenter_gpu;
 // --- end U2 ---
 #[cfg(feature = "selftest")]
 pub mod selftest;
+pub mod system_font;
 pub mod theme;
 pub mod tools;
 // --- U3: darkroom ---

@@ -111,6 +111,8 @@ fn main() -> ExitCode {
                 negui::AppOptions {
                     initial_folder: folder,
                     native_menu,
+                    // SWIFTINVERT_FONT=bundled keeps the bundled Inter instead of the system font
+                    system_font: std::env::var("SWIFTINVERT_FONT").map_or(true, |v| v != "bundled"),
                     ..Default::default()
                 },
             );
