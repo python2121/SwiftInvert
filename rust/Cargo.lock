@@ -3328,6 +3328,7 @@ dependencies = [
  "eframe",
  "egui",
  "env_logger",
+ "image",
  "log",
  "neggpu",
  "negui",

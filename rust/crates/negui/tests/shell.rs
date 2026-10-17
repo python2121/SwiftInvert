@@ -369,3 +369,160 @@ fn library_grid_cells_fill_the_width_at_every_panel_size() {
         avail += 0.5;
     }
 }
+
+/// Both bottom panels carry a drag bar on top, and dragging EITHER one resizes History
+/// (the Crop & Rotation panel keeps its fixed height and rides on top of History).
+#[test]
+fn both_drag_bars_resize_the_history_panel() {
+    use negui::controls::{SidebarInput, SidebarState, controls_sidebar};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let state = Rc::new(RefCell::new(SidebarState::default()));
+    let start_h = state.borrow().prefs.history_height;
+    let shared = Rc::clone(&state);
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(340.0, 900.0))
+        .build_ui(move |ui| {
+            let mut settings = negkit::ExposureSettings::default();
+            let input = SidebarInput {
+                has_selection: true,
+                bins: None,
+                density_range: 1.0,
+                character: None,
+                status_message: None,
+                history: None,
+                tool_mode: negsession::ToolMode::None,
+                baseline_held: false,
+                can_undo: false,
+                can_redo: false,
+                is_exporting: false,
+                test_strip_active: false,
+            };
+            let mut st = shared.borrow_mut();
+            let _ = controls_sidebar(ui, &mut st, &mut settings, input);
+        });
+    harness.run();
+
+    // drag a bar at `y` upward by `dy` points
+    let drag = |harness: &mut egui_kittest::Harness<'_>, y: f32, dy: f32| {
+        let from = egui::pos2(170.0, y);
+        harness.event(egui::Event::PointerMoved(from));
+        harness.run();
+        harness.event(egui::Event::PointerButton {
+            pos: from,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        });
+        harness.run();
+        for k in 1..=4 {
+            harness.event(egui::Event::PointerMoved(egui::pos2(
+                170.0,
+                y - dy * k as f32 / 4.0,
+            )));
+            harness.run();
+        }
+        let to = egui::pos2(170.0, y - dy);
+        harness.event(egui::Event::PointerButton {
+            pos: to,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        harness.run();
+    };
+
+    // panel geometry (the harness's root ui has an 8 pt outer margin): History = height + 7 pt
+    // bar at the bottom, Crop & Rotation = its content height + 7 above it
+    let bottom = 900.0 - 8.0;
+    let hist_top = bottom - (start_h + 7.0);
+    drag(&mut harness, hist_top + 3.5, 40.0);
+    let after_history_bar = state.borrow().prefs.history_height;
+    assert!(
+        (after_history_bar - (start_h + 40.0)).abs() < 1.0,
+        "History's own bar: {start_h} → {after_history_bar}"
+    );
+
+    let hist_top = bottom - (after_history_bar + 7.0);
+    let crop_top = hist_top - (negui::controls::crop_panel_height(&state.borrow().prefs) + 7.0);
+    drag(&mut harness, crop_top + 3.5, 30.0);
+    let after_crop_bar = state.borrow().prefs.history_height;
+    assert!(
+        (after_crop_bar - (after_history_bar + 30.0)).abs() < 1.0,
+        "the Crop & Rotation bar also grows History: {after_history_bar} → {after_crop_bar}"
+    );
+}
+
+/// At its smallest, the History panel still shows its whole header row (title, chevron,
+/// undo/redo) — only the entry list beneath gives way. The list's scroll area used to keep a
+/// 64 pt minimum that overflowed a short panel and pushed the header off the top.
+#[test]
+fn history_header_stays_visible_at_the_minimum_height() {
+    use egui_kittest::kittest::Queryable;
+    use negui::controls::{HISTORY_MIN_H, SidebarInput, SidebarState, controls_sidebar};
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    // a long history, so the list wants far more room than the panel has
+    let mut settings = negkit::ExposureSettings::default();
+    let mut history = negsession::History::new(settings.clone());
+    for k in 0..40 {
+        settings.density = 1.0 + k as f64 * 0.01;
+        history.commit(&settings);
+    }
+    let height = Rc::new(Cell::new(1.0f32));
+    let h = Rc::clone(&height);
+    let size = egui::vec2(340.0, 520.0);
+    let mut state = SidebarState::default();
+    let prefs = state.prefs.clone();
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size(size)
+        .with_pixels_per_point(2.0)
+        .build_ui(move |ui| {
+            negui::theme::install(ui.ctx()); // the app's fonts and spacing
+            state.prefs.history_height = h.get();
+            let mut s = negkit::ExposureSettings::default();
+            let input = SidebarInput {
+                has_selection: true,
+                bins: None,
+                density_range: 1.0,
+                character: None,
+                status_message: None,
+                history: Some(&history),
+                tool_mode: negsession::ToolMode::None,
+                baseline_held: false,
+                can_undo: true,
+                can_redo: false,
+                is_exporting: false,
+                test_strip_active: false,
+            };
+            let _ = controls_sidebar(ui, &mut state, &mut s, input);
+        });
+
+    // from "dragged all the way down" through the heights where the list has a sliver of room
+    let bottom = size.y - 8.0; // the harness's 8 pt margin
+    for wanted in [1.0f32, 26.0, 30.0, 40.0, 50.0, 70.0, 90.0] {
+        height.set(wanted);
+        harness.run();
+        let panel_h = wanted.max(HISTORY_MIN_H) + 7.0; // + the drag bar
+        let panel_top = bottom - panel_h;
+        for label in ["History", "↶", "↷"] {
+            let r = harness.get_by_label(label).rect();
+            assert!(
+                r.top() >= panel_top - 0.5 && r.bottom() <= bottom + 0.5,
+                "height {wanted}: {label} at {r:?} is outside the History panel [{panel_top}, {bottom}]"
+            );
+        }
+        // History keeps its reserved space: an overflowing list used to collapse it, so the Crop &
+        // Rotation panel was laid out over History and painted over its header. So Crop &
+        // Rotation (fixed height + its drag bar) must sit entirely above History: its title
+        // within the top of that span.
+        let crop_top = panel_top - (negui::controls::crop_panel_height(&prefs) + 7.0);
+        let title = harness.get_by_label("Crop & Rotation").rect();
+        assert!(
+            title.top() >= crop_top - 0.5 && title.top() <= crop_top + 24.0,
+            "height {wanted}: Crop & Rotation's title at {title:?} isn't at its panel's top {crop_top} — it slid over History (top {panel_top})"
+        );
+    }
+}

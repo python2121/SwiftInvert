@@ -292,6 +292,7 @@ pub fn library_panel(
             .and_then(|r| r.file_name())
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| "Library".to_owned());
+        ui.add_space(6.0);
         ui.add(egui::Label::new(egui::RichText::new(name).size(12.5).strong()).truncate())
             .on_hover_text(
                 lib.root
@@ -303,8 +304,9 @@ pub fn library_panel(
             ui.add(egui::Spinner::new().size(12.0));
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui
-                .add(egui::Button::new(egui::RichText::new("◧").size(15.0)).frame(false))
+            ui.add_space(6.0);
+            ui.spacing_mut().item_spacing.x = 8.0;
+            if header_icon(ui, HeaderIcon::HideLibrary)
                 .on_hover_text(crate::app::with_shortcut(
                     ui.ctx(),
                     "Hide library",
@@ -314,8 +316,7 @@ pub fn library_panel(
             {
                 actions.push(LibraryAction::ToggleLibrary);
             }
-            if ui
-                .add(egui::Button::new(egui::RichText::new("▤").size(15.0)).frame(false))
+            if header_icon(ui, HeaderIcon::OpenFolder)
                 .on_hover_text(crate::app::with_shortcut(
                     ui.ctx(),
                     "Open folder…",
@@ -434,6 +435,73 @@ fn folder_node(
 }
 
 /// The thumbnail grid of a folder's OWN files.
+/// The library header's two icon buttons, drawn in code (no font glyph carries a clear
+/// "open folder" or "sidebar" symbol across platforms).
+#[derive(Clone, Copy)]
+enum HeaderIcon {
+    OpenFolder,
+    HideLibrary,
+}
+
+/// A 24 pt frameless icon button: hover/press backdrop, the icon stroked in the secondary text
+/// colour (primary on hover).
+fn header_icon(ui: &mut egui::Ui, icon: HeaderIcon) -> egui::Response {
+    let t = Tokens::get(ui.ctx());
+    let (rect, resp) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::click());
+    if !ui.is_rect_visible(rect) {
+        return resp;
+    }
+    let p = ui.painter();
+    if resp.is_pointer_button_down_on() {
+        p.rect_filled(rect, 4.0, t.pressed);
+    } else if resp.hovered() {
+        p.rect_filled(rect, 4.0, t.hover);
+    }
+    let col = if resp.hovered() {
+        t.text
+    } else {
+        t.text_secondary
+    };
+    let stroke = Stroke::new(1.5, col);
+    // icon drawn on a 24-unit grid inside a 20 pt box, centred in the button
+    let s = 20.0 / 24.0;
+    let o = rect.center() - vec2(10.0, 10.0);
+    let at = |x: f32, y: f32| pos2(o.x + x * s, o.y + y * s);
+    match icon {
+        HeaderIcon::OpenFolder => {
+            // back panel with its tab, then the front flap tilted open
+            p.add(egui::Shape::line(
+                vec![
+                    at(5.0, 19.0),
+                    at(3.0, 19.0),
+                    at(3.0, 5.0),
+                    at(9.0, 5.0),
+                    at(11.0, 7.0),
+                    at(18.0, 7.0),
+                    at(18.0, 10.0),
+                ],
+                stroke,
+            ));
+            p.add(egui::Shape::closed_line(
+                vec![at(3.0, 19.0), at(6.5, 11.0), at(22.0, 11.0), at(18.5, 19.0)],
+                stroke,
+            ));
+        }
+        HeaderIcon::HideLibrary => {
+            // a window with its left pane (the library) shaded
+            let frame = Rect::from_min_max(at(3.0, 4.5), at(21.0, 19.5));
+            let pane = Rect::from_min_max(frame.min, pos2(at(9.0, 0.0).x, frame.max.y));
+            p.rect_filled(pane, 2.0, col.gamma_multiply(0.35));
+            p.rect_stroke(frame, 2.0, stroke, egui::StrokeKind::Middle);
+            p.line_segment(
+                [pos2(pane.max.x, frame.min.y), pos2(pane.max.x, frame.max.y)],
+                stroke,
+            );
+        }
+    }
+    resp
+}
+
 fn folder_body(
     ui: &mut egui::Ui,
     lib: &mut LibraryState,

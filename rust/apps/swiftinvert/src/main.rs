@@ -19,6 +19,38 @@ use eframe::wgpu;
 
 const APP_NAME: &str = "SwiftInvert";
 
+/// The SwiftInvert app icon — the same artwork the Swift app ships (`Assets/icon_1024.png`, also
+/// `Sources/SwiftInvert/Resources/AppIcon.png`), with macOS's standard transparent margin, so the
+/// Dock and ⌘Tab show it at the size every other app has.
+const APP_ICON_PNG: &[u8] = include_bytes!("../../../../Assets/icon_1024.png");
+
+/// The window/app icon. macOS gets the full 1024 px artwork (eframe hands it to
+/// `NSApplication.applicationIconImage`, exactly what the Swift app does at runtime); X11/Windows
+/// get a 256 px copy (window-manager icon property). On Wayland the compositor uses the
+/// `swiftinvert.desktop` entry matching the app id instead — `packaging/linux/install-desktop.sh`
+/// installs it. `None` (logged) if the PNG can't be decoded; eframe then uses its default.
+fn app_icon() -> Option<std::sync::Arc<egui::IconData>> {
+    let img = match image::load_from_memory_with_format(APP_ICON_PNG, image::ImageFormat::Png) {
+        Ok(img) => img,
+        Err(e) => {
+            log::warn!("app icon: {e}");
+            return None;
+        }
+    };
+    let img = if cfg!(target_os = "macos") {
+        img
+    } else {
+        img.resize_exact(256, 256, image::imageops::FilterType::Lanczos3)
+    };
+    let rgba = img.into_rgba8();
+    let (width, height) = rgba.dimensions();
+    Some(std::sync::Arc::new(egui::IconData {
+        rgba: rgba.into_raw(),
+        width,
+        height,
+    }))
+}
+
 fn usage() -> ExitCode {
     eprintln!(
         "usage: swiftinvert [folder]\n       swiftinvert --selftest <out.png> [folder] [--crop] [--dialogs] [--export <dir>] [--latency] [--teststrip] [--zones]"
@@ -55,11 +87,14 @@ fn main() -> ExitCode {
     }
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
-        viewport: egui::ViewportBuilder::default()
-            .with_title(APP_NAME)
-            .with_app_id("swiftinvert")
-            .with_inner_size([1440.0, 900.0])
-            .with_min_inner_size([1000.0, 700.0]),
+        viewport: egui::ViewportBuilder {
+            icon: app_icon(),
+            ..Default::default()
+        }
+        .with_title(APP_NAME)
+        .with_app_id("swiftinvert")
+        .with_inner_size([1440.0, 900.0])
+        .with_min_inner_size([1000.0, 700.0]),
         wgpu_options,
         ..Default::default()
     };
