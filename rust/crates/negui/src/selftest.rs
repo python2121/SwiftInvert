@@ -64,6 +64,9 @@ pub fn run_selftest_with(
         backend: None,
         // headless: no AppKit menu bar; the in-window bar is what the screenshots show
         native_menu: false,
+        // bundled Inter so screenshots match across machines; SWIFTINVERT_FONT=system to preview
+        // the system UI font
+        system_font: std::env::var("SWIFTINVERT_FONT").is_ok_and(|v| v == "system"),
     };
     let mut builder = egui_kittest::Harness::builder()
         .with_size(egui::vec2(SELFTEST_SIZE[0], SELFTEST_SIZE[1]))

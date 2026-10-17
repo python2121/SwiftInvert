@@ -128,9 +128,86 @@ impl Tokens {
     }
 }
 
-/// Install the default (dark) theme on `ctx`.
+/// Install the default (dark) theme on `ctx` with the BUNDLED font (Inter) — deterministic, for
+/// tests and the selftest. The app itself calls [`install_with`] with [`FontChoice::System`].
 pub fn install(ctx: &egui::Context) {
     install_tokens(ctx, Tokens::dark());
+    let _ = install_fonts(ctx, FontChoice::Bundled);
+}
+
+/// Which typeface the UI sets in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FontChoice {
+    /// The operating system's own UI font (SF Pro, the desktop's font, Segoe UI), read at
+    /// runtime; Inter when it can't be loaded.
+    System,
+    /// Inter, bundled — the same everywhere (tests, the selftest's screenshots).
+    Bundled,
+}
+
+/// The default theme with the given font; returns a description of the face in use.
+pub fn install_with(ctx: &egui::Context, font: FontChoice) -> String {
+    install_tokens(ctx, Tokens::dark());
+    install_fonts(ctx, font)
+}
+
+/// Inter Regular (SIL OFL 1.1, `rust/assets/fonts/`): the fallback UI font.
+const INTER: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
+
+/// The proportional family, in priority order: the system UI font (when chosen and found), then
+/// bundled Inter, then egui's own faces (Ubuntu Light, Noto Emoji, its emoji/icon font), then
+/// Hack at the very end — it carries the plain symbols the UI draws (`↶ ↷ ▸ ⇧`, geometric
+/// shapes) that the text faces lack, so they don't render as boxes. Monospace is untouched.
+fn install_fonts(ctx: &egui::Context, choice: FontChoice) -> String {
+    let mut fonts = egui::FontDefinitions::default();
+    let mut front: Vec<String> = Vec::new();
+    let mut description = "Inter (bundled)".to_owned();
+    if choice == FontChoice::System
+        && let Some(sys) = crate::system_font::discover()
+    {
+        let mut data = egui::FontData {
+            font: std::borrow::Cow::Owned(sys.bytes),
+            index: sys.index,
+            tweak: Default::default(),
+        };
+        // SF Pro is a variable font with an optical-size axis: pin it to text size so UI labels
+        // get the "SF Text" letterforms AppKit uses at these sizes.
+        let opsz = data
+            .variation_axes()
+            .into_iter()
+            .find(|a| a.tag == egui::epaint::text::Tag::new(b"opsz"))
+            .map(|a| 13.0f32.clamp(a.range.min, a.range.max));
+        if let Some(v) = opsz {
+            data.tweak.coords.push(b"opsz", v);
+        }
+        fonts
+            .font_data
+            .insert("system-ui".to_owned(), std::sync::Arc::new(data));
+        front.push("system-ui".to_owned());
+        description = sys.description;
+    }
+    fonts.font_data.insert(
+        "Inter".to_owned(),
+        std::sync::Arc::new(egui::FontData::from_static(INTER)),
+    );
+    front.push("Inter".to_owned());
+    let hack = fonts
+        .families
+        .get(&FontFamily::Monospace)
+        .and_then(|f| f.first())
+        .cloned();
+    if let Some(prop) = fonts.families.get_mut(&FontFamily::Proportional) {
+        for (i, name) in front.into_iter().enumerate() {
+            prop.insert(i, name);
+        }
+        if let Some(hack) = hack
+            && !prop.contains(&hack)
+        {
+            prop.push(hack);
+        }
+    }
+    ctx.set_fonts(fonts);
+    description
 }
 
 /// Install `t` as the active theme: visuals for BOTH egui themes so a system light/dark follow
@@ -205,27 +282,6 @@ pub fn install_tokens(ctx: &egui::Context, t: Tokens) {
             .insert(egui::TextStyle::Heading, FontId::proportional(15.0));
         s.animation_time = 0.12;
     });
-    install_symbol_fallback(ctx);
-}
-
-/// egui's proportional family (Ubuntu Light → Noto Emoji → the emoji icon font) lacks many plain
-/// symbols the UI uses (arrows such as `↑ → ↶ ↷`, `▸`, `⇧`, geometric shapes) — they drew as
-/// boxes. The bundled monospace face (Hack) has them, so it joins the END of the proportional
-/// fallback chain: text still sets in Ubuntu Light, and only otherwise-missing symbols come
-/// from Hack.
-fn install_symbol_fallback(ctx: &egui::Context) {
-    let mut fonts = egui::FontDefinitions::default();
-    let hack = fonts
-        .families
-        .get(&FontFamily::Monospace)
-        .and_then(|f| f.first())
-        .cloned();
-    if let (Some(hack), Some(prop)) = (hack, fonts.families.get_mut(&FontFamily::Proportional))
-        && !prop.contains(&hack)
-    {
-        prop.push(hack);
-        ctx.set_fonts(fonts);
-    }
 }
 
 /// sRGB float triple → `Color32` (the spec's gradient literals are sRGB floats).

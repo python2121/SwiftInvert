@@ -25,6 +25,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
 image = { workspace = true }
+# Validates a system font before egui sees it (epaint panics on a font it can't parse). Same version
+# epaint itself uses, so nothing is built twice.
+skrifa = "=0.44.0"
 # The headless screenshot harness behind `selftest` (`swiftinvert --selftest out.png [folder]`):
 # the whole app rendered offscreen through egui-wgpu — how the shell is verified without a window.
 egui_kittest = { workspace = true, features = ["wgpu", "eframe"], optional = true }
