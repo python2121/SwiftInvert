@@ -735,14 +735,7 @@ pub fn controls_sidebar(
     // Crop & Rotation (bottom, fixed)
     egui::Panel::bottom(ui.id().with("crop-panel"))
         .resizable(false)
-        .exact_size(
-            grip_h
-                + if state.prefs.crop_rotation_collapsed {
-                    28.0
-                } else {
-                    126.0
-                },
-        )
+        .exact_size(grip_h + crop_panel_height(&state.prefs))
         .frame(egui::Frame::new().fill(t.chrome).inner_margin(panel_margin))
         .show(ui, |ui| {
             let (dy, done) = resize_grip(ui, "crop-grip");
@@ -1061,6 +1054,18 @@ pub fn negative_character_row(
     }
 }
 
+/// Height of the Crop & Rotation panel's content (without its drag bar): fixed per state —
+/// collapsed, open, open with the grid-type picker (shown only while grid lines are on).
+pub fn crop_panel_height(prefs: &SidebarPrefs) -> f32 {
+    if prefs.crop_rotation_collapsed {
+        28.0
+    } else if prefs.show_grid_lines {
+        126.0
+    } else {
+        98.0
+    }
+}
+
 fn crop_rotation_section(
     ui: &mut egui::Ui,
     state: &mut SidebarState,
@@ -1111,6 +1116,10 @@ fn crop_rotation_section(
         if toggle_row(ui, "Show grid lines", &mut show, true) {
             state.prefs.show_grid_lines = show;
             actions.push(SidebarAction::PrefsChanged);
+        }
+        // the grid type only matters while grid lines are shown
+        if !state.prefs.show_grid_lines {
+            return;
         }
         let labels: Vec<&str> = GridLineType::ALL.iter().map(|g| g.label()).collect();
         let sel = GridLineType::ALL

@@ -434,7 +434,7 @@ fn both_drag_bars_resize_the_history_panel() {
     };
 
     // panel geometry (the harness's root ui has an 8 pt outer margin): History = height + 7 pt
-    // bar at the bottom, Crop & Rotation = 126 + 7 above it
+    // bar at the bottom, Crop & Rotation = its content height + 7 above it
     let bottom = 900.0 - 8.0;
     let hist_top = bottom - (start_h + 7.0);
     drag(&mut harness, hist_top + 3.5, 40.0);
@@ -445,7 +445,7 @@ fn both_drag_bars_resize_the_history_panel() {
     );
 
     let hist_top = bottom - (after_history_bar + 7.0);
-    let crop_top = hist_top - (126.0 + 7.0);
+    let crop_top = hist_top - (negui::controls::crop_panel_height(&state.borrow().prefs) + 7.0);
     drag(&mut harness, crop_top + 3.5, 30.0);
     let after_crop_bar = state.borrow().prefs.history_height;
     assert!(
