@@ -483,12 +483,7 @@ pub fn segmented(ui: &mut egui::Ui, id: &str, labels: &[&str], selected: usize) 
 /// Group box: title above an inset frame.
 fn group<R>(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     let t = Tokens::get(ui.ctx());
-    ui.label(
-        egui::RichText::new(title)
-            .size(10.5)
-            .color(t.text_secondary)
-            .strong(),
-    );
+    ui.label(egui::RichText::new(title).size(10.5).color(t.text).strong());
     egui::Frame::new()
         .fill(t.inset)
         .corner_radius(6.0)

@@ -151,6 +151,10 @@ pub fn install_with(ctx: &egui::Context, font: FontChoice) -> String {
     install_fonts(ctx, font)
 }
 
+/// SF Pro `GRAD` axis value (400 = the font's default, 1000 = max) compensating for egui's
+/// lighter rasterization.
+const SYSTEM_FONT_GRADE: f32 = 600.0;
+
 /// Inter Regular (SIL OFL 1.1, `rust/assets/fonts/`): the fallback UI font.
 const INTER: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
 
@@ -179,6 +183,23 @@ fn install_fonts(ctx: &egui::Context, choice: FontChoice) -> String {
             .map(|a| 13.0f32.clamp(a.range.min, a.range.max));
         if let Some(v) = opsz {
             data.tweak.coords.push(b"opsz", v);
+        }
+        // egui rasterizes without CoreText's stem darkening, so the same face reads visibly
+        // lighter than in an AppKit app. SF Pro's grade axis thickens strokes WITHOUT changing
+        // advance widths (unlike `wght`), so layout is untouched. SWIFTINVERT_FONT_GRADE
+        // overrides for tuning.
+        let grade = std::env::var("SWIFTINVERT_FONT_GRADE")
+            .ok()
+            .and_then(|v| v.parse::<f32>().ok())
+            .unwrap_or(SYSTEM_FONT_GRADE);
+        if let Some(axis) = data
+            .variation_axes()
+            .into_iter()
+            .find(|a| a.tag == egui::epaint::text::Tag::new(b"GRAD"))
+        {
+            data.tweak
+                .coords
+                .push(b"GRAD", grade.clamp(axis.range.min, axis.range.max));
         }
         fonts
             .font_data
