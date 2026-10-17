@@ -706,9 +706,9 @@ pub fn controls_sidebar(
 
     // History panel (bottom, resizable) — drawn first so the central content gets the rest.
     let hist_h = if state.prefs.history_collapsed {
-        26.0
+        HISTORY_MIN_H
     } else {
-        state.prefs.history_height.clamp(40.0, 600.0)
+        state.prefs.history_height.clamp(HISTORY_MIN_H, 600.0)
     };
     // Both bottom panels carry a drag strip on top; either one resizes History (the Crop &
     // Rotation panel keeps its fixed height and rides on top of History).
@@ -749,7 +749,8 @@ pub fn controls_sidebar(
             state.prefs.history_collapsed = false;
         }
         if !state.prefs.history_collapsed {
-            state.prefs.history_height = (state.prefs.history_height - grip_dy).clamp(40.0, 600.0);
+            state.prefs.history_height =
+                (state.prefs.history_height - grip_dy).clamp(HISTORY_MIN_H, 600.0);
         }
     }
     if grip_done {
@@ -1054,6 +1055,10 @@ pub fn negative_character_row(
     }
 }
 
+/// The smallest History content height: exactly its header row (chevron, title, undo/redo) plus
+/// the panel's bottom margin — the header is never clipped, only the list beneath it.
+pub const HISTORY_MIN_H: f32 = 26.0;
+
 /// Height of the Crop & Rotation panel's content (without its drag bar): fixed per state —
 /// collapsed, open, open with the grid-type picker (shown only while grid lines are on).
 pub fn crop_panel_height(prefs: &SidebarPrefs) -> f32 {
@@ -1192,9 +1197,18 @@ fn history_panel(
         return;
     };
     let current = history.index();
+    // The header row above is the panel's floor and always stays visible; only the list gives
+    // way. A ScrollArea keeps a 64 pt minimum by default, which overflowed a short panel and
+    // pushed the header off the top — let it shrink to whatever room is left, even none.
+    let room = ui.available_height();
+    if room < 1.0 {
+        return;
+    }
     egui::ScrollArea::vertical()
         .id_salt("history-scroll")
         .auto_shrink([false, false])
+        .min_scrolled_height(0.0)
+        .max_height(room)
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 1.0;
             for (i, entry) in history.entries().iter().enumerate().rev() {
