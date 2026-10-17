@@ -155,6 +155,26 @@ pub fn install_with(ctx: &egui::Context, font: FontChoice) -> String {
 /// lighter rasterization.
 const SYSTEM_FONT_GRADE: f32 = 600.0;
 
+/// SF Pro `wght` for the medium family (400 regular, 510 Medium, 590 Semibold): a slight step up
+/// for toggle labels and panel titles.
+const SYSTEM_FONT_MEDIUM_WEIGHT: f32 = 510.0;
+
+/// The medium-weight proportional family (see [`Tokens::font_medium`]).
+pub fn medium_family() -> FontFamily {
+    FontFamily::Name("medium".into())
+}
+
+/// The medium weight at `size` — the regular face where the font has no weight axis, and plain
+/// proportional before the theme's fonts are installed (egui panics on an unknown family).
+pub fn font_medium(ctx: &egui::Context, size: f32) -> FontId {
+    let family = medium_family();
+    if ctx.fonts(|f| f.definitions().families.contains_key(&family)) {
+        FontId::new(size, family)
+    } else {
+        FontId::proportional(size)
+    }
+}
+
 /// Inter Regular (SIL OFL 1.1, `rust/assets/fonts/`): the fallback UI font.
 const INTER: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
 
@@ -165,6 +185,7 @@ const INTER: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
 fn install_fonts(ctx: &egui::Context, choice: FontChoice) -> String {
     let mut fonts = egui::FontDefinitions::default();
     let mut front: Vec<String> = Vec::new();
+    let mut medium_front: Vec<String> = Vec::new();
     let mut description = "Inter (bundled)".to_owned();
     if choice == FontChoice::System
         && let Some(sys) = crate::system_font::discover()
@@ -201,6 +222,20 @@ fn install_fonts(ctx: &egui::Context, choice: FontChoice) -> String {
                 .coords
                 .push(b"GRAD", grade.clamp(axis.range.min, axis.range.max));
         }
+        // The medium face: the same font with its weight axis raised (egui has no bold —
+        // `RichText::strong` only changes colour).
+        if data
+            .variation_axes()
+            .into_iter()
+            .any(|a| a.tag == egui::epaint::text::Tag::new(b"wght"))
+        {
+            let mut medium = data.clone();
+            medium.tweak.coords.push(b"wght", SYSTEM_FONT_MEDIUM_WEIGHT);
+            fonts
+                .font_data
+                .insert("system-ui-medium".to_owned(), std::sync::Arc::new(medium));
+            medium_front.push("system-ui-medium".to_owned());
+        }
         fonts
             .font_data
             .insert("system-ui".to_owned(), std::sync::Arc::new(data));
@@ -227,6 +262,13 @@ fn install_fonts(ctx: &egui::Context, choice: FontChoice) -> String {
             prop.push(hack);
         }
     }
+    // The medium family always exists (an unknown family panics in egui): the medium face when
+    // there is one, then the whole proportional chain.
+    let mut medium_chain = medium_front;
+    if let Some(prop) = fonts.families.get(&FontFamily::Proportional) {
+        medium_chain.extend(prop.iter().cloned());
+    }
+    fonts.families.insert(medium_family(), medium_chain);
     ctx.set_fonts(fonts);
     description
 }
