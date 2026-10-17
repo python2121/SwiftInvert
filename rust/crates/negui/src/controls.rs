@@ -299,7 +299,11 @@ pub fn labeled_slider(
                 pos2(x0.min(x1), groove.top()),
                 pos2(x0.max(x1), groove.bottom()),
             );
-            p.rect_filled(fill, 2.0, t.accent.gamma_multiply(0.75 * groove_alpha));
+            // the value fill only while the control is live: a disabled slider (e.g. Mask Spacer
+            // with Contrast Mask at 0) shows just the grey groove
+            if enabled {
+                p.rect_filled(fill, 2.0, t.accent.gamma_multiply(0.75));
+            }
         }
         Track::Gradient3(stops) => paint_gradient(
             p,
@@ -584,16 +588,19 @@ fn wide_button(
     let total = icon_g.size().x + gap + text_g.size().x;
     let x0 = rect.center().x - total / 2.0;
     let cy = rect.center().y;
-    painter.galley(
-        egui::pos2(x0, cy - icon_g.size().y / 2.0),
-        icon_g.clone(),
-        text_col,
-    );
-    painter.galley(
-        egui::pos2(x0 + icon_g.size().x + gap, cy - text_g.size().y / 2.0),
-        text_g,
-        text_col,
-    );
+    let text_pos = egui::pos2(x0 + icon_g.size().x + gap, cy - text_g.size().y / 2.0);
+    // Optical alignment: centre the icon's INK on the middle of the label's capital letters.
+    // Centring layout boxes put symbols from the fallback font (◉, ▦) visibly low, because their
+    // glyphs sit low inside a box sized for that font's own ascent/descent.
+    let cap = painter.layout_no_wrap("H".to_owned(), egui::FontId::proportional(11.5), text_col);
+    let cap_mid = text_pos.y + cap.mesh_bounds.center().y;
+    let icon_y = if icon_g.mesh_bounds.is_finite() && icon_g.mesh_bounds.height() > 0.0 {
+        cap_mid - icon_g.mesh_bounds.center().y
+    } else {
+        cy - icon_g.size().y / 2.0
+    };
+    painter.galley(egui::pos2(x0, icon_y), icon_g.clone(), text_col);
+    painter.galley(text_pos, text_g, text_col);
     resp
 }
 
