@@ -345,6 +345,10 @@ impl eframe::App for NativeMenuApp {
         self.app.save(storage);
     }
 
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        self.app.raw_input_hook(ctx, raw_input);
+    }
+
     fn on_exit(&mut self) {
         self.app.on_exit();
     }
