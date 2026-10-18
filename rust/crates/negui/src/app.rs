@@ -2385,6 +2385,20 @@ impl eframe::App for NegApp {
         }
     }
 
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        if let Some(area) = self.loupe.last_area {
+            crate::loupe::wheel_notches_to_zoom(
+                raw_input,
+                area,
+                ctx.input(|i| i.pointer.latest_pos()),
+                |p| {
+                    ctx.layer_id_at(p)
+                        .is_none_or(|l| l.order == egui::Order::Background)
+                },
+            );
+        }
+    }
+
     fn on_exit(&mut self) {
         self.flush_save();
         // A running batch stops after the frame in progress instead of finishing the batch

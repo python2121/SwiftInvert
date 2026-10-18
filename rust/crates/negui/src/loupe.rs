@@ -139,6 +139,9 @@ pub struct LoupeState {
     pub tier: RenderTier,
     /// The ideal frame rect of the last layout (screen points) — the densitometer's base.
     pub last_frame_rect: Option<Rect>,
+    /// The canvas area of the last layout: where a mouse-wheel notch means "zoom"
+    /// ([`wheel_notches_to_zoom`]).
+    pub last_area: Option<Rect>,
 }
 
 impl Default for LoupeState {
@@ -157,6 +160,7 @@ impl Default for LoupeState {
             frame_size: (0, 0),
             tier: RenderTier::Proxy,
             last_frame_rect: None,
+            last_area: None,
         }
     }
 }
@@ -219,6 +223,48 @@ pub fn content_rect(frame: Rect, window: &NormalizedRect) -> Rect {
     )
 }
 
+/// Rewrite mouse-wheel NOTCHES over the canvas into zoom events, before egui sees them.
+///
+/// A wheel reports lines (`MouseWheelUnit::Line`/`Page`). egui never treats those as smooth: it
+/// parks the scroll and releases it over the following frames as `smooth_scroll_delta`. The
+/// canvas turned each notch into an anchored zoom on its own frame, but the parked scroll still
+/// trickled out afterwards — where it is indistinguishable from a trackpad pan — so every notch
+/// zoomed and then slid the view (Linux mouse wheels; the Mac's trackpad never showed it). As a
+/// zoom event (`Event::Zoom`, what a pinch already produces) the notch leaves no scroll behind,
+/// and the canvas's pinch path anchors it at the pointer exactly as before.
+///
+/// Only line/page wheel events with a vertical component, without ⌘/Ctrl (egui's own zoom
+/// chord), whose pointer is over `canvas` and on the canvas's own layer (`on_canvas_layer` —
+/// not under a floating window or menu) are rewritten. Trackpad scrolling (`Point` units) keeps
+/// panning, momentum included; wheels over the library or sidebar keep scrolling them.
+pub fn wheel_notches_to_zoom(
+    raw: &mut egui::RawInput,
+    canvas: Rect,
+    mut pointer: Option<Pos2>,
+    on_canvas_layer: impl Fn(Pos2) -> bool,
+) {
+    for event in &mut raw.events {
+        match event {
+            egui::Event::PointerMoved(p) => pointer = Some(*p),
+            egui::Event::PointerGone => pointer = None,
+            egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Line | egui::MouseWheelUnit::Page,
+                delta,
+                modifiers,
+                ..
+            } if !(modifiers.command || modifiers.ctrl) && delta.y != 0.0 => {
+                if let Some(p) = pointer
+                    && canvas.contains(p)
+                    && on_canvas_layer(p)
+                {
+                    *event = egui::Event::Zoom(WHEEL_NOTCH_FACTOR.powf(delta.y));
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Pan clamped so the frame never leaves the area empty (Qt: pan clamped to the overflow).
 pub fn clamp_pan(pan: Vec2, frame_size: Vec2, area: Rect) -> Vec2 {
     let over = ((frame_size - area.size()) / 2.0).max(Vec2::ZERO);
@@ -278,6 +324,7 @@ pub fn canvas(
 ) -> Vec<CanvasAction> {
     let t = Tokens::get(ui.ctx());
     let mut actions = Vec::new();
+    state.last_area = Some(area);
     let painter = ui.painter_at(area);
     painter.rect_filled(area, 0.0, input.canvas_color.color());
     let resp = ui.interact(area, ui.id().with("canvas"), Sense::click_and_drag());
