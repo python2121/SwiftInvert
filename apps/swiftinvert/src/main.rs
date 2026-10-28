@@ -24,12 +24,21 @@ const APP_NAME: &str = "SwiftInvert";
 /// Dock and ⌘Tab show it at the size every other app has.
 const APP_ICON_PNG: &[u8] = include_bytes!("../../../assets/icon_1024.png");
 
-/// The window/app icon. macOS gets the full 1024 px artwork (eframe hands it to
-/// `NSApplication.applicationIconImage`, exactly what the Swift app does at runtime); X11/Windows
-/// get a 256 px copy (window-manager icon property). On Wayland the compositor uses the
-/// `swiftinvert.desktop` entry matching the app id instead — `packaging/linux/install-desktop.sh`
-/// installs it. `None` (logged) if the PNG can't be decoded; eframe then uses its default.
+/// The window/app icon. Inside a macOS `.app` this is the EMPTY icon: LaunchServices draws the
+/// bundle's `AppIcon.icns` in the Dock and ⌘Tab, and a runtime `applicationIconImage` would only
+/// duplicate it — AppKit caches that image at 2× in a deep-colour format, 32 MB for the 1024 px
+/// artwork. (`None` is NOT "no icon" to eframe: it substitutes the egui logo, which then covers
+/// the bundle icon. An empty `IconData` is the documented "set nothing" — eframe's icon setter
+/// skips it and egui-winit passes no window icon.) Unbundled on macOS (`cargo run`) a 512 px copy
+/// is handed over instead (the Dock and ⌘Tab draw at most ~128 pt = 256 px on Retina, so 512 is
+/// still 2× oversampled); X11/Windows get 256 px (window-manager icon property). On Wayland the
+/// compositor uses the `swiftinvert.desktop` entry matching the app id instead —
+/// `packaging/linux/install-desktop.sh` installs it. `None` (logged) if the PNG can't be decoded.
 fn app_icon() -> Option<std::sync::Arc<egui::IconData>> {
+    #[cfg(target_os = "macos")]
+    if runs_from_bundle() {
+        return Some(std::sync::Arc::new(egui::IconData::default()));
+    }
     let img = match image::load_from_memory_with_format(APP_ICON_PNG, image::ImageFormat::Png) {
         Ok(img) => img,
         Err(e) => {
@@ -37,11 +46,8 @@ fn app_icon() -> Option<std::sync::Arc<egui::IconData>> {
             return None;
         }
     };
-    let img = if cfg!(target_os = "macos") {
-        img
-    } else {
-        img.resize_exact(256, 256, image::imageops::FilterType::Lanczos3)
-    };
+    let side = if cfg!(target_os = "macos") { 512 } else { 256 };
+    let img = img.resize_exact(side, side, image::imageops::FilterType::Lanczos3);
     let rgba = img.into_rgba8();
     let (width, height) = rgba.dimensions();
     Some(std::sync::Arc::new(egui::IconData {
@@ -49,6 +55,16 @@ fn app_icon() -> Option<std::sync::Arc<egui::IconData>> {
         width,
         height,
     }))
+}
+
+/// True when the executable runs from inside a macOS `.app` bundle (`…/Contents/MacOS/<bin>`),
+/// where the bundle's `AppIcon.icns` already owns the Dock and ⌘Tab icon.
+#[cfg(target_os = "macos")]
+fn runs_from_bundle() -> bool {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.ends_with("Contents/MacOS")))
+        .unwrap_or(false)
 }
 
 fn usage() -> ExitCode {
