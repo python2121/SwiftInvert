@@ -3,1118 +3,406 @@
 Guidance for Claude Code when working in this repository.
 
 > **Keep this file current.** When a change alters something documented here —
-> pipeline stage order, the uniform contract, an analysis default, the sidecar
+> pipeline stage order, a data contract, an analysis default, the sidecar
 > format, or the build/test commands — update the relevant section in the same
 > change. After adding an adjustment control, re-check the "Adding a new
-> adjustment control" checklist and the uniform layout table.
+> adjustment control" checklist.
 
-SwiftInvert is a native macOS film-negative conversion app (SwiftUI + Metal),
-a deliberate ~10% rewrite of the Python app **NegPy**
+SwiftInvert is a desktop film-negative conversion app written in **Rust +
+egui (eframe) + wgpu**, a deliberate ~10% rewrite of the Python app **NegPy**
 (`~/Documents/code/NegPy`), which remains the numerical reference
 implementation. Scope: library grid, C-41 conversion with NegPy-quality auto
-metering, exposure/color controls, histogram, export. Camera RAW only; no
-B&W/E6, papers, crosstalk, retouch, or toning.
+metering, exposure/color controls, histogram, darkroom read-outs, export.
+Camera RAW only; no B&W/E6, papers, crosstalk, retouch, or toning.
 
-## Rust port (branch `rust-port`, 2026-10-15/16)
-
-A full rewrite in Rust + egui + wgpu lives under `rust/` (Cargo workspace) and
-is the intended successor of both UI shells. **Start from `rust/HANDOFF.md`**
-(state, merge order, remaining work, Mac procedure, cleanup) and
-`rust/PLAN.md` (decisions, architecture, data contracts, test map, progress).
-Layering: `negkit` (pure math, port of NegativeKit — 267 fixture tests) →
-`negraw` (pure-Rust RAW via lightcraft-raw, LibRaw FFI behind `--features
-libraw`) → `neggpu` (ONE WGSL module for Metal/Vulkan/DX12, pinned to the CPU
-reference) → `negsession` (the ImageSession cache tower, sidecars, profiles,
-history, export) → `negui` + `apps/swiftinvert` (eframe shell) and
-`apps/negcli`. Sidecars are byte-compatible with this app's.
-
-```bash
-cd rust && ./ci.sh                      # fmt + clippy -D warnings + cargo test --workspace
-NEG_RAW_SAMPLE=/path/file.CR3 cargo test --workspace     # also runs the real-RAW smoke tests
-cargo run --release -p negcli -- bench /path/file.CR3   # CPU vs GPU bench table
-cargo run --release -p swiftinvert -- --selftest out.png <folder> --crop --teststrip --zones --latency
-NEG_GPU=off …                           # force the CPU reference renderer
-```
-
-Decisions that differ from this Swift tree, all recorded in `rust/PLAN.md` §0:
-the decoder defaults to LibRaw's white level (`2^bits − 1`) and image area;
-the CPU reference applies tone controls in the GPU's PARALLEL form (the Swift
-`ReferenceCurve` is sequential — a latent CPU/GPU divergence here, up to
-0.025 D with shadow + highlight controls combined); the Rust port follows the
-Mac app wherever it differs from the Qt bridge. A real bug in THIS tree was
-found by the port's reviews: `Sources/VulkanRenderKit/Shaders/NegPipeline.comp`
-lines 341-343 decompose the 1-D gid into (x, y) in float32, which mis-samples
-the Contrast Mask plane on the right edge of renders above 2^24 pixels (a 24 MP
-export with the mask on). Fix: integer `gid / outW`, `gid % outW`.
+**History.** The app was first written in Swift + SwiftUI + Metal (plus a
+Qt/Vulkan shell for Linux); the Rust port (branch `rust-port`, 2026-10-15/16)
+reached parity and became the product. On **2026-10-28** the Swift and Qt trees
+were removed and the Cargo workspace moved from `rust/` to the repository root.
+The last commit carrying the Swift sources is **`e20fcc2`**: `PLAN.md`,
+`docs/*.md` and many module headers cite Swift files by `file:line`, and every
+such citation still resolves with `git show e20fcc2:Sources/…`. The name stays
+"SwiftInvert" (binary `swiftinvert`); renaming is the user's call.
 
 ## Commands
 
 ```bash
-swift build                 # debug build
-swift run -c release SwiftInvert   # the app (release: debug decode is ~10x slower)
-make test                   # Swift Testing suite — MUST use make, not bare `swift test`
-swift build -c release && .build/release/negcli   # headless CLI (decode/thumb/render/bench/meter)
-make app                    # package self-contained dist/SwiftInvert.app (bundles Homebrew dylibs)
-make install                # copy the bundle to /Applications
+./ci.sh                                   # the quality gate: cargo fmt --check, clippy -D warnings, cargo test --workspace
+NEG_RAW_SAMPLE=/path/file.CR3 ./ci.sh     # …plus the real-RAW smoke tests (skipped and announced otherwise)
+make test                                 # = ./ci.sh;  make build / run / release / app / install (see the Makefile)
+cargo run --release -p swiftinvert [folder]                 # the app from source
+cargo run --release -p negcli -- bench /path/file.CR3       # CPU vs GPU bench table
+cargo run --release -p negcli -- render <raw> [--sidecar P | --stock] [--set key=value]... -o out.png
+cargo run --release -p swiftinvert -- --selftest out.png <folder> --crop --dialogs --teststrip --zones --latency --export <dir>
+NEG_GPU=off …                             # force the CPU reference renderer
+./build.sh                                # macOS: package dist/SwiftInvert.app (= make app); make install → /Applications
+packaging/linux/install-desktop.sh        # Linux: user-scope .desktop entry + icon
 
 # Regenerate parity fixtures (after deliberate NegPy kernel/constant changes):
 cd ~/Documents/code/NegPy && uv run python ~/Documents/code/SwiftInvert/scripts/dump_fixtures.py
-
-# Linux (SteamOS, Qt-frontend port in progress) — inside the `swiftdev`
-# distrobox (Ubuntu 24.04; Swift via swiftly; apt libraw-dev/liblcms2-dev/
-# libvulkan-dev/glslang-tools/mesa-vulkan-drivers):
-distrobox enter swiftdev -- bash -lc 'cd ~/Documents/code/SwiftInvert && swift build && swift test'
-# Bare `swift test` DOES work on Linux (Swift Testing ships in the toolchain).
-# negcli builds there too (decode/thumb/render/bench/meter, Vulkan render).
-
-# Regenerate the checked-in SPIR-V after editing NegPipeline.comp:
-./scripts/compile_vulkan_shaders.sh   # (in the box, or `brew install glslang`
-# on the Mac — but macOS bash 3.2 lacks `declare -A`; run its six lines directly)
-
-# Qt shell (in the box; apt qt6-base-dev qt6-base-dev-tools cmake ninja-build):
-swift build -c release --product SwiftInvertCore
-cmake -S qt -B qt/build -G Ninja && cmake --build qt/build
-qt/build/swiftinvert-qt [folder]         # GUI (distrobox passes the display)
-QT_QPA_PLATFORM=offscreen qt/build/swiftinvert-qt --selftest out.png <folder>
 ```
 
-**Linux port status:** `Package.swift` computes its target list — the
-portable core (CLibRaw, NegativeKit, RawDecodeKit, NegativeKitTests),
-negcli, and the Linux GPU stack (CVulkan, VulkanRenderKit + its tests)
-build on Linux; MetalRenderKit, SwiftInvert and their test targets are
-gated behind `#if os(macOS)` (the manifest runs on the build host, which
-is exactly the right question for Metal/SwiftUI; per-branch declarations
-because SwiftPM validates conditional dependency names even when false).
-Apple-only APIs in the core sit behind `#if canImport(Accelerate)` with
-scalar fallbacks (`Prefilter.logImage`, `RawDecoder`'s u16→float) and
-`#if canImport(simd)` with stdlib-backed shims
-(`NegativeKit/SimdShims.swift` — the full parity suite passes on Linux
-against the same fixtures, so the fallbacks are pinned).
+- `--selftest` is the headless way to verify UI changes: it renders a real
+  negative offscreen (egui_kittest) and writes screenshots; it never writes
+  sidecars. It rides the default-on `selftest` cargo feature of
+  `apps/swiftinvert` (`--no-default-features` leaves the harness out).
+- GPU tests skip with a printed reason when no adapter is visible. On this
+  Mac they run on Metal. `NEG_GPU_BACKEND=vulkan|metal|dx12|off` overrides
+  the backend choice.
+- Sample negatives on this machine: `~/Pictures/Negative Test 1/*.CR3`.
+- Toolchain: Rust 1.95+ (edition 2024). No C toolchain is needed by default;
+  `--features libraw` on `negraw` compiles a C shim against `<libraw/libraw.h>`
+  (Homebrew `libraw` on the Mac) and is the byte-exact-vs-NegPy decode
+  reference, not the product path.
+- Other env knobs: `SWIFTINVERT_NO_NATIVE_MENU=1` (macOS: in-window egui menu
+  instead of the system menu bar), `SWIFTINVERT_FONT` / `SWIFTINVERT_FONT_GRADE`
+  (UI font override).
 
-**VulkanRenderKit** is the Linux mirror of MetalRenderKit's chain:
-- `Shaders/NegPipeline.comp` — GLSL port of NegPipeline.metal, all six
-  kernels (`normalize`/`print_curve`/`color_pop`/`histogram`/`encode_f`/
-  `encode_u8`) in one file selected by `-DKERNEL_*`; the checked-in `.spv`
-  binaries are the build inputs (`scripts/compile_vulkan_shaders.sh`
-  regenerates — rerun + commit them with ANY `.comp` edit).
-  **Contrast Mask is live on the Linux GPU** (2026-08-22, closing the Mac
-  port's pending half): the plane rides an SSBO at `print_curve`'s
-  binding 3 — its own 4-binding descriptor layout, with a 4-byte dummy
-  bound when the mask is off (Vulkan requires every declared binding
-  bound even though the `maskScale.w` gate means it's never read) — and
-  the host fills `maskDims.zw` with the RENDER dims before upload (the
-  GLSL maps its 1-D gid to (x, y) through them; a flat SSBO has no size
-  to query, where the Metal mirror asks its output texture). `maskPlane:`
-  rides render/renderDisplay(+into) as an uploaded `MaskBuffer`; the
-  bridge `Session` caches plane+upload keyed (geometry, spacer, analysis
-  identity) and the export path builds its own from the proxy-scale
-  printed frame (the what-you-see invariant); Qt carries the slider pair
-  (spacer disabled at mask 0, like the Mac); `contrastMaskMatchesCPU`
-  pins GPU vs CPU at the Mac's tight gate (mean<1e-3, max<0.02)
-  including a 3× render-size ≠ plane-size case.
-- SSBOs of interleaved RGB floats (RGBImage's own layout — upload/readback
-  are memcpys), 1-D dispatch, std140 uniform blocks that are byte-identical
-  to the shared `ShaderTypes.swift` (a SYMLINK into MetalRenderKit — one
-  source of truth for uniform packing; `VulkanLayoutTests` pins offsets).
-- **Memory discipline (learned at 3.9 s/frame):** readback targets
-  (encoded float, display u8, histogram) MUST be `hostReadback: true` —
-  HOST_CACHED system RAM. Everything else sits in DEVICE_LOCAL|HOST_VISIBLE
-  (BAR), which the CPU must never read: BAR is write-combined and uncached
-  reads are ~1000× slower. `DeviceBuffer` holds the context strongly so
-  the VkDevice outlives every buffer (teardown order crashed otherwise).
-- `VulkanParityTests` verify GPU vs the CPU `ReferenceCurve` chain at the
-  Mac suite's gates (mean<0.01, max<0.04) across every control group —
-  chaining the Vulkan renderer to the NegPy fixtures through the CPU
-  reference. `NEGCLI_VK_CPU=1` forces llvmpipe where no GPU is visible.
-- Measured on the Steam Machine (RADV NAVI33) at 1536px: **1.7 ms/frame
-  (~590 fps) renderDisplay incl. readback**; 24 MP export render 0.39 s.
-  The CPU `ReferenceCurve` chain (~509 ms/frame) remains the no-GPU
-  fallback in negcli.
-
-negcli's Linux TIFF output is ImageIO-free (`negcli/TIFF16.swift`,
-baseline TIFF with the ICC profile embedded via tag 34675 —
-`negcli/ICCProfiles.swift`, NegPy's CC0 `sRGB-v4`/`AdobeCompat-v4` blobs
-as Swift byte literals, regenerated by `scripts/embed_icc.py`; tagging is
-separable from converting, so files are self-describing now while the
-littleCMS-based display/export CONVERSION path is still to come,
-converging with NegPy's own stack).
-
-**The Qt shell** (`qt/`, Linux only) is deliberately thin: all pipeline
-semantics live in Swift behind **CoreBridge**
-(`Sources/CoreBridge/CoreBridge.swift` → `libSwiftInvertCore.so`, C ABI
-mirrored in `qt/swiftinvert_core.h` — keep the two in sync). Bridge
-contract: sessions are int64 handles (`si_open` = preview decode + analyze
-+ GPU upload; ~1 s, off the UI thread), settings travel as SIDECAR-FORMAT
-JSON (missing keys = defaults, so the frontend never re-implements
-fields — `si_default_settings` seeds the sliders), every returned buffer
-is malloc'd/`si_free`'d, `si_render` returns rgba8 via Vulkan
-renderDisplay (~2–5 ms) and takes an `uncropped` flag that widens what is
-RENDERED without touching what is METERED (see Phase B),
-`si_thumbnail` returns the embedded camera JPEG
-(Qt decodes it). `qt/main.cpp` (Widgets + CMake) is folder browsing, a
-fit-to-window canvas, controls editing the settings JSON with latest-wins
-async renders, and a `--selftest <png>` mode that renders + screenshots
-offscreen (`QT_QPA_PLATFORM=offscreen`) — the headless way to verify UI
-changes.
-
-Shell feature state (Phase A, 2026-08-08):
-- **Controls mirror `ControlsSidebar` exactly** — same sections, ranges,
-  defaults and direction conventions (Brightness = 2 − density, right =
-  brighter), per-control reset-⨯ + double-click reset, Separation Damping
-  disabled at printSaturation 1, Mask Spacer disabled at contrastMask 0,
-  mixer/grading band pickers, and the
-  GradientSlider color tracks (grading Temp/Tint/R↔C/G↔M/B↔Y static;
-  mixer Hue/Saturation restyled per band — the Mac sections' exact color
-  literals, stylesheet gradients on the groove). When the Mac sidebar
-  gains a control, add it to `makeControlsPanel` with the same spec.
-- **Histogram** from the render's 4×256 bins (`si_render`'s out-param),
-  drawn with HistogramView's shape-only rule (peak-normalize, fixed
-  log1p compression 100000).
-- **Sidecars** round-trip with the Mac: `si_sidecar_load/save` implement
-  SidecarStore's exact naming + `{version, settings}` payload (bridge
-  decode→encode canonicalizes); Qt debounces saves 1 s, flushes on
-  file-switch/close, and merges loaded keys over defaults.
-- **sRGB display transform**: `si_render(srgb_display=1)` →
-  `renderDisplay(srgbDisplay:)` → flags bit of the (now 8-byte) push
-  constants; `encode_u8` decodes the Adobe TRC, gamut-matrixes to sRGB
-  and applies the piecewise OETF after the levels remap. Float/export
-  paths and the Mac semantics untouched; `srgbDisplayFlagMatchesCPUTransform`
-  pins the transform. Proper ICC (lcms2) lands with export.
-- **View Original** hold renders stock settings ("{}").
-- `si_session_info` feeds the negative-character row (density range,
-  label, cast confidence).
-
-Phase B (2026-08-08) — geometry + canvas interactions:
-- The bridge `Session` is a miniature ImageSession cache tower with the
-  SAME semantics: orientation baked into pixels; analysis on the
-  ORIENTATION-ONLY image (straighten never re-meters) scoped by
-  crop/analysis rects; render source = oriented(+fineRotation, inscribed)
-  THEN cropped — so cropRect is normalized on the fine-rotated frame.
-  All tiers keyed; slider drags rebuild nothing.
-- Qt tools show the frame OUTSIDE the crop, and that rides
-  `si_render`'s **`uncropped` flag**, never a settings substitution:
-  widening the render must not widen the METER (deleting `cropRect` from
-  the JSON did both, so entering Crop re-metered the whole frame —
-  rebate included — and the conversion shifted on entry and back on
-  Apply; ported from NegPy `19823af7`, 2026-09-12). The Mac has always
-  been right here because `uncropped:` is an `ImageSession.render`
-  parameter. So: the CROP tool renders uncropped, fine rotation live
-  (the drawn box IS the stored rect, straighten slider ±45°; the box
-  lives in the canvas until Apply, Cancel/Escape restores the entry
-  snapshot); the ANALYSIS tool renders uncropped AND substitutes
-  fineRotation 0 — a TRUE substitution, since its rect is normalized on
-  the orientation-only frame and the meter ignores fine rotation by
-  invariant (analysisRectFineRotation written as 0). Known gap, both
-  platforms: with Contrast Mask on, a tool's widened render still
-  rebuilds the plane from the uncropped frame (the kernels map the plane
-  over the frame they render, so a crop-sized plane would stretch) —
-  UPSTREAM.md's 2026-09-12 item 2 fixes it by giving the plane its own
-  coverage rect.
-- Zoom/pan on the canvas (wheel to cursor, drag pan, double-click
-  fit↔100%); rotate L/R (Ctrl+[/]) and flip (Ctrl+Shift+H) via toolbar.
-- Per-file session history (undo Ctrl+Z / redo / click-to-jump list at
-  the sidebar bottom): slider drags commit one entry on release,
-  programmatic sets and toggles commit immediately, entries hold full
-  settings JSON, redo tail truncates, capped at 100.
-- `--selftest` now also captures `<base>_crop.png` in crop mode.
-
-Phase C (2026-08-08) — export:
-- Bridge `si_export_render` (RGBA8 for the frontend's JPEG encode) and
-  `si_export_tiff` (16-bit baseline TIFF written by the core, ICC-tagged
-  with the requested colorspace's profile since 2026-08-17):
-  full-resolution best-demosaic decode + the same orientation → fine
-  rotation → crop chain, but analysis from the PREVIEW-SIZED proxy — the
-  what-you-see invariant, matching the Mac's exportRender-shares-prepare.
-  Options JSON `{"colorspace":"srgb"|"adobe","maxLongEdge":N}`; the sRGB
-  leg runs in-kernel (`encode_f` honors the same flags bit as the display
-  kernel; `render(srgbEncode:)`), resize on the encoded output via
-  `downsampled` (Mac order). `negcli/TIFF16.swift` AND
-  `negcli/ICCProfiles.swift` are symlinked into CoreBridge (one writer,
-  two targets); the Qt JPEG leg sets the matching `QColorSpace` on the
-  wrapped QImage so the JPEG handler embeds Qt's own profile.
-- Qt: Export… (Ctrl+E) dialog mirroring ExportSheet — JPEG (quality,
-  default 92) / TIFF-16, sRGB (default) / Adobe, resize long edge
-  (default on, 3000), next-to-source or chosen folder, sticky via
-  QSettings; batch over the library multi-selection, each frame using its
-  own sidecar (current frame flushed first); Mac naming (same basename,
-  .jpg/.tiff, overwrite).
-HQ display tiers (2026-08-08): `si_render` takes `tier` 0/1/2 —
-proxy ≤1536 / medium / full. The bridge Session mirrors the Mac's scheme:
-the preview decode is kept at NATIVE size and downsampled to the proxy in
-the Session (the medium tier is that free buffer, dropped over the 20 MP
-budget, i.e. X-Trans full-size previews); full decodes lazily on first
-request and stays for the session. Analysis ALWAYS runs on the proxy —
-tier switches can never move the conversion. Per-tier oriented + source
-caches make threshold crossings instant. Qt: HQ Off/Auto/On toolbar
-cycle (Ctrl+Shift+P, Auto default = medium at ≥2× canvas zoom, the Mac's
-hqAutoZoomThreshold); tools pin the proxy; status bar names the tier.
-Also: wheel events on sliders are swallowed and forwarded to the
-controls scroll area — the wheel never changes a slider value.
-The watched folder is sticky (QSettings `libraryFolder`, the Mac's
-UserDefault equivalent): reopened on argument-less launch, saved on
-every interactive open, never written by `--selftest`.
-**Frame handoff is zero-allocation** (the big-buffer discipline applied
-to the C ABI): `si_render_into` writes straight from the GPU-mapped
-readback into caller-owned memory (returns -1 + dims when the buffer is
-too small — resize and retry, the measured source stays cached); Qt
-double-buffers two persistent QByteArrays and hands the canvas a QImage
-WRAPPING the front one, so only the front is ever painted and only the
-back is ever written. Adjustment costs on the NAVI33 (histogram + sRGB
-included): proxy 2.1 ms (~470 fps), medium 14 ms (~71 fps), full 55 ms
-(~18 fps) — vs 34/131 ms through the malloc-per-frame `si_render`, which
-remains for simple consumers.
-
-Canvas control bar + library recursion (2026-08-08): the Mac's
-under-canvas control bar is ported — rotate ⟲/⟳, flip, the HQ badge
-(off = faint chip / auto = accent tint / on = filled accent, cycling on
-click or Ctrl+Shift+P) and the three canvas-color swatches
-(gray/very-dark/black, sticky via QSettings); rotate/flip/HQ left the
-top toolbar for it (their shortcuts stayed window-level). Zones + the
-densitometer read-out join the bar when those features are ported. The
-filmstrip is a COLLAPSIBLE FOLDER TREE (QTreeWidget — the Mac
-LibraryView's VSCode-style sidebar): scan follows AppModel.buildTree's
-rules (depth ≤ 8, hidden skipped, natural sort, a folder's own files
-before its subfolders, RAW-less branches pruned), folder rows show
-"name — N" and toggle on single click, collapse state persists per root
-(QSettings), and ←/→ navigation walks the depth-first file order (the
-Mac's flatten) skipping folder rows. Thumbnails build
-QImage on the worker but QPixmap/QIcon ONLY on the GUI thread (QPixmap
-off-thread aborts at teardown), guarded by an alive flag.
-
-Interactive histogram (2026-08-08): double-click the sidebar histogram →
-`qt/levelswindow.cpp`, the Mac InteractiveHistogram ported whole: R/G/B
-picker, per-channel/all resets, linear peak-normalized plot with inactive
-channels dimmed, drag = grab-near-anchor-or-plant (inverse remap so you
-grab what you SEE; gap 0.01, tolerance 0.015, clamp 0.02, max 8 — the Mac
-constants), outputs clamped between neighbours, ✕ strip below the plot,
-live re-binning from every render, history labels per channel. The
-inverse remap is re-expressed in C++ (the kernel stays the rendering
-source of truth).
-
-- Still missing (Phase D+): test strip, densitometer/zones, the
-  littleCMS display/export CONVERSION path (exports are ICC-TAGGED
-  already — verified 2026-08-22 on negcli and si_export_tiff output,
-  tag 34675 carrying the 480-byte v4 profiles).
-
-**Toolchain constraints (this machine has Command Line Tools, no Xcode):**
-- No XCTest and Testing.framework lives outside default search paths → tests
-  use Swift Testing with the framework/rpath flags encoded in the `Makefile`.
-  Bare `swift test` fails with "no such module 'Testing'". Since CLT 27.0
-  (Swift 6.4, `swiftbuild` backend) the Makefile also passes
-  `-plugin-path …/plugins/testing`: without it the `@Test`/`@Suite` macro
-  plugin resolves only intermittently ("plugin for module 'TestingMacros'
-  not found" on a random test target).
-- **Never use `@State`; use `@ViewState`**
-  (`Sources/SwiftInvert/ViewState.swift`). Since the macOS 27 SDK, `@State`
-  is a macro backed by `libSwiftUIMacros.dylib`, which ships only inside
-  Xcode — under the CLT it fails with "plugin for module 'SwiftUIMacros'
-  not found" plus a cascade of "'self' is immutable" / "cannot find '$foo'"
-  noise. `@ViewState` wraps the still-present `State<Value>` struct and
-  behaves like the classic wrapper (`$binding` works; in a custom `init`
-  write `_field = ViewState(wrappedValue:)` instead of
-  `State(initialValue:)`). The Makefile's `check-state` target (a
-  prerequisite of build/test/run/release) rejects any `@State` in
-  `Sources/`, so a machine that happens to have Xcode can't reintroduce
-  it. `@Binding`, `@Bindable`, `@Environment`, `@AppStorage` etc. are
-  unchanged. Do NOT pin `SDKROOT` to the 26.5 SDK instead — it works until
-  a CLT update prunes the old SDK. Also `import Combine` explicitly where
-  `onReceive`/`Timer.publish` are used; Swift 6.4 warns when Combine is
-  only reached through SwiftUI. Reference implementation:
-  `~/Documents/code/claude-status`.
-- No build-time `metal` compiler → shaders are compiled **at runtime** from
-  `Sources/MetalRenderKit/Shaders/NegPipeline.metal` (a bundled `.copy`
-  resource) via `MTLDevice.makeLibrary(source:)`.
-- LibRaw comes from Homebrew (`brew install libraw`), linked dynamically via
-  the `CLibRaw` systemLibrary target. LGPL-2.1. **On macOS the manifest
-  does NOT consult pkg-config**: Homebrew's `libraw_r.pc` carries
-  `-Xpreprocessor -fopenmp`, which SwiftPM refuses to forward and warns
-  about on every build ("prohibited flag(s)"). `Package.swift` instead
-  passes `-Xcc -I$HOMEBREW_PREFIX/include` (on RawDecodeKit AND every
-  target that transitively imports it — explicit-modules builds rebuild
-  the CLibRaw clang module per importer) and `-L$HOMEBREW_PREFIX/lib`; the
-  modulemap's `link "raw_r"` picks the library. The prefix comes from
-  `HOMEBREW_PREFIX`, else `/opt/homebrew` or `/usr/local`. Linux does NOT
-  consult pkg-config either (since 2026-09-18): apt's `libraw_r.pc` carries
-  a bare `-fopenmp` in its Libs line, which earned the same warning twice
-  per build; the shim's `<libraw/libraw.h>` resolves from `/usr/include`
-  and `libraw_r.so` carries its own lcms2/stdc++/gomp NEEDED entries, so
-  the modulemap's `link "raw_r"` alone is the whole link.
-- Deployment target is **macOS 26** (`platforms: [.macOS("26.0")]` — the
-  string form because `.v26` needs tools-version 6.2, which the Linux
-  toolchain may lack; `Packaging/Info.plist` mirrors it). It was 14, but
-  the Homebrew dylibs the bundle ships are built for 26, so the lower
-  number only bought ld's "built for newer version" warning per link.
-- The swiftbuild backend (SwiftPM default since Swift 6.4) hands ld two
-  Xcode-shaped paths that don't exist under the CLT —
-  `/Library/Developer/CommandLineTools/Developer/Library/Frameworks` and
-  `…/CommandLineTools/Developer/usr/lib` — producing "search path … not
-  found" per link. Harmless; silenced once by creating them (root-owned
-  tree): `sudo mkdir -p /Library/Developer/CommandLineTools/Developer/Library/Frameworks /Library/Developer/CommandLineTools/Developer/usr/lib`.
-  Re-run after a CLT reinstall if the warnings return. The deprecated
-  `--build-system native` doesn't emit them but is going away.
-- If the repo directory is ever moved/renamed: `rm -rf .build` (the module
-  cache embeds absolute paths).
-
-## Module graph
+## Repository map
 
 ```
-SwiftInvert (app)  ──►  MetalRenderKit ──► NegativeKit
-       │                     │
-       └──►  RawDecodeKit ───┴──► NegativeKit
-                  │
-                  └──► CLibRaw (Homebrew libraw_r)
-negcli ──► RawDecodeKit + NegativeKit + MetalRenderKit
+Cargo.toml / Cargo.lock      workspace (resolver 3; default members = crates/* + negcli)
+ci.sh                        the quality gate
+Makefile, build.sh           cargo wrappers + macOS .app packaging (packaging/macos/Info.plist)
+crates/negkit                L1 pure math — port of NegativeKit (NegPy's kernel). No io/gpu/ui.
+crates/negraw                L2 RAW → RgbImage. lcraw (lightcraft-raw, default) | libraw (FFI feature)
+crates/neggpu                L3 wgpu compute: ONE WGSL module, uniform packing, histogram, readback
+crates/negsession            L4 engine: cache tower, sidecars, profiles, history, export, library scan
+crates/negui                 L5 egui shell: library, loupe, controls table, tools, dialogs, darkroom UI
+apps/swiftinvert             the desktop binary (eframe + platform glue)
+apps/negcli                  headless driver: decode / thumb / render / meter / bench / export
+fixtures/                    NegPy-dumped parity fixtures (scripts/dump_fixtures.py)
+assets/                      app icon (+ .icns), screenshot, bundled Inter font (ATTRIBUTION.md)
+packaging/{macos,linux}      Info.plist; desktop-entry installer
+docs/controls-spec.md        the sidebar/window/library spec the UI was ported from (cites Swift file:line)
+docs/session-spec.md         the engine semantics spec: caching keys, invariants, state machines, formats
+PLAN.md                      decisions (§0 — don't relitigate), architecture, data contracts, test map, progress
+HANDOFF.md                   state at the end of the port, known gaps, review protocol
+UPSTREAM.md                  NegPy review log (last reviewed commit; port/skip decisions)
+TODO.md                      feature candidates
+scripts/                     dump_fixtures.py (NegPy → fixtures), generate_icon.swift (icon artwork; standalone CoreGraphics script)
+.claude/skills/negpy-review  the upstream-review skill
 ```
 
-- **NegativeKit** — pure Swift math, no UI/Metal/IO. The port of NegPy's
-  conversion kernel. Only Foundation/simd/Accelerate.
-- **MetalRenderKit** — the GPU render chain + `ColorIO` (CGImage/color-space
-  conversion, used by export).
-- **RawDecodeKit** — LibRaw wrapper + embedded-thumbnail extraction.
-- **SwiftInvert** — SwiftUI app (`AppModel`, `ImageSession`, views).
-- **negcli** — headless driver; `bench` measures slider-latency and analysis;
-  `meter` prints the darkroom read-outs (negative character + spot-densitometer
-  probes) for a real RAW, which is how the read-out math gets exercised on
-  actual scans (the fixtures can't cover a hover).
+Layering rules (PLAN §1): nothing below `negui` imports egui/eframe/winit/rfd;
+nothing below `neggpu` imports wgpu; `negkit` builds for wasm32 with
+`--no-default-features`. Every crate root denies `unwrap`/`expect`/`panic`/
+`todo`/`unreachable` in production code (tests may); `unsafe_code` is forbidden
+workspace-wide except `negraw`'s FFI module under the `libraw` feature.
+Input-derived numbers (file sizes, sidecar values, JSON) are hostile: clamp,
+check, index through `get()`.
 
 ## The image pipeline
 
 End-to-end: **decode → orient → analyze (CPU) → derive params (CPU, µs) →
-render (GPU) → display/export**. Slider changes re-run ONLY derive+render
-(~5 ms at preview size). Analysis re-runs only when its inputs change.
+render (GPU) → display/export**. Slider changes re-run ONLY derive+render.
+Analysis re-runs only when its keyed inputs change. The math is specified
+formula-by-formula in PLAN §3–§4 and the module headers (each cites the NegPy
+commit it mirrors); what follows is the map and the invariants.
 
-### 1. RAW decode (`RawDecodeKit/RawDecoder.swift`)
+### 1. RAW decode (`negraw`)
 
-LibRaw parameters mirror NegPy's rawpy decode exactly (verified byte-identical
-against rawpy on real files — a rawpy comparison must now pass
-`adjust_maximum_thr=0` explicitly): `gamma=(1,1)`, `no_auto_bright`,
-`adjust_maximum_thr=0` (pin the u16 scale to the camera white level; the 0.75
-default rescales to the frame's own brightest pixel once it nears clipping —
-NegPy 2a6cb22), `output_bps=16`,
-`output_color=RAW` (sensor-native, **no camera color matrix**), unity WB
-(`user_mul=(1,1,1,1)`, `use_camera_wb=0`), `user_flip=0`. Output is scene-linear
-`RGBImage` (interleaved RGB float32 in [0,1], `u16/65535` via vDSP).
+Output is scene-linear, sensor-native camera RGB (`RgbImage`: interleaved
+f32, row-major, nominally [0,1]): **unity white balance, no camera matrix**,
+black-subtracted, white-normalized with LibRaw's `maximum = 2^bits − 1`
+(NOT lightcraft's highlight-linearity white — 1.44× brighter on an EOS R100),
+LibRaw's image area (no default crop), EXIF orientation baked
+(`applying_flip`, dcraw codes 3=180°, 5=90°CCW, 6=90°CW). Highlight
+reconstruction off; no lens corrections.
 
-- **Preview path**: `half_size=1` + linear demosaic (`user_qual=0`) — except
-  X-Trans sensors (`idata.filters == 9`), where half_size aliases the 6×6 CFA;
-  they decode full and downsample. Preview is capped at 1536 px long edge —
-unless HQ preview is engaged, when the display render runs on the cached
-full-resolution decode (`ImageSession.hqSourceTexture`; analysis stays on
-the proxy, matching export).
-  **`AppModel.HQMode`** (canvas-bar badge cycles off → auto → on, ⇧⌘P, View
-  menu picker; session-only — a persisted `.on` would make every launch pay
-  full-res costs): **`.auto` is the default** and stays on the proxy until
-  the canvas is magnified to `hqAutoZoomThreshold` (**2×**). The proxy stays
-  on screen through any swap, so it reads as sharpening rather than a reload,
-  and dropping back below is instant off the warm tower.
-  **Three source tiers** (`ImageSession.RenderTier`, resolved by
-  `AppModel.renderTier(mode:active:)`; analysis ALWAYS runs on the 1536px
-  proxy, so switching tiers can never move the conversion):
-  `.proxy` 1536px · `.mediumIfFree` · `.full`.
-  The **medium tier** is the buffer the PREVIEW decode already produced and
-  used to discard — 3012×2010 on a 24MP Bayer body, 4× the proxy's pixels
-  for 0 ms and ~73 MB. `prepare()` therefore decodes at native preview size
-  and downsamples to 1536 itself rather than asking the decoder to cap
-  (`basePreview` is still ONE downsample from that buffer, so the analysis
-  input is byte-identical). Retained only under
-  `mediumTierPixelBudget` (20 MP): an X-Trans preview decodes full-size, and
-  those bodies get no medium tier — `.mediumIfFree` falls through to `.full`,
-  i.e. today's behaviour. **`.auto` uses the medium tier and so never
-  triggers a decode** (instant, but the half-size linear demosaic — more
-  resolution, not export colour); **`.on` uses `.full`** and is the
-  export-truth answer, paying the ~500–700 ms decode. `DisplayTier` holds the
-  base/oriented/texture bookkeeping once and is instantiated per tier. `zoom == 1` is
-  fit-to-window, so a "proxy is out of real pixels" threshold would fire at
-  rest on any Retina display and make auto indistinguishable from on; 2×
-  keeps the trigger a property of the gesture, not the window size.
-  Resolution is the pure `HQMode.resolve` (tested without a pipeline):
-  suppressed with no selection and while the test strip or zone placement
-  owns the canvas (both are proxy-renders, and an HQ badge over them would
-  lie — this replaces the old boolean's explicit force-off); auto (not on)
-  is also suppressed in Crop & Straighten, which pins the canvas to fit
-  regardless of zoom. Baseline hold is deliberately NOT suppressed: a
-  compare must show both states at the same resolution. `render(retainHQ:)`
-  keeps the tier alive across proxy renders in auto/on so zooming out and
-  back doesn't re-pay the ~700 ms decode; it is freed on `.off`, and
-  `releaseHQ()` still strips it from every session the LRU isn't showing.
-  Zoom itself stays DetailView `@State` and is reported to
-  `AppModel.canvasZoom`, whose didSet acts only on a threshold CROSSING.
-  **Tier-swap stability** — the two tiers must put the same content on the
-  same pixel, or the picture nudges when HQ arrives (and `scaleEffect`
-  multiplies any error by the zoom, i.e. worst exactly when the swap fires).
-  `pixelROI` truncates and `fineRotated` floors on each tier's own grid, so
-  a 1536px and a 6024px render of one setting genuinely cover different
-  windows, and the proxy was additionally WARPED. Three layers:
-  1. **Lay out from `RenderOutput.displayAspect`** (`CropGeometry
-     .displayAspect`: continuous frame → inscribed → crop, never a pixel
-     count) — bitmap ratios differ up to 0.2% between tiers.
-  2. **Place each bitmap at the window it really covers**
-     (`RenderOutput.contentWindow` → DetailView's `contentSize`/
-     `contentOffset`), instead of stretching both to fill. Both tiers then
-     resolve to the same affine frame→screen map, so the crop ROI landing on
-     a different pixel in each is corrected EXACTLY rather than merely
-     shrunk. **`contentWindow` must measure a tier's bitmap against ITS OWN
-     frame** (`orientedFrameSize(of:)`) — using the proxy's frame for the HQ
-     bitmap yields a window ~3.9× the ideal rect. The probe normalizes by
-     the image's frame, not `window`. (An earlier layer that re-derived the
-     HQ crop window from the proxy's was removed once this landed: it only
-     shrank the error, and this removes it.)
-  3. **`RGBImage.downsampled` is a real area filter.** Integer box
-     boundaries (`Int(ox·s)`) give boxes of varying width whose centres
-     drift from the ideal grid — 0.97 source px at the preview's 1.96 ratio,
-     sliding smoothly across the frame. That is a low-frequency geometric
-     WARP of the proxy, so no rigid correction could fix it; it read as
-     local misalignment (~1.5 pt at 4× zoom) against the true full-res tier.
-     Now separable fractional-weight taps (`areaTaps`), which is cv2's
-     INTER_AREA — matching NegPy's preview resize
-     (`services/rendering/image_processor.py`) in kernel, not just intent.
-     This MOVED the default look slightly (it feeds analysis): probes shift
-     ~0.05 D, one test frame crossed a zone boundary. Separable keeps it
-     free (prepare ~17 ms, unchanged; the naive 2-D form cost 28.8 ms).
-  `DisplayAspectTests` pins tier-equality of the final screen position and
-  `ImagePipelineSeamTests` pins the filter's uniform sample phase; both
-  deliberately keep cases asserting the OLD behaviours really did drift, so
-  the equality tests can't go vacuous.
-- **Full path** (export): LibRaw default (best) demosaic, full resolution.
-- EXIF orientation baked in Swift afterwards (`applyingFlip`, dcraw codes:
-  3=180°, 5=90°CCW, 6=90°CW). C struct's flexible array member must be read
-  via byte offset (`MemoryLayout.offset(of: \.data)`) — `withUnsafePointer(to:
-  pointee.data)` copies to a misaligned temporary and traps.
-- **User orientation** (`settings.rotation` 0/90/180/270 CW +
-  `flipHorizontal`) is baked into pixels right after decode
-  (`RGBImage.oriented`), so analysis, display-space rects, rendering and
-  export all share one coordinate space with zero mapping code.
+- **Preview**: 2×2 binned linear develop for Bayer (= LibRaw `half_size`);
+  X-Trans bins 3×3 when it can, else full demosaic + downsample. The preview
+  is kept at native binned size and the Session downsamples it to the
+  **1536 px proxy** (that native buffer IS the medium HQ tier, retained under
+  a 20 MP budget — X-Trans bodies get no medium tier and fall through to full).
+- **Full** (export / HQ on): AHD for Bayer, the X-Trans method for X-Trans.
+- Backends implement `RawBackend` (`decode_preview`, `decode_full`,
+  `thumbnail` = embedded JPEG bytes, `probe`). The parity fixtures start at the
+  linear image, so the suite is decode-independent.
+- **User orientation** (`rotation` 0/90/180/270 CW + `flipHorizontal`) is
+  baked into pixels right after decode (`RgbImage::oriented`), so analysis,
+  display-space rects, rendering and export share one coordinate space.
 
-### 2. Analysis (`NegativeKit`, CPU, on the ≤1536px preview)
+### 2. Analysis (`negkit`, CPU, on the ≤1536 px proxy)
 
 **Fine-rotation invariant:** analysis runs on the orientation-only image
-(90° steps + flip — `ImageSession.meterPreview`), never the fine-rotated
-one: the inscribed auto-crop changes with the straighten angle, and
-re-metering it would drift the conversion as the user rotates (it also
-made the 0° straighten base's look differ from the committed re-bake).
-Rendering/export still bake the angle; `exportRender` shares `prepare()`,
-so preview and export agree.
+(90° steps + flip), never the fine-rotated one — the inscribed auto-crop
+changes with the straighten angle and re-metering it would drift the
+conversion as the user rotates. Rendering/export still bake the angle.
+**Analysis ALWAYS runs on the proxy**, so HQ tier switches can never move the
+conversion and export matches the screen (the what-you-see invariant).
 
-Two stages, both offset-independent since the 2125a34 port
-(`ExposureKernel.prepare` ≈17 ms once per image/crop; `finalize` ≈7 ms,
-cached with it — white/black-point drags re-run NO analysis at all; the
-offsets fold into `finalBounds` at derive time only). Both were ~5.5× slower
-until `Stats.sortedAscending` moved off `vDSP_vsort` to `RadixSort`
-(prepare 120 → 21 ms, finalize 45 → 7 ms): sorting was ~70% of analysis and
-vDSP was the slowest option measured (21.6 ms/252k Floats vs 15.8 for
-`Array.sorted()` and 1.9 for radix). **Every order statistic funnels through
-that one function**, so keep new percentile/median code going through
-`Stats` rather than calling `.sort()` directly:
+Two stages, both offset-independent (white/black-point drags re-run NO
+analysis; the offsets fold into `final_bounds` at derive time only).
+Every order statistic funnels through `negkit::stats` (radix sort — 10× faster
+than the library sorts it replaced); never `.sort()` pixel data.
 
-**`prepare(linearImage:cropRect:analysisRect:analysisBuffer:)` →
-`Prepared`** (offset-independent, cached per rect state):
+**`kernel::prepare(linear, crop_rect, analysis_rect, buffer)` → `Prepared`**
+(cached per rect state):
 1. **Region priority** (NegPy `resolve_analysis_region`): a freehand
    `analysisRect` wins and disables the buffer inset; else the output
-   `cropRect` scopes metering (borders outside the crop can't skew the
-   inversion) with the buffer applied inside; else the centered buffer alone.
-   Default buffer **0.10** = middle 80% of the frame (NegPy ships 0.05 —
-   deliberate divergence). Degenerate rects (<2 px) are ignored.
-2. **Prefilter** (`Prefilter.prefilterLogGrid`): the buffer crop, then
-   `log10(clip(x, 1e-6, 1.0))` via vForce (buffer holds negative density −D
-   since values ≤1), then a **block-median grid**: block side
-   `b = ceil(maxDim/1024)`; per-cell, per-channel median kills
-   dust/speculars and makes stats resolution-invariant. The preview path
-   always hits `b=2`, which has a closed-form median-of-4 fast path.
-   NegPy logs BEFORE cropping; we crop first because `log10` is elementwise
-   (identical survivors) and the 0.10 buffer discards 36% of the frame.
-3. **Bounds** (`BoundsAnalysis.analyze`, NegPy `analyze_log_exposure_bounds`):
-   two independent percentile axes on the grid, one sort per channel
-   (vDSP): the **luma axis** (base clip 0.01%) sets the mean center+span
-   (dynamic range); the **colour axis** (base clip 1.0%) sets per-channel
-   cast offsets relative to the median channel. Since the 127bcd7 port
-   (NegPy 0.43) the colour axis's dense end (floors = print whites) prefers
-   **same-pixel refs** (`samePixelColorFloorRefs`, float64 end-to-end like
-   upstream): one shared chroma-gated pixel set — the luma-extreme band
-   `[clip, clip+4]` percentile, lowest-RMS-chroma 30%, chroma base-anchored
-   against the thin-end refs with a two-pass provisional-gamma refinement —
-   so coloured highlight content can't masquerade as film cast; falls back
-   to the percentile pass when the band has no trustworthy neutrals
-   (< 64 px or median chroma over the caps). Thin-end ceils stay
-   percentile-based (film density is bounded below by base). Recombined:
-   `floor[ch] = mean(luma floors) + (colour floor[ch] − median(colour floors))`
-   (same for ceils) → `LogNegativeBounds` (floors < ceils).
-4. **Meters** (all on the same grid; since the 8532dd92 port the luma
-   meters read only the grid's **textured cells** — Boyack & Juenger
-   US 5,724,456: sectors of 2×2 blocks of 8 cells vote when their block
-   means span > 0.05, so rebate/sky/walls don't set exposure or grade;
-   all-cell fallback below 5% of sectors passing — `Meters.texturedCells`):
-   - `anchor`: mean of the P5–P95 trimmed window of textured luma
-     (normalized by the **base** bounds) averaged with the window midpoint,
-     pulled 20% from `assumedAnchor` 0.46, clamped ±0.12 — the
-     auto-exposure key.
-   - `texturalRange`: |P90 − P10| of textured raw log luma — Auto Contrast.
-   - `shadowPoint` / `highlightPoint`: P99 / P2 of textured normalized
-     luma — the tails Shadow Reach and Highlight Hold place (§3).
-   - `shadowRefs`: P98 per channel — the cast-removal fallback tie.
+   `cropRect` scopes metering with the buffer applied inside; else the centred
+   buffer alone. Default buffer **0.10** (NegPy ships 0.05 — deliberate).
+   Degenerate rects (<2 px) are ignored.
+2. **Prefilter** (`prefilter`): crop, `log10(clip(x, 1e-6, 1))`, then a
+   **block-median grid** (block side `ceil(maxDim/1024)`; per-cell per-channel
+   median kills dust/speculars and makes stats resolution-invariant; the
+   proxy always hits b=2, closed-form median-of-4).
+3. **Bounds** (`bounds`, NegPy `analyze_log_exposure_bounds`): the luma axis
+   (clip 0.01%) sets centre+span; the colour axis (clip 1.0%) sets per-channel
+   cast offsets relative to the median channel, with **same-pixel colour
+   floors** (chroma-gated luma-extreme band, two-pass provisional-gamma
+   refinement, float64 end to end; percentile fallback when the band has no
+   trustworthy neutrals). → `LogNegativeBounds { floors, ceils }`.
+4. **Meters** (`meters`, on the grid's **textured cells** only — Boyack &
+   Juenger sector voting, all-cell fallback below 5%): `anchor` (auto-exposure
+   key), `textural_range` (Auto Contrast), `shadow_point`/`highlight_point`
+   (P99/P2 — Shadow Reach / Highlight Hold), `shadow_refs` (P98 per channel —
+   cast-removal fallback).
 
-**`finalize(prepared)` → `ExposureAnalysis`**: the **neutral axis**
-(NegPy `measure_neutral_axis_from_log`) measured against the PRE-trim base
-bounds — NegPy 2125a34: the film's cast is a source property, so creative
-WP/BP trims must not perturb it (their GPU always measured pre-trim; the
-CPU side we'd ported was the bug). Two-pass since the 127bcd7 port
-(NegPy 0.43): three normalized-luma bands (highlight 0.10–0.30,
-mid 0.40–0.60, shadow 0.72–0.92); per band, keep the lowest-**RMS**-chroma
-30% (hue-uniform pairwise RMS, not max−min; ≥64 px). Pass 1 selects under a
-loose cap (0.55 — admits strong-but-correctable casts, rejects saturated
-content); the affine R/B→G correction implied by its mid+shadow refs
-re-ranks chroma; pass 2 selects true neutrals under the strict cap (0.29)
-and takes per-channel **raw-log medians**. `confidence = tightness ×
-sampleSize × agreement` — corrected mid/shadow chroma vs the cap,
-`n/(n+256)` on the mid set, and mid↔shadow deviation agreement (0.10 dead
-zone, 0.20 roll-off) — gates Auto cast removal. Returns nil mid or shadow
-(either pass) → no neutral axis (shadow-ref fallback used downstream).
+**`kernel::finalize(prepared)` → `ExposureAnalysis`**: the **neutral axis**
+measured against the PRE-trim base bounds (NegPy 2125a34: the film's cast is a
+source property; creative WP/BP trims must not perturb it). Two-pass
+(0.43): three luma bands, lowest-RMS-chroma 30% per band, loose cap 0.55 →
+affine R/B→G correction → strict cap 0.29 → per-channel raw-log medians;
+`confidence = tightness × sampleSize × agreement` gates Auto cast removal.
 
-`ImageSession` caches: decode (per image) → oriented preview (per
-orientation) → `Prepared` + `ExposureAnalysis` (per rects) → GPU source
-textures (per crop) → Contrast Mask plane + texture (per orient/rects/
-spacer, only while the mask is on). The "Analyzing…" indicator shows only
-when `prepare` will run.
+### 3. Parameter derivation (`negkit::derive::derive_render_params`, µs)
 
-`AppModel.sessionLRU` retains the **2** most recent sessions (active + the one
-navigated from), so arrowing back to a frame doesn't rebuild the whole tower.
-Retention alone is safe *because* every tier is keyed — a returning session
-re-validates against the current settings and cannot serve stale pixels. Only
-the on-screen frame may hold the HQ tier (`releaseHQ()` strips it from the
-others); the proxy caches are tens of MB, the HQ decode is hundreds.
+`(ExposureSettings, ExposureAnalysis)` → `RenderParams` (the full GPU uniform
+payload; PLAN §3.4). Order matters: `final_bounds = base + (wp, bp)`;
+`d_min = paperDmin ? 0.06 : 0`; `strength = confidence × slider`; per-channel
+curve params (`curve_logic` — the C-41 gray-balance heart: green is the
+reference, R/B fitted to its neutral axis, quadratic through 3 matched points
+with a highlight ref else a 2-point line; shadow-ref fallback; base mode);
+`base_slope` from grade (ISO R 50–180, 115 ≈ grade 2) or the Alkofer Auto
+Grade on `textural_range`, raised by **Shadow Reach** until P99 prints ≥ 1.9 D;
+pivot solved so the reference tone prints at 0.74 D; **overall contrast**
+folds exactly into slopes/curvatures/pivot; **Highlight Hold** burn
+(`auto_highlight`, derive-computed, never a settings field); `cmy_offsets`
+(WB filtration + Temp along the Planckian direction + Tint on magenta +
+Exposure stops in the EV domain); grade-coupled knees; band CMY; tone-control
+passthrough (shadowContrast's negative side remapped to the −0.8 monotone
+floor); `mask_val_scale` (Contrast Mask; `.zero` at gamma 0 gates the
+feature); `levels_points` sanitized (sorted, 0.02 off the endpoints, monotone,
+≤ 8 per channel).
 
-### 3. Parameter derivation (`ExposureKernel.deriveRenderParams`, µs per tick)
+The Contrast Mask PLANE is per-image data, not a param: `contrast_mask`
+builds a Gaussian-blurred zero-mean normalized-val luma field from the PRINTED
+frame (σ = maskSpacer% × grid short side), normalized against the BASE
+bounds; the session caches it keyed on (orientation, rects, spacer, analysis
+identity) and the kernels sample it bilinearly at half-pixel centres so proxy,
+HQ and export renders sample one plane identically.
 
-Turns `(ExposureSettings, ExposureAnalysis)` into `RenderParams` — the full
-GPU uniform payload. Order matters:
+### 4. GPU render (`neggpu`) and its CPU twin (`negkit::reference`)
 
-1. `finalBounds = baseBounds + (wp, bp)` offsets (floors+wp, ceils+bp).
-2. `dMin = paperDmin ? 0.06 : 0`; `anchor = autoExposure ? metered : nil`.
-3. `strength = confidence × slider` — confidence scaling is always on
-   (NegPy 0.36 removed the auto toggle; slider 0–2, >1 overcorrects past the
-   neutral axis; kernel clamps bound any value).
-4. **`perChannelCurveParams`** (`CurveLogic`, the C-41 gray-balance heart) —
-   NegPy-exact. Green is the reference (its pivot rides the anchor). Modes:
-   - *Neutral-axis* (default): R/B fitted to green's axis — quadratic through
-     3 green-matched points when a highlight ref exists (divided-differences
-     solve; curvature clamped to ±0.45·slope), else a 2-point line; midtone
-     deviations clamped ±0.2.
-   - *Shadow-ref fallback*: one-point slope tie at P98 (clamp ±0.1).
-   - *Base*: single shared linear curve.
-   Inputs: `baseSlope = gradeToSlope(grade, effectiveGradeRange(...))` —
-   grade is ISO R 50–180 (115 ≈ grade 2), `k = 2.9·range/(R/100)` clamped
-   [2,10]; Auto Contrast follows the textural density scale, shrunk toward
-   a normal negative's (8532dd92, Alkofer:
-   `0.85 · floorCeil · min(0.6 + 0.4·0.9/t, 1.2·0.9/t)`), then **Shadow
-   Reach** raises `baseSlope` (never lowers) until the textured dark tail
-   (`shadowPoint`, P99) prints ≥ 1.9 D with the anchor held at its target
-   (`CurveLogic.shadowReachSlope`; Auto Contrast only).
-   `lumRange` comes from the **pre-offset** base bounds (NegPy quirk).
-   `computePivot` solves so the reference tone prints at density 0.74.
-5. **Overall contrast** folds *exactly* into the core: `v→v+k(v−v*)` ⇒
-   slopes,curvatures ×(1+k), pivot += k·v*/s′ (anchor invariant). k =
-   slider×0.5, slider −1…+2. Then **Highlight Hold** (8532dd92, Auto
-   Contrast only): if the textured bright tail (`highlightPoint`, P2) would
-   print < 0.10 D on the green line, `RenderParams.autoHighlight` gets the
-   burn that lands it there — solved against the zone term's own weight,
-   capped 0.5, never lifts (`CurveLogic.highlightHoldOffset`; computed
-   post-fold so the promise holds under overall contrast — identical to
-   upstream at contrast 0, i.e. every parity config). Derive-computed,
-   never a settings field; predictedZone/test strip inherit it via derive.
-6. **`cmyOffsets`** (pre-curve, normalized space): WB filtration
-   (`slider×0.2 / channelRange`) with **Temp** folded along the Planckian
-   direction (yellow + magenta×0.0029/0.0057) and **Tint** on magenta, plus
-   **Exposure** stops (`stops × −log10(2)/channelRange` — the dodge/burn EV
-   domain; + = brighter).
-7. Grade-coupled toe/shoulder knees; band CMY (`colorShadows/Mids/Highs`
-   ×0.2 into density units); tone controls passthrough (shadowContrast's
-   negative side remapped so slider −3 lands on the monotone floor −0.8,
-   also hard-clamped in the kernels); `preSaturation`, `vibrance`,
-   `saturation` passthrough; **`maskValScale`** (Contrast Mask, NegPy
-   515c1f5 port: −gamma·lumRange/range_ch — their contrast_mask_scale
-   folded with the exposureStops EV domain; .zero at gamma 0 gates the
-   whole feature). The mask PLANE is not a param: it's per-image data
-   (`ContrastMask.buildPlane` — normalized-val luma on the analysis grid,
-   Gaussian σ = maskSpacer% × grid short side matching cv2's kernel,
-   zero-mean, built from the PRINTED frame only), cached in the sessions
-   keyed on (orient, rects, spacer, analysis identity) and uploaded as an
-   r32float texture. Gamma drags are uniform-only; spacer/crop/bounds
-   changes re-blur (~20 ms). All three kernels hand-roll the same
-   half-pixel bilinear sample, so a proxy/HQ/export render samples one
-   plane identically; zone placement freezes the pin's plane sample and
-   the 1-px model adds it as a constant (exact, `Pin.maskVal`).
+**One shader source**: `crates/neggpu/src/wgsl/negpipeline.wgsl` holds all six
+kernels as `@compute` entry points — `normalize`, `print_curve`, `color_pop`,
+`histogram`, `encode_f`, `encode_u8`. wgpu/naga compiles it to MSL/SPIR-V/HLSL
+at runtime: no per-platform shader, no build-time compiler, no checked-in
+binaries. `negkit::reference` is the CPU chain and **the oracle**: every GPU
+is pinned to it (`neggpu/tests/parity.rs`: mean < 0.01, max < 0.04 per
+control group; contrast mask mean < 1e-3, max < 0.02 incl. a 3× plane-size
+case; rgba8 within 1.5/255 of float). `negsession::Renderer` is a trait —
+`CpuRenderer` (reference, rayon rows) or `GpuRenderer`; no adapter → CPU.
 
-### 4. GPU render (`MetalRenderKit`, rgba32float, 8×8 threadgroups)
+Passes, in order: **normalize** (`log10(max(c,1e-6))`, per-channel stretch by
+`final_bounds`) → **print_curve** (pre-saturation; `+cmy_offsets` (+ mask
+sample × `mask_val_scale`); quadratic core with the **vertex hold** (NegPy
+d4dc3e49); midtone paper-S; tone controls in the **PARALLEL form** (masks on
+the incoming v — the GPUs were always parallel; the Swift CPU reference was
+sequential, a divergence the port resolved in the GPU's favour); 3-band CMY;
+Highlight Hold burn; shoulder/toe softplus knees; Print Saturation; `10^−D`;
+True Black BPC referenced to the physical d_max → linear reflectance) →
+**color_pop** (CIELAB, Adobe RGB (1998) primaries, D65: Hue Trim → Color Mixer
+(chroma-gated R/Y/G/B bands) → vibrance → gamut-aware saturation → Skin
+Protection) → **histogram** (4×256 atomic bins over the OETF-encoded,
+levels-remapped output; RAW COUNTS — anything drawn from them must be a
+function of SHAPE only: peak-normalize then a FIXED compression constant) →
+**encode** (Adobe RGB TRC 563/256, then the per-channel piecewise-linear
+levels remap; flags bit 0 = sRGB leg: decode TRC → gamut matrix → piecewise
+sRGB OETF after the remap; `encode_u8` packs RGBA8 for display).
 
-One command buffer, passes in order (`RenderPipeline.render` /
-`renderDisplay`):
+Host discipline (PLAN §2): interleaved-RGB storage buffers (upload/readback
+are memcpys), 1-D dispatch workgroup 256, uniforms in persistent buffers
+written per frame, per-size intermediates cached (≤ 4 MP retained, export
+sizes dropped), ONE persistent staging buffer per size for readback
+(`render_display_into(&mut [u8])` is the zero-allocation path), histogram
+cleared with `clear_buffer`. The app shares eframe's wgpu device
+(`GpuContext::from_existing`) and presents through a leased texture ring with
+no CPU readback.
 
-1. **`normalizeLog`** — `log10(max(c,1e-6))` (no upper clamp, matches NegPy
-   GPU) → per-channel stretch `(log − floor)/(ceil − floor)` (offsets already
-   folded into `finalBounds`; uniform wp/bp fields are legacy-zero).
-2. **`printCurve`** — the asymmetric H&D print curve, per pixel:
-   a. *Pre-saturation*: `c → mean + k(c − mean)` (density-deviation gain;
-      default slider 1.15, kernel identity at 1.0).
-   b. Per channel: `val += cmyOffsets` (+ the Contrast Mask's bilinear
-      plane sample × `maskValScale`, uniform-gated — see below) → quadratic core
-      `v = slope(val − pivot) + curv·val²`, with `val` held at the vertex
-      `−slope/(2·curv)` on the side where the quadratic would fold back
-      (`quadraticCore`, NegPy d4dc3e49: the curvature clamp only bounds
-      it near the frame's range, and holder edges / dust / bare light
-      reach far outside it) → midtone paper-S
-      `v += 0.05·0.6·tanh((v − v*)/0.6)` (0.15 → 0.05 in the 8532dd92
-      retune) → **tone controls** (masks
-      `wS = σ(3.5(v−1.40))`, `wH = σ(3.5(0.30−v))` on the incoming v,
-      parallel form: shadows/highlights lifts + anchor-pivoted contrasts) →
-      **3-band color** (same masks, `wM = max(1−wS−wH,0)`; NegPy's 2-band
-      regional CMY generalized) → **Highlight Hold burn**
-      `v += autoHighlight·(1 − σ(4(v−0.35)))` (upstream's Zone Density
-      highlight term — its weight, not our tone masks; uniform-gated at 0,
-      last density op before the knees) → shoulder softplus toward `d_min_eff`
-      (paper white) → toe softplus toward `d_max_eff` (paper black) →
-      **Print Saturation** (NegPy 0.45 port, on density above paper base,
-      identity at default 1.0): uniform k around the per-pixel achromatic
-      mean — the global reduction of NegPy's saturation matrix (their
-      surviving density-space control, renamed dye_separation in 3fb5ca8;
-      per-channel trims not ported; the per-pixel spread-masked Dye
-      Separation was ported and retired 2026-07-29 when upstream deleted
-      it as redundant — its sidecar key decodes ignored).
-   c. `t = 10^−D`; **True Black** (BPC, optional): `t → (t−b)/(1−b)` with
-      `b = 10^−dMax` referenced to the *physical* d_max so toe lifts survive
-      (negative toe raises the clip point); clamp [0,1] → **linear
-      reflectance** out.
-3. **`colorPop`** (dispatched when a color-pop control is off-default —
-   vibrance/saturation/band controls, hueTrim — or skinProtection > 0, which is
-   the DEFAULT (0.5): in practice the pass runs every frame, accepted with
-   the port — though the ~7.2 ms/frame recorded then no longer reproduces;
-   bench measures 4.3–4.6 ms/frame with the pass confirmed dispatching)
-   — CIELAB
-   (Adobe RGB (1998) primaries, D65 since the b3490eb port; matrices
-   duplicated in MSL and
-   `LabColor.swift` — keep in sync): **Hue Trim** first
-   (`LabColor.applyHueTrim`, NegPy 7a07f5c port — `hueTrim`, degrees ±30,
-   0 = off, radians in `RenderParams`): a rotation of a*/b* about the
-   neutral axis. It corrects the CAPTURE, not the negative — a narrowband
-   or odd-phosphor scanning light ROTATES hues instead of casting them, and
-   white balance cannot fix that because no grey is wrong (upstream measured
-   |ΔH| flat at 16–21° from chroma 4 to 60+; a cast would shrink with
-   chroma, a channel mix would grow). A rotation fixes the origin, so
-   neutrals cannot move and it can never fight the cast removal. Runs FIRST
-   so every control below acts on corrected hues, matching upstream where it
-   rides the exposure pass ahead of their Lab stage. DIVERGENCE: upstream
-   makes it sticky across frames; ours is an ordinary sidecar setting —
-   bake it into a `SettingsProfile` for the same effect without a second
-   stickiness mechanism. Then the **Color Mixer**
-   (`LabColor.applyColorMixer`, SwiftInvert-only, no NegPy equivalent —
-   chroma-gated hue-targeted R/Y/G/B bands: per-band raised-cosine hue
-   windows × a shared chroma ramp that zeroes at the neutral axis, so
-   whites/grays/faint casts never move; all weights read the ORIGINAL hue
-   and compose jointly, so overlapping feathers are order-independent;
-   constants tuned on real scans (blues at Lab hue ~235, gate 6→16 —
-   colorimetric-primary values starve real content, whose colorful pixels
-   sit at chroma 12-30): `bandCentersDeg`/`bandHalfWidthsDeg`/`bandChromaGate*`/
-   `bandMaxHueShiftDeg` mirrored as MSL literals; UI: segmented band
-   picker + gradient tracks, `ColorMixerSection.swift`), then
-   vibrance (muted-chroma boost, /60 range; upstream DELETED theirs —
-   ours is SwiftInvert-maintained, reference formula frozen in the dump
-   script) then saturation (a*,b* scale; **gamut-aware on boosts** since
-   the 1b900ab port: skin-band softening (Gaussian around Lab hue 52°,
-   width 25°, strength 0.5, chroma gate 2) → per-pixel in-gamut headroom
-   by 10-iteration bisection against the real RGB cube → softplus knee,
-   so overshooting pixels keep their hue instead of hue-shifting through
-   the per-channel clamp; in-gamut non-skin pixels are bit-identical to
-   the flat scale; desaturation stays flat; PURE gamut math since the
-   bfcd90a port removed the in-boost skin term), then **Skin Protection**
-   (`skinChromaRein`, default 0.5, slider 0–1): a one-directional soft
-   chroma ceiling (22/strength, softplus knee from 0.6×ceiling, scale
-   blended by mask weight; a*/b* together so hue and L* never move)
-   inside the measured skin locus — hue Gaussian 52° σ20 × one-sided
-   chroma window (full ≤35, zero ≥60; pure red C*≈104 drops out) ×
-   lightness rolloff (L* 15…95) — applied after the scale and
-   independent of it, so it also reins skin arriving over-chromatic
-   from the print curve. All constants are MSL literals mirrored from
-   LabColor.swift.
-   Separate pass on purpose: inlining
-   the Lab code into printCurve cost ~3 ms/frame in register pressure even
-   when branched off. Writes into the (already consumed) `normalized`
-   texture, which becomes the content texture.
-4. **`histogram256`** — 4×256 atomic bins (R,G,B + Rec.709 luma) from the
-   linear content, OETF-encoded in-shader so bins match display values —
-   including the levels remap (below), so the interactive histogram
-   reshapes live under a drag. Bins are RAW COUNTS, and the HQ tier bins
-   ~15× as many pixels as the proxy, so anything drawn from them must be a
-   function of the histogram's SHAPE only (`HistogramView.barHeight`
-   normalizes to the peak bin, then compresses with a FIXED constant;
-   `log1p(count)/log1p(maxCount)` looks scale-free but adds ln(pixelCount)
-   to both ends, and lifted sparse bins 7–14 percentage points with HQ on).
-   `clipFractions` and the hover read-out already divide by the total.
-5. **`outputEncode`** — working-space OETF (Adobe RGB 1998 TRC: pure
-   563/256 = 2.19921875 power, no linear segment — b3490eb), then the
-   **levels remap** (interactive histogram, SwiftInvert-only): per channel
-   a piecewise-linear map through user-planted anchors (input→output
-   pairs, endpoints pinned, empty = identity; `levels_remap` MSL + the CPU
-   mirror `ReferenceCurve.levelsRemap`; `sanitizeLevels` at derive sorts,
-   clamps 0.02 off the endpoints, forces monotone outputs, caps at 8;
-   uniforms travel as a flat 51-float buffer — layout documented at both
-   ends). Display fast path writes the same kernel
-   into an **rgba8unorm** texture (GPU quantization, 4× smaller readback,
-   zero CPU conversion); export/tests use the float path.
+**Uniform layout is pinned**: `neggpu::uniforms` `#[repr(C)]` structs must stay
+byte-identical to the WGSL structs (`NormUniforms` 48 B; `CurveUniforms` 304 B
+with `autoHighlight` at 268, `maskScale` at 272; levels buffer 51 floats:
+`[c*16+0..8]` inputs, `[c*16+8..16]` outputs, `[48+c]` counts).
+`neggpu/tests/layout.rs` pins every offset — update both sides and the test
+together.
 
-**Threading/reuse contract**: `render` is serialized by an internal lock and
-returns **read-back buffers, never live textures** — intermediate textures
-are cached per size (≤4 MP; export sizes are not retained) and a later render
-overwrites them. Violating this segfaulted the concurrent test runner once.
-Uniform structs are mirrored byte-for-byte in `ShaderTypes.swift`;
-`LayoutTests` pins strides (Norm 48, Curve 256) plus the 51-float levels-buffer length and key offsets — update both
-sides plus the asserts together.
+**Big-buffer discipline**: never `vec![0; n]` a pixel buffer the next lines
+fully overwrite (`RgbImage::new_uninit_with`, `Vec::with_capacity` +
+`extend_from_slice`, `bytemuck::cast_slice` for views). No per-frame
+allocations in the slider path.
 
-**Big-buffer discipline** (learned repeatedly, now applied throughout): never
-allocate a large pixel buffer with `[T](repeating:)` when the code that
-follows writes every lane — use `unsafeUninitializedCapacity` (or
-`RGBImage(width:height:initializingWith:)`). At export size the wasted
-zero-fill costs tens of ms per buffer in first-touch page faults alone, and
-`readback` was doing it twice (387 MB + 290 MB). Live instances: `upload`,
-`readback`, both display/float read-backs, `RawDecoder`'s u16→float,
-`RGBImage.downsampled`, `BoundsAnalysis.sortedChannels`.
-
-### 5. Color management
+### 5. Colour management
 
 Working space is **linear Adobe RGB (1998) → Adobe-RGB-encoded** at the end
-of the chain (b3490eb port, 2026-07-20: upstream moved off ProPhoto because
-the pipeline ASSIGNS primaries to sensor-native data at output, and
-ProPhoto's imaginary primaries inflated chroma and skewed hues — reds
-toward magenta, skies toward cyan).
-- **Display**: the encoded output becomes a CGImage tagged
-  `CGColorSpace.adobeRGB1998`; ColorSync converts to the monitor — pinned
-  against NegPy's littleCMS display transform (AdobeCompat-v4 → sRGB-v4,
-  relative colorimetric + BPC) on reference colors (`ColorIOTests` oracle
-  values regenerated 2026-07-20 with NegPy's bundled ICC profiles).
-- **Export** (`Exporter` + `ColorIO`): default **sRGB** (NegPy's default;
-  wide-gamut files look washed out in profile-ignorant viewers) via a 16-bit
-  working-space CGImage drawn into an sRGB CGContext (one quantization).
-  Adobe RGB remains selectable (the ExportColorSpace case is still NAMED
-  rommRGB for sticky-options JSON compatibility). JPEG 8-bit (default q=0.92) or TIFF 16-bit, optional
-  long-edge resize, destination next-to-source or a chosen folder.
+of the chain (NegPy b3490eb: ProPhoto's imaginary primaries inflated chroma
+and skewed hues). Display and export conversion run through **`craft-cms`**
+(pure-Rust ICC v2/v4, relative colorimetric + BPC) with NegPy's CC0
+`sRGB-v4` / `AdobeCompat-v4` profiles; exports are tagged with the chosen
+profile. Export (`negsession::export`): sRGB default, Adobe RGB selectable;
+JPEG 8-bit (q 0.92) or TIFF-16; optional long-edge resize (`downsampled`, the
+area filter); next-to-source or a chosen folder; temp-file + rename so a
+failed encode never truncates the previous file.
+
+### 6. The session (`negsession::session`) and the front end
+
+The per-image cache tower, keyed at every tier so slider drags rebuild
+nothing: decode (per image) → oriented preview (per orientation) →
+`Prepared` + `ExposureAnalysis` (per rects) → GPU source per crop/tier →
+mask plane (per orient/rects/spacer, only while the mask is on). Three
+display tiers (`RenderTier`: proxy 1536 px · medium-if-free · full) resolved
+by the HQ mode (off / **auto** (default; medium at ≥ 2× canvas zoom) / on);
+the proxy stays on screen through any swap. Tier-swap stability: lay out
+from the continuous `display_aspect`, place each bitmap at the window it
+really covers (`content_window`, measured against ITS OWN frame), and
+`downsampled` is a true area filter (cv2 INTER_AREA) so the proxy is never
+warped. Tool previews ride an `uncropped` RENDER flag, never a settings
+substitution — widening the render must not widen the METER (the crop tool
+renders uncropped + fine rotation live; the analysis tool substitutes
+fineRotation 0, a true substitution by the meter invariant).
+
+What a front end must do itself (the `negsession` crate header has the
+authoritative list): session LRU of 2 with `release_enhanced_tiers` on the
+off-screen one; latest-wins render coalescing; sidecar saves debounced 1 s and
+never while restoring a frame or in profile-editor mode; history per path
+(commit on drag release or 700 ms after a non-drag tick); HQ up-swap
+debounced 350 ms.
+
+- **Sidecars**: `<basename>.swiftinvert.json` next to the source,
+  `{version, settings}`; missing keys decode to defaults, a wrong-typed field
+  decodes to ITS default (lenient per-field decoder — a deliberate divergence
+  from the Swift all-or-nothing decode); retired keys (`dyeSeparation`, …)
+  ignored; legacy `.negswift.json` read as fallback and removed on save.
+  Atomic writes (unique temp + fsync + rename).
+- **Settings**: `ExposureSettings` — exactly **54** stored camelCase fields
+  (`STORED_KEYS`, `STORED_PROPERTY_COUNT`), defaults listed in PLAN §3.2.
+- **Profiles** (`profiles`): "None" (stock) and "SwiftInvert Default" (the house
+  look) reserved from code; user profiles + active choice persisted; applied
+  wherever a frame is seen fresh. Stock `ExposureSettings::default()` stays
+  NegPy-parity-neutral — fixtures, negcli and the parity suite never see profiles.
+- **History** (`history`): labels from `history_label(a, b)` — every settings
+  field needs a line there.
+- **Prefs**: eframe persistence, split keys `swiftinvert.prefs` / `.export` /
+  `.profiles` (`negui::app`).
+- **UI** (`negui`): the sidebar is generated from `control_spec.rs`, a static
+  table (field, label, section, range, default, format, display transform,
+  disabled rule, gradient track) swept by the tests against `STORED_KEYS`, so
+  a new field cannot ship without a row or an explicit "no UI" entry. macOS
+  gets the system menu bar (`native_menu.rs`). Darkroom features: densitometer
+  + zone strip (probe reads the displayed bytes, inverting the sRGB leg),
+  zone overlay, test strip (5×5 real renders, Brightness across / Grade down,
+  two-stage pick), zone placement (bisection against the 1-px green-reference
+  model through the real kernel), interactive histogram (levels anchors by
+  direct drag). Known gaps are listed in `HANDOFF.md`.
+- **Verification limits**: synthetic pointer events never reach the app
+  window, so hover/pointer paths are verified by `--selftest` screenshots
+  and unit tests of the mapping math, and handed to a human for the gesture.
 
 ## Parity with NegPy
 
-`Tests/Fixtures/` is dumped from NegPy's actual engine by
-`scripts/dump_fixtures.py` (run in NegPy's uv env). The suite (`make test`)
-verifies every stage boundary:
+`fixtures/` is dumped from NegPy's actual engine by `scripts/dump_fixtures.py`
+(run in NegPy's uv env; `negkit::fixtures` locates them from
+`CARGO_MANIFEST_DIR`). The suite verifies every stage boundary:
 - closed-form oracles (percentile semantics, grade/pivot/softplus/OETF math),
-- `synthetic64` (NegPy's golden image, dumped as .bin): prefiltered grid
-  @1e-5, bounds/meters/curve-params @1e-4, full CPU chain @1e-4,
-- `synthetic_grid` (1600×1066, regenerated bit-exactly in Swift from an
-  integer-hash formula): exercises b=2 block-median + the quadratic
-  cast-removal path (slope/pivot tolerance 2.5e-4: Accelerate-vs-libm ulp
-  amplification),
+- `synthetic64` (NegPy's golden image): prefiltered grid @1e-5,
+  bounds/meters/curve-params @1e-4, full CPU chain @1e-4,
+- `synthetic_grid` (1600×1066, regenerated bit-exactly from an integer-hash
+  formula): b=2 block-median + the quadratic cast-removal path (slope/pivot
+  tolerance 2.5e-4),
 - `ramp257` print-curve shapes, `lab_color` (vibrance/saturation vs NegPy's
-  CIELAB ops),
-- GPU vs fixtures and GPU vs CPU reference at NegPy's own gates (mean<0.01,
-  max<0.04); the rgba8 display path within 1.5/255 of the float path.
+  CIELAB ops), `contrast_mask` (plane / expansion / masked chain at zero offsets),
+- GPU vs CPU reference at NegPy's own gates (above).
+Test map (Swift test file → Rust file, same names and tolerances): PLAN §5.
+Drift-catchers: `negkit/tests/sidecar.rs` pins the stored-property count (54)
+and mutates every field; `negui/tests/shell.rs` sweeps the control table.
 
-Beyond parity, the suite covers the seams the fixtures reach only
-transitively, plus the app layer:
-- `SidecarCodecTests` + `HistoryLabelTests` are **drift-catchers**: each pins `ExposureSettings`' stored-property count (54) and exercises every field —
-  adding a settings field fails both until the decoder, `HistoryLabels`, and
-  the tests' mutation lists all get their line (see the control checklist).
-- `ImagePipelineSeamTests`: the prepare/finalize cache split (a reused
-  `Prepared` must equal fresh analysis; offsets may only move the neutral
-  axis) and `RGBImage.downsampled` (dims/identity/mean preservation).
-- **`SwiftInvertTests`** — the app-target suite. SwiftPM tests the `@main`
-  executable directly (`@testable import SwiftInvert` — works since Swift
-  5.5, verified under the Makefile's CLT flags): `SidecarStore` file behavior
-  (legacy `.negswift.json` fallback + delete-on-save),
-  `ExportOptions.destinationURL`, `DensitometerState` probe mapping,
-  `ImageConversion` shapes. Views/AppModel/ImageSession stay UI-verified —
-  and pointer paths need a HUMAN pointer: synthetic mouse events never reach
-  the unbundled binary (no TCC grant, won't take focus), so verify hover
-  logic headlessly (`negcli meter` pattern) and hand off the gesture.
-
-**Upstream review log: see `UPSTREAM.md`** — it records the last NegPy
-commit reviewed (the baseline for "what changed upstream?" requests) and
-the port/skip decisions per review. Update it after every upstream review.
-For "what changed in NegPy?" requests, run the **`/negpy-review` skill**
-(`.claude/skills/negpy-review/`) — it fetches upstream, triages the diff
-around the inversion pipeline, and maintains UPSTREAM.md.
+**Upstream review log: `UPSTREAM.md`** — the last NegPy commit reviewed and
+the port/skip decisions per review. For "what changed in NegPy?" run the
+**`/negpy-review` skill** (`.claude/skills/negpy-review/`).
 
 Analysis semantics and kernel constants are synced with **NegPy 0.58.0**
-(`dc8ac65f` tip, plus the `d4dc3e49` quadratic vertex hold from 0.62.0,
-ported 2026-10-05 with no fixture impact; the print-tone + auto-helpers retune landed in `8532dd92`,
-ported 2026-09-07: toe sharpness 6.0 / paper midtone gamma 0.05, textured-
-cell metering, the Alkofer Auto Grade, Shadow Reach and Highlight Hold —
-on top of the earlier syncs: 127bcd7 two-pass estimator + same-pixel colour
-floors, 2125a34 pre-trim neutral axis, b3490eb-coupled auto constants, the
-0.38 set with `paper_dmin` off + `true_black` on, the 0.36 set). ALL
-fixtures (contrast_mask included) were re-dumped from `dc8ac65f` (the
-manifest records `paper_dmin` and `true_black` per config; the parity
-harnesses read both, so default flips on either side can't silently skew
-parity; `expo_dark` fires Highlight Hold at its 0.5 cap, so the burn's
-kernel term is chain-pinned end to end). NegPy's per-layer R/G/B trims,
-Split Grade and Zone Density (their convergent take on our tone controls)
-are NOT ported — our tone controls + 3-band grading cover the achromatic
-cases (EXCEPTION: Zone Density's *highlight term* now exists in all three
-kernels as Highlight Hold's actuator, `RenderParams.autoHighlight`, with
-upstream's own weight constants — no user slider rides it); per-channel
-crossover trims are a candidate future feature.
+(`dc8ac65f` tip, plus the `d4dc3e49` quadratic vertex hold from 0.62.0; the
+8532dd92 print-tone + auto-helpers retune: toe sharpness 6.0 / paper midtone
+gamma 0.05, textured-cell metering, Alkofer Auto Grade, Shadow Reach,
+Highlight Hold; 127bcd7 two-pass estimator + same-pixel colour floors;
+2125a34 pre-trim neutral axis; b3490eb Adobe RGB working space; the 0.38 set
+with `paper_dmin` off + `true_black` on). ALL fixtures were dumped from
+`dc8ac65f` (the manifest records `paper_dmin`/`true_black` per config;
+`expo_dark` fires Highlight Hold at its 0.5 cap). NegPy's per-layer R/G/B
+trims, Split Grade and Zone Density are NOT ported — our tone controls + 3-band
+grading cover the achromatic cases (Zone Density's highlight term exists only
+as Highlight Hold's actuator, with no user slider).
 
 **Deliberate divergences from NegPy** (fixture tests pin the NegPy-neutral
 values where needed):
-- `preSaturation` default **1.15** (NegPy has no equivalent; parity tests set 1.0),
-- ~~`redHue` default +0.5~~ RETIRED 2026-07-20: it countered reds skewing
-  magenta, which was the ProPhoto-interpretation hue skew the b3490eb port
-  removed at the root — default is 0 again (sidecars that explicitly set a
-  redHue keep their value; keyless sidecars now decode to neutral),
-- Color Mixer band constants were tuned in the old ROMM/D50 Lab; re-checked
-  numerically after b3490eb (real-content reds/greens/sky-blues still land
-  in-band; only colorimetric-primary blue sits at the feather edge, which
-  matches the tuned-on-real-content philosophy) — but an on-scan re-tune
-  pass is still worth doing,
+- `preSaturation` default **1.15** (no NegPy equivalent; parity configs set 1.0),
 - default analysis buffer **0.10** vs NegPy 0.05 (tests pass 0.05 explicitly),
-- **Contrast Mask plane normalizes against the BASE bounds (pre-WP/BP
-  offset)** where upstream uses the offset-applied final bounds: ours keeps
-  white/black-point drags analysis-free (the plane is a blurred zero-mean
-  field of a source property — the 2125a34 pre-trim-neutral-axis argument).
-  Identical at zero offsets, which is every parity-fixture config; the
-  `contrast_mask` fixtures (additive dump, `dump_fixtures.py contrast_mask`)
-  pin plane/expansion/masked-chain at zero offsets. Also: the mask slider is
-  NOT display-inverted (right = + = squeeze = globally softer, matching our
-  Grade's right = softer; upstream inverts theirs because their grade runs
-  the other way),
-- NegPy's default lab sharpen (0.25 since 8bc9678; was 0.5 earlier in 0.38) is not implemented,
-- **vibrance is SwiftInvert-maintained since NegPy de79e13** (upstream
-  deleted Lab Vibrance in favour of a density-space signed Dye Separation —
-  which they then also deleted in 3fb5ca8, leaving only the matrix-slot
-  control we ship as Print Saturation; ours stays for sidecar compat,
-  identity in every parity config — the lab_color vibrance fixture is
-  frozen at the 0369b10 dump and cannot be re-dumped from newer NegPy),
-- SwiftInvert-only controls: exposure stops, tone controls
-  (shadows/highlights ± contrasts), overall contrast, temp/tint, 3-band
-  color grading, pre-saturation, the interactive-histogram levels remap —
-  all identity-at-default so the NegPy fixtures still pass.
+- **Contrast Mask plane normalizes against the BASE bounds** (pre-WP/BP
+  offset) so white/black-point drags stay analysis-free; identical at zero
+  offsets (every fixture config). The mask slider is NOT display-inverted
+  (right = + = squeeze = softer, matching our Grade's right = softer),
+- the tone controls' PARALLEL form (above),
+- NegPy's default lab sharpen (0.25) is not implemented,
+- **vibrance is SwiftInvert-maintained** (upstream deleted theirs; the
+  lab_color vibrance fixture is frozen at the 0369b10 dump — the reference
+  formula lives in `dump_fixtures.py` and cannot be re-dumped from newer NegPy),
+- Hue Trim is an ordinary sidecar setting (upstream makes it sticky across
+  frames — bake it into a profile for the same effect),
+- SwiftInvert-only controls: exposure stops, tone controls, overall contrast,
+  temp/tint, 3-band colour grading, pre-saturation, Color Mixer, the
+  interactive-histogram levels remap — all identity-at-default so the NegPy
+  fixtures still pass.
+- Zone placement's knee solve bisects the composite residual (upstream
+  alternates passes); zone-pin sampling freezes normalized-log luma.
 
-## App layer (`Sources/SwiftInvert`)
-
-- **`AppModel`** (@MainActor @Observable): selection + `multiSelection`,
-  settings (didSet → coalesced latest-wins render task + debounced 1 s
-  sidecar save; `isRestoringSettings` suppresses saves on open), tool modes
-  (crop/analysis-region draw), baseline hold-to-compare
-  (`showingBaseline` renders stock settings with current geometry), export
-  batch task with progress/cancel.
-- **`ImageSession`** (actor): the per-image cache tower (see §2) + render.
-- **Default profiles** (`DefaultProfile.swift`, `ProfileStore.swift`,
-  `ProfileWindows.swift`): the house look applied wherever a frame is seen
-  fresh (open with no sidecar, Reset All, sidecar-less frames in batch
-  export and Copy Adjustments) — resolved as `DefaultProfile.settings` =
-  the ACTIVE `SettingsProfile` in `ProfileStore` (two reserved rows from
-  code, never persisted/editable: "None" = stock, first in the list and
-  the out-of-the-box active choice, then "SwiftInvert Default" = the house
-  look; user profiles + active choice as UserDefaults JSON, so a picked
-  default survives restarts). File → Choose
-  Default Settings… opens the picker (Accept = set active; Create New
-  seeds from the selection); Create/Edit opens a **profile-editor window**:
-  the full app UI under `AppModel(profileEditor: true)`, where one shared
-  adjustments draft (`profileDraft`) applies to EVERY frame — geometry
-  stays per-frame from sidecars, and NO sidecar is ever written in that
-  mode (guards in scheduleSave/paste/export-flush). Multi-window plumbing:
-  `KeyModelTracker` + `WindowKeyObserver` route menu commands and each
-  ContentView's key monitor to the key window's model. "Start from
-  Scratch" (under View Original) cancels the profile to stock
-  `ExposureSettings()`, which stays NegPy-parity-neutral — fixtures,
-  negcli and the parity suite never see profiles. `DefaultProfileTests` +
-  `ProfileStoreTests` pin the built-in's field list, adjustments-only
-  stripping, built-in protection, and persistence round-trip.
-- **Interactive Histogram** (`InteractiveHistogram.swift`, double-click
-  the sidebar histogram → its own window, key-model capture at open):
-  per-channel levels remap by direct drag. A drag grabs a tone (the grab
-  position is inverse-mapped through the remap in effect, so you grab
-  what you SEE — pressing near an existing anchor's line grabs THAT
-  anchor) and moves its output; releasing PLANTS a fixed anchor, and
-  later drags reshape only their own segment between neighbours. Anchors
-  render as vertical lines with an ✕ below to remove; outputs clamp
-  between neighbours so the map stays monotone; ≤ 8 per channel
-  (`levelsRed/Green/Blue` anchor arrays). Drags commit on release via
-  setControlEditing; per-channel + all reset buttons.
-- **Test strip** (NegPy e4bc450 port: `TestStrip` math in NegativeKit,
-  `ImageSession.renderTestStrip` — one analysis + one uploaded source +
-  25 derive/renderDisplay passes, mosaic assembled incrementally, always
-  the preview proxy — `TestStripLayer` presentation, Print-group button +
-  ⇧T in the key monitor): the frame as a 5×5 grid of REAL renders,
-  Brightness across (mirrored from upstream's density order to match our
-  right-=-brighter convention), Grade R75–R155 down, ladders absolute and
-  centred on the defaults so the current settings are a patch. Two-stage
-  picking: single-click a patch → full-frame PREVIEW of that look (one
-  warm-tower render; click again = back to the grid to compare others),
-  double-click (grid or preview) → one history entry ("Test strip pick")
-  setting density+grade (auto toggles untouched — patches rendered under
-  them); singles are held for the double-click interval on purpose (a
-  mis-fired confirm would commit settings); session-only
-  state cleared by ANY edit/navigation/tool/baseline/HQ change (guarded
-  by a generation counter against stale builds); Escape clears first.
-  No gridlines — only the hovered patch outlines; the current-settings
-  rung is accented. While a strip is up the rotate buttons and ⌘[/⌘]
-  turn the LADDER, not the image (a2455ab port): orientation 0–3 rotates
-  the logical density×grade assignment under the fixed display grid,
-  labels/picks follow, mosaic rebuilds from the warm tower (upstream
-  caches all four assemblies; we re-render — same UX at ~a strip build,
-  no 25-tile retention). TestStripRenderTests pins patch == full render
-  at that patch's settings, byte-identical; rotation tests pin the
-  bijection and axis purity per orientation.
-- **Darkroom read-outs** (`Densitometry` in NegativeKit — pure measurement, no
-  render path, so no parity surface): the **spot densitometer** (hover the
-  canvas → D + zone in the control bar, with an 11-cell `ZoneStrip`) and the
-  **Negative character** row under the Grade slider ("0.90 · normal"), which is
-  the measured pre-offset density range vs `CurveLogic.defaultGradeRange`.
-  Both mirror NegPy (`densitometer.py`, `stats._negative_row`), including its
-  quirk of taking luma on the ENCODED triplet before decoding. The probe reads
-  the **displayed rgba8 bitmap** (working-space-encoded, so the bytes already are the
-  working-space values) rather than a GPU metric — `DensitometerState` caches
-  the provider bytes once per render and is a separate `@Observable` so pointer
-  moves invalidate only the read-out label, never the canvas. The **zone
-  overlay** (NegPy ae56f8b port: `ZoneGrid` in NegativeKit + `ZoneOverlay`
-  view; "Zones" control-bar button / View menu / ⇧Z) shares that ruler AND
-  those cached bytes: integer zone per cell (24 along the long edge,
-  box-averaged), same-zone regions merged with one Roman numeral each
-  (anchor snapped to an owned cell), paper black/white numerals red. The
-  grid recomputes per adopt/toggle only, and hides in tool modes and
-  straighten previews (same rule as the probe). ⇧Z lives in the window key
-  monitor, NOT as a menu equivalent — a bare-letter equivalent would fire
-  while typing in text fields; the monitor checks the first responder. NegPy's 120-bin
-  `density_histogram` is deliberately NOT ported: it exists to feed their H&D
-  chart, which we don't ship.
-- **Zone placement** (NegPy 5a095f3/9dff124 port: `ZonePlacement` in
-  NegativeKit + `ZonePlacementLayer`/AppModel state): click a zone-strip
-  cell, click that spot on the photo, and Brightness (1 pin) or
-  Brightness+Grade (2 pins) or those plus ONE knee control (3 pins) solve
-  so the tone prints there. Pins freeze their normalized-log luma
-  (`ImageSession.sampleZonePin`, 5×5 patch mean — the displayed rgba8 is
-  post-curve and can't serve); the forward model is the ACHROMATIC
-  green-reference curve run through the real kernel (`predictedZone`:
-  derive → params collapsed to green → 1-px `ReferenceCurve` → zone
-  ruler — includes exposureStops and the green levels remap, which
-  upstream's model omits/lacks). Solved by bisection at half slider
-  precision, autos forced off, clamped+rounded, achieved zones recomputed
-  at the rounded values; `encoded(ofZone:)` is the ruler's exact inverse.
-  Knee candidates are OUR tone-control knees (shadowContrast /
-  highlightContrast — upstream solves Split Grade/Snap, which we don't
-  ship), picked by measured purchase; DIVERGENCE: the knee bisects the
-  COMPOSITE residual (2-pin solve nested inside) instead of upstream's
-  alternating passes — our anchors sit between typical pin positions, the
-  alternation diverges there, and the µs-scale model makes nesting cheap.
-  UX mirrors the test strip's canvas-state rules: solved-look preview
-  drawn over the frame, drag re-samples (retargeted pins keep their
-  zone), Apply = one history entry ("Zone placement"), Escape/any
-  edit/tool/baseline/HQ/navigation clears; solve runs in the session
-  actor. No settings field, no parity surface, no fixture re-dump.
-- **Edit history**: per-image undo/redo in AppModel (`historyEntries`/`historyIndex`,
-  session-scoped per URL). Slider/handle drags commit on RELEASE (drag =
-  preview: `setControlEditing` via the `controlEditingChanged` environment
-  hook holds commits while any control is held); non-drag changes coalesce
-  via a 0.7 s debounced commit;
-  labels come from `historyLabel(from:to:)` (HistoryLabels.swift — add a line
-  there for every new settings field) or `pendingHistoryLabel` for named
-  actions (Rotate/Crop/Reset). New edits truncate the redo tail. Undo flushes
-  any in-flight uncommitted change first. UI: HistoryPanel (⌘Z/⇧⌘Z,
-  click-to-jump), below the collapsible Adjustments section.
-- **Unified Crop & Straighten** (Lightroom model): `ToolMode.crop` renders
-  the full UNROTATED frame (scheduleRender substitutes fineRotation 0,
-  uncropped) fitted by its rotated bounding box; the image rotates behind an
-  axis-aligned `CropBoxOverlay` (dim surround, thirds, corner handles,
-  clamped move) whose math lives in `NegativeKit/CropGeometry` (rotated-space
-  boxes, fitScale/constrain, content-preserving `remapCrop`; tested). The
-  desired box is DetailView `@State` (`cropBox`, nil = follow committed);
-  exit commits via `commitCrop()` (near-full box ⇒ crop cleared). Straighten
-  commits outside the mode go through `AppModel.commitFineRotation`, which
-  remaps a committed crop so its content doesn't drift with the inscribed
-  auto-crop; `RenderOutput.frameSize` (orientation-only dims) is the
-  coordinate base. The analysis tool keeps the old draw-a-rect
-  `SelectionOverlay`.
-- **Menu bar** (`SwiftInvertApp` `.commands`): File = Open Folder ⌘O /
-  Choose Default Settings… / Export ⌘E / Show in Finder ⇧⌘R; Edit = Undo/Redo (replacing the system
-  group — the ⌘Z shortcuts live HERE, not on HistoryPanel's buttons),
-  Copy/Paste Adjustments ⇧⌘C/⇧⌘V (geometry never pasted), Reset All ⌥⌘R;
-  View = Show Library ⇧⌘L / Show Grid Lines ⇧⌘G / Zone Overlay (⇧Z via the
-  key monitor) / HQ Preview (inline 3-way picker — a Picker can't carry a key
-  equivalent, so a sibling "Cycle HQ Preview" item owns ⇧⌘P and cycles like
-  the badge)
-  (@AppStorage keys shared with the in-window controls); Image =
-  Previous/Next Image ←/→ / Rotate Left/Right ⌘[/⌘] / Flip ⇧⌘H /
-  Crop ⌘K / Crop for Analysis ⇧⌘K + clear items (tool toggles checkmark
-  while active; Escape exits). Frame navigation also answers ↑/↓ (↑ =
-  previous, ↓ = next) via the window's keyDown monitor in
-  `SwiftInvertApp` — a menu item takes exactly one key equivalent, so the
-  vertical pair can't live on the menu; the monitor mirrors the menu
-  items' enablement (no files / export sheet up ⇒ pass through).
-- **Sidecars**: `<basename>.swiftinvert.json` next to the source
-  (`SidecarStore`); pre-rename `.negswift.json` read as fallback and removed
-  on next save. Missing keys decode to defaults (custom `init(from:)` in
-  `ExposureSettings` — every new field needs a line there).
-- **UserDefaults**: `libraryFolder`, `canvasColor`, `exportOptions`
-  (JSON blob); one-time migration from the pre-rename "NegSwift" domain.
-- **SwiftUI pitfalls already hit** (don't regress):
-  - Lazy grids + @Observable: cells must read observable state inside their
-    own body — precomputed Bools leave stale cells (selection halo bug).
-  - `.position()` expands a view's frame to its container: attach
-    `contentShape`/gestures BEFORE positioning (histogram handle bug).
-  - A LEGACY scroller (mouse users / "Show scroll bars: Always") steals
-    17pt from a ScrollView's viewport only WHILE SHOWING, and macOS shows
-    it only while the content overflows — so sizing scroll content to the
-    viewport made every control's right edge breathe in and out as the
-    scrollbar toggled. Size the content against the scroller STYLE
-    (`NSScroller.preferredScrollerStyle`), never its visibility, and pin
-    it leading (a ScrollView centers narrower-than-viewport content):
-    ControlsSidebar's `scrollerGutter` + the two-frame pin in
-    scrollingControls. Overlay scrollers float and steal nothing.
-  - `NSEvent.modifierFlags` polling in tap handlers is unreliable — use
-    `TapGesture().modifiers(.command)` etc.
-  - The app runs unbundled via `swift run`: activation policy is set
-    manually; UserDefaults/TCC key off the process name.
+Decisions that differ from the retired Swift tree (PLAN §0, HANDOFF): the
+decoder defaults to LibRaw's white level and image area; the CPU reference is
+parallel-form; the port follows the Mac app wherever it differed from the Qt
+bridge (tool preview tiers, meter angle keying, medium→full fallthrough,
+unbounded history); sidecars are decoded leniently per field.
 
 ## Adding a new adjustment control (checklist)
 
-1. `ExposureSettings`: field + default, **plus a line in the custom
-   decoder** (sidecar back-compat), **plus `historyLabel`**
-   (HistoryLabels.swift) — and `RenderParams` + its init if the kernel
-   needs it. Two tripwires enforce this: `SidecarCodecTests` and
-   `HistoryLabelTests` both pin the stored-property count (54) and mutate
-   every field, so `make test` fails until all the lists have their line.
-2. `deriveRenderParams`: map settings → params (fold into existing params
-   where the algebra allows — see overall contrast/exposure — before adding
-   uniforms).
-3. Kernels — **THREE mirrors, all in the same change**, in identical
-   order/parallel form: `ReferenceCurve.swift` (CPU, the source of truth),
-   `NegPipeline.metal` (MSL, macOS) and `VulkanRenderKit/Shaders/
-   NegPipeline.comp` (GLSL, Linux — since the Qt/Vulkan port merged).
-   New uniforms: extend `CurveUniforms` (16-byte alignment) + update
-   `LayoutTests` strides/offsets; `ShaderTypes.swift` is SHARED by symlink,
-   so a new field silently changes the std140 layout the GLSL declares by
-   hand — miss it there and every field after it is read as garbage
-   (`VulkanLayoutTests` pins the offsets). Guard non-default-off work behind
-   uniform branches or a separate pass (occupancy!).
-   **A kernel change isn't finished on the Mac.** The `.spv` binaries are
-   the build inputs, not the `.comp`, so an edit needs
-   `./scripts/compile_vulkan_shaders.sh` re-run and the binaries committed —
-   that needs `glslangValidator` — the `swiftdev` distrobox, or
-   `brew install glslang` on the Mac (SPIR-V is platform-independent;
-   verified 2026-09-07: the Mac build reproduces the box's unchanged-kernel
-   binaries byte-identically — note macOS bash 3.2 lacks the script's
-   `declare -A`, so run its six compile lines directly). Each GPU is
-   pinned to the CPU reference independently (`GPUParityTests` on macOS,
-   `VulkanParityTests` on Linux), so a Metal-only port fails loudly — but
-   only on the machine the Mac suite can't reach.
-4. UI: `LabeledSlider`/`GradientSlider` (sets the reset-⨯ default), section
-   in `ControlsSidebar`; `negcli render` flag if useful.
+1. `negkit::settings::ExposureSettings`: field + default + serde default +
+   its entry in `STORED_KEYS` (bump the count) — the sidecar tests fail until
+   the field list, the mutation sweep and `history_label` all have their line.
+   Add to `RenderParams` (+ `derive`) if the kernel needs it.
+2. `derive_render_params`: map settings → params; fold into existing params
+   where the algebra allows (overall contrast / exposure are the models)
+   before adding uniforms.
+3. Kernels — **TWO mirrors in the same change, identical order and
+   parallel form**: `negkit::reference` (CPU, the source of truth) and
+   `negpipeline.wgsl` (all backends). New uniforms: extend `CurveUniforms`
+   (16-byte alignment) in `neggpu::uniforms` AND the hand-written WGSL
+   struct, then `tests/layout.rs`. Guard non-default-off work behind
+   uniform branches (occupancy).
+4. UI: a row in `negui::control_spec` (section, range, default, reset,
+   disabled rule, track); a `negcli render --set key=value` already reaches
+   any field by name.
 5. Tests: default-is-identity (fixtures must still pass), direction/region
    properties, monotonicity if it touches the tone curve, sidecar
    round-trip, GPU-parity case with the control active.
-6. Run `make test`, `negcli bench` (watch for regressions), launch the app
-   headlessly (render log line), commit with the reasoning.
+6. `./ci.sh`, `negcli bench` (watch for regressions), `--selftest`, commit
+   with the reasoning; update this file's pipeline section.
 
 ## Constants sync points
 
-- `K` (`ExposureConstants.swift`) is the single Swift source; the MSL
-  duplicates: tone anchors/sharpness (`TONE_SHARPNESS`, `SHADOW_ANCHOR`,
-  `HIGHLIGHT_ANCHOR`), Lab matrices/eps/kappa/white, and the working-space
-  OETF exponent (0.45470693 in MSL = 256/563).
-  GPU/CPU parity tests catch drift but update them together.
+- `negkit::constants::K` is the single source for the analysis/derive
+  constants; the WGSL duplicates the kernel-side literals (tone anchors and
+  sharpness, Lab matrices/eps/kappa/white, the OETF exponent 256/563 and the
+  Color Mixer band constants). GPU/CPU parity catches drift — update them
+  together.
 - If NegPy's `EXPOSURE_CONSTANTS` change deliberately: update `K`, re-dump
-  fixtures, re-run `make test`.
+  fixtures, re-run `./ci.sh`, record it in `UPSTREAM.md`.

@@ -1,7 +1,10 @@
 # Upstream (NegPy) review log
 
 SwiftInvert ports NegPy's negative-inversion pipeline; NegPy
-(`~/Documents/code/NegPy`) keeps evolving. This file records **the last NegPy
+(`~/Documents/code/NegPy`) keeps evolving. (Since 2026-10-28 the port is the
+Rust workspace at the repository root — `crates/negkit` for the math,
+`crates/neggpu` for the WGSL kernels; entries below that name Swift files
+describe the retired tree, resolvable with `git show e20fcc2:<path>`.) This file records **the last NegPy
 commit we reviewed**, so "what changed since we last looked?" always has a
 baseline. Keep it current: every upstream review ends by updating the marker
 and appending a history entry.
@@ -11,7 +14,7 @@ and appending a history entry.
 ```
 commit:   5b6d8975 ("fix(test): read source files as UTF-8 in the newer source-scanning tests (#1282)")
 reviewed: 2026-10-05
-fixtures: Tests/Fixtures/ re-dumped WHOLE from dc8ac65f (2026-09-07, with
+fixtures: fixtures/ re-dumped WHOLE from dc8ac65f (2026-09-07, with
           the 8532dd92 port — contrast_mask included; lab_color's vibrance
           leg remains the reference formula frozen in dump_fixtures.py,
           upstream deleted theirs).

@@ -1,4 +1,0 @@
-target/
-corpus/
-*.png
-!assets/**/*.png

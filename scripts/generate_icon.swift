@@ -4,7 +4,7 @@
 // SAME strip magnified — perforations and all — with the frame content in
 // full color: the negative-to-positive conversion in one picture.
 // v1 (color scene only inside the lens, no perforations) is preserved as
-// Assets/icon_1024_v1.png / SwiftInvert_v1.icns.
+// assets/icon_1024_v1.png / SwiftInvert_v1.icns.
 import CoreGraphics
 import Foundation
 import ImageIO
@@ -200,7 +200,7 @@ for (radius, width, colors) in [
 ctx.restoreGState()  // background clip
 
 // ── Write PNG ────────────────────────────────────────────────────────────────
-let out = URL(fileURLWithPath: "Assets/icon_1024.png")
+let out = URL(fileURLWithPath: "assets/icon_1024.png")
 try? FileManager.default.createDirectory(
     at: out.deletingLastPathComponent(), withIntermediateDirectories: true)
 let image = ctx.makeImage()!

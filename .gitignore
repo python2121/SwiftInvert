@@ -1,8 +1,11 @@
-.build/
+# Cargo
+target/
+# local RAW samples for the smoke tests (NEG_RAW_SAMPLE points at one)
+corpus/
+# packaged app bundle (make app / build.sh)
 dist/
-.swiftpm/
-*.xcodeproj
-DerivedData/
+# selftest screenshots and scratch renders — the shipped artwork under assets/ stays tracked
+*.png
+!assets/**/*.png
 .DS_Store
 __pycache__/
-qt/build/

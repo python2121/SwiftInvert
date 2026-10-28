@@ -1,1 +1,0 @@
-../negcli/TIFF16.swift

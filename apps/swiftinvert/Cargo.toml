@@ -1,0 +1,27 @@
+[package]
+name = "swiftinvert"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "SwiftInvert desktop app (eframe shell)"
+publish = false
+
+[features]
+# `--selftest` (the offscreen screenshot harness, egui_kittest). On by default; release packaging
+# can build with `--no-default-features` to leave the test harness out of the product binary.
+default = ["selftest"]
+selftest = ["negui/selftest"]
+
+[lints]
+workspace = true
+
+[dependencies]
+negui = { workspace = true, default-features = false }
+neggpu = { workspace = true }
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "persistence", "wayland", "x11"] }
+egui = { workspace = true }
+log = { workspace = true }
+# decodes the embedded app icon (assets/icon_1024.png)
+image = { workspace = true }
+env_logger = { workspace = true }

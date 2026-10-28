@@ -5,8 +5,9 @@ description: Review what changed in NegPy (the upstream reference implementation
 
 # NegPy upstream review
 
-SwiftInvert is a deliberate partial rewrite of NegPy (`~/Documents/code/NegPy`),
-which remains the numerical reference and keeps improving. The standing goal:
+SwiftInvert (Rust + egui + wgpu; the Swift tree was retired 2026-10-28) is a
+deliberate partial rewrite of NegPy (`~/Documents/code/NegPy`), which remains
+the numerical reference and keeps improving. The standing goal:
 **steal every good inversion-pipeline idea upstream ships**, while respecting
 the divergences we chose on purpose. `UPSTREAM.md` (repo root) is the review
 log — every run of this skill ends by updating it, even if nothing gets ported.
@@ -91,13 +92,13 @@ Map every substantive hunk to its SwiftInvert counterpart:
 
 | NegPy | SwiftInvert |
 |---|---|
-| `exposure/normalization.py` (prefilter, `analyze_log_exposure_bounds`, `resolve_analysis_region`, `measure_neutral_axis_from_log`, meters) | `Sources/NegativeKit/Prefilter.swift`, `BoundsAnalysis.swift`, `Meters.swift`, `Stats.swift` |
-| `exposure/logic.py` (grade→slope, pivot solve, curve fitting, cast removal) | `Sources/NegativeKit/CurveLogic.swift` |
-| `exposure/models.py` / `EXPOSURE_CONSTANTS` | `Sources/NegativeKit/ExposureConstants.swift` (`K`) — MSL duplicates some constants, see CLAUDE.md "Constants sync points" |
-| `exposure/shaders/*.wgsl` (normalization, exposure, output_encode, density_hist) | `Sources/MetalRenderKit/Shaders/NegPipeline.metal` **and** the CPU mirror `Sources/NegativeKit/ReferenceCurve.swift` (both sides must move together) |
-| `exposure/processor.py`, `exposure/stats.py` | `ImageSession` / `ExposureKernel` orchestration (`ReferenceCurve.swift`, `Sources/SwiftInvert/ImageSession.swift`) |
-| `kernel/image/logic.py` (decode/resize/orientation) | `Sources/RawDecodeKit/RawDecoder.swift` |
-| `process/` (settings model, sidecar-ish state) | `Sources/NegativeKit/ExposureSettings.swift`, `SidecarStore` |
+| `exposure/normalization.py` (prefilter, `analyze_log_exposure_bounds`, `resolve_analysis_region`, `measure_neutral_axis_from_log`, meters) | `crates/negkit/src/prefilter.rs`, `bounds.rs`, `meters.rs`, `kernel.rs`, `stats.rs` |
+| `exposure/logic.py` (grade→slope, pivot solve, curve fitting, cast removal) | `crates/negkit/src/curve_logic.rs` |
+| `exposure/models.py` / `EXPOSURE_CONSTANTS` | `crates/negkit/src/constants.rs` (`K`) — the WGSL duplicates some constants, see CLAUDE.md "Constants sync points" |
+| `exposure/shaders/*.wgsl` (normalization, exposure, output_encode, density_hist) | `crates/neggpu/src/wgsl/negpipeline.wgsl` **and** the CPU mirror `crates/negkit/src/reference.rs` (both sides must move together) |
+| `exposure/processor.py`, `exposure/stats.py` | `crates/negkit/src/kernel.rs` + `densitometry.rs`; the cache tower in `crates/negsession/src/session.rs` |
+| `kernel/image/logic.py` (decode/resize/orientation) | `crates/negraw/src/` (decode contract: PLAN.md §3.6), `crates/negkit/src/image.rs` (resize/orientation) |
+| `process/` (settings model, sidecar-ish state) | `crates/negkit/src/settings.rs`, `crates/negsession/src/sidecar.rs` |
 
 For each change, determine: is it a **numerical/semantic change** (constants,
 curve math, analysis percentiles, stage order — these affect parity and may
@@ -123,7 +124,7 @@ Judging rules:
 - **Golden moves outrank everything** — a deliberate default-look change
   upstream is exactly the "steadily improving main project" signal we track.
 - Constants changes are cheap to port but expensive to verify: `K` update +
-  MSL duplicate + fixture re-dump + `make test`.
+  WGSL duplicate + fixture re-dump + `./ci.sh`.
 - A NegPy bug fix in code we ported ≈ a bug we probably have. Verify against
   our source before assuming either way.
 - When upstream and SwiftInvert solved the same problem differently, prefer
@@ -164,9 +165,9 @@ Then:
 
 Follow CLAUDE.md's control checklist and constants-sync rules. In order:
 pull NegPy to the reviewed tip → verify/adjust `scripts/dump_fixtures.py` →
-update `K`/kernels (CPU `ReferenceCurve.swift` + MSL `NegPipeline.metal`
+update `K`/kernels (CPU `negkit::reference` + `negpipeline.wgsl`
 together) → re-dump fixtures (`cd ~/Documents/code/NegPy && uv run python
-~/Documents/code/SwiftInvert/scripts/dump_fixtures.py`) → `make test` →
+~/Documents/code/SwiftInvert/scripts/dump_fixtures.py`) → `./ci.sh` →
 `negcli bench` for regressions. Then move the item from "To port" to
 "Ported" in UPSTREAM.md, advance the `fixtures:` line, and update CLAUDE.md's
 "Kernel constants are synced with NegPy X.Y" sentence (and the divergences

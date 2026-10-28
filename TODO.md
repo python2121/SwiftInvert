@@ -1,5 +1,10 @@
 # Feature TODO
 
+> **2026-10-28:** the app is now the Rust + egui + wgpu workspace (the Swift/Qt
+> trees are retired). Items below that lean on Apple frameworks (Vision, NSProgress,
+> NSSharingServicePicker, UTIs via Info.plist, sandboxing) need cross-platform
+> equivalents or a macOS-only path under `#[cfg(target_os = "macos")]`.
+
 Candidate work, prioritized within each section. Effort: **S** < half a day,
 **M** ≈ a day or two, **L** = multi-day. Sources: NegPy (`UPSTREAM.md`
 flagged candidates), Negative Lab Pro v3/v3.1 release notes, darktable's
